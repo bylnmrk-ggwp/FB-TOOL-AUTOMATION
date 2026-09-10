@@ -26,6 +26,8 @@ Usage:
     python scripts/login_accounts.py --unattended --batch 10 --pause 20
         # no prompts: log in what logs in, skip and report the rest;
         # 10 accounts, then a 20 minute pause, repeat
+    python scripts/login_accounts.py --unattended --hand-off-2fa
+        # unattended, but stop and ask you for the code on a 2FA prompt
 """
 import argparse
 import asyncio
@@ -170,12 +172,15 @@ def _mark_ok(account: dict):
 
 
 async def login_one(account: dict, password: str, log,
-                    unattended: bool = False) -> tuple[bool, str]:
+                    unattended: bool = False,
+                    hand_off_2fa: bool = False) -> tuple[bool, str]:
     """Open this account's Brave profile and log it in.
 
     Assisted by default: a challenge waits for the operator. With
     `unattended` nothing ever waits - a challenge is recorded and skipped, so
     the run finishes on its own and the summary says who still needs a hand.
+    With `hand_off_2fa`, an unattended run still stops on a 2FA prompt (only
+    a 2FA prompt) so the operator can type the code, then continues on its own.
     """
     from src.core.facebook_automation import (FacebookAutomation,
                                               LOGIN_FLAGS)
@@ -231,8 +236,28 @@ async def login_one(account: dict, password: str, log,
             print(f"    page: {url[:80]}")
             if reason in (BAD_PASSWORD, BAD_IDENTIFIER):
                 return False, reason
-            # A checkpoint or 2FA prompt is Facebook's decision; only a
-            # person can clear it. Unattended runs record it and move on.
+            # 2FA is the one challenge the operator can actually clear (they
+            # hold the code). With --hand-off-2fa an unattended run stops here
+            # so they can enter it in the open browser, then continues.
+            if reason == NEEDS_2FA and hand_off_2fa:
+                label = account.get("facebook_name") or account["username"]
+                print("\n" + "!" * 60)
+                print(f"  2FA NEEDED for {label}")
+                print(f"  Enter the code in the open Brave window for "
+                      f"profile '{account['linked_profile']}'.")
+                print("!" * 60)
+                choice = ask("    [Enter] I entered the code, re-check  /  "
+                             "[s] skip this account: ")
+                if choice == "s":
+                    return False, NEEDS_2FA
+                if await has_session(auto):
+                    _mark_ok(account)
+                    return True, "logged in after 2FA"
+                # Not in yet: loop and re-evaluate the current page.
+                msg = ""
+                continue
+            # Every other challenge is Facebook's decision; only a person can
+            # clear it, so an unattended run records it and moves on.
             if unattended:
                 return False, reason or msg
             choice = ask("    [Enter] I cleared it, re-check  /  [s] skip: ")
@@ -317,7 +342,8 @@ async def run(args) -> int:
             print(f"    {msg}")
 
         ok, msg = await login_one(a, creds[a["username"].lower()], log,
-                                  unattended=args.unattended)
+                                  unattended=args.unattended,
+                                  hand_off_2fa=args.hand_off_2fa)
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 
@@ -362,6 +388,9 @@ def main(argv) -> int:
     ap.add_argument("--unattended", action="store_true",
                     help="never prompt: skip any checkpoint/2FA and list "
                          "those accounts in the summary for a later --only run")
+    ap.add_argument("--hand-off-2fa", action="store_true",
+                    help="with --unattended, still stop on a 2FA prompt so you "
+                         "can type the code, then keep going on your own")
     ap.add_argument("--batch", type=int, default=0, metavar="N",
                     help="pause after every N accounts (0 = no pausing)")
     ap.add_argument("--pause", type=float, default=15.0, metavar="MIN",
@@ -369,6 +398,8 @@ def main(argv) -> int:
     args = ap.parse_args(argv)
     if args.batch < 0 or args.pause < 0:
         ap.error("--batch and --pause must be >= 0")
+    if args.hand_off_2fa and not args.unattended:
+        ap.error("--hand-off-2fa only applies with --unattended")
     return asyncio.run(run(args))
 
 
