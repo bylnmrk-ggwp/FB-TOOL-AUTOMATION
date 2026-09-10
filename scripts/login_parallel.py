@@ -202,6 +202,18 @@ async def run(args) -> int:
                 if a.get("linked_profile")]
     if not args.relogin:
         accounts = [a for a in accounts if a.get("status") != "ok"]
+    if args.untried:
+        # Only accounts with no verdict yet (blank reason) or a transient one
+        # ("... - retry"). Deterministic failures - needs 2FA, wrong password,
+        # bad username - are skipped: re-running cannot change them.
+        def _untried(a):
+            r = (a.get("status_reason") or "").strip()
+            return r == "" or r.endswith("- retry")
+        skipped = [a for a in accounts if not _untried(a)]
+        accounts = [a for a in accounts if _untried(a)]
+        if skipped:
+            print(f"Skipping {len(skipped)} account(s) with a known failure "
+                  f"(2FA / wrong password / bad username) - --untried")
 
     creds = la.read_credentials_from_sheet()
     todo = [a for a in accounts if a["username"].lower() in creds]
@@ -282,6 +294,10 @@ def main(argv) -> int:
     ap.add_argument("--limit", type=int, help="attempt at most this many")
     ap.add_argument("--relogin", action="store_true",
                     help="also attempt accounts already marked logged in")
+    ap.add_argument("--untried", action="store_true",
+                    help="only accounts with no verdict yet (plain NOT LOGGED IN) "
+                         "or a transient '- retry' one; skip known 2FA / wrong "
+                         "password / bad username")
     ap.add_argument("--include-disabled", action="store_true")
     ap.add_argument("--no-live-sheet", action="store_true")
     ap.add_argument("--twofa-timeout", type=float, default=45.0,
