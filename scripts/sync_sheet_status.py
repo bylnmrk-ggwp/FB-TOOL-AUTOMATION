@@ -32,13 +32,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/ for sheets_api
 
+import sheets_api as api
 from src.storage import database as db
 from src.storage import state_cache
 
-DEFAULT_SHEET_ID = "1oKKPnfTCn7LXqO9kboS3Jx2Aw8aWYeVh9PordjNxFeM"
-DEFAULT_TAB = "Sheet1"
-DEFAULT_KEY = ROOT / ".secrets" / "sheets-service-account.json"
+DEFAULT_SHEET_ID = api.DEFAULT_SHEET_ID
+DEFAULT_TAB = api.DEFAULT_TAB
+DEFAULT_KEY = api.DEFAULT_KEY
 USERNAME_COL = "C"          # the column holding the Facebook login id
 STATUS_COL_INDEX = 6        # 0-based: column G
 
@@ -52,26 +54,6 @@ DARK_TEXT = {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "bold": False
 DISABLED = "DISABLED"
 NOT_LOGGED_IN = "NOT LOGGED IN"
 LOGGED_IN = "LOGGED IN"
-
-
-def _token(key_path: Path) -> str:
-    from google.oauth2.service_account import Credentials
-    import google.auth.transport.requests as gtr
-    creds = Credentials.from_service_account_file(
-        str(key_path), scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    creds.refresh(gtr.Request())
-    return creds.token
-
-
-def _api(token: str, sheet_id: str, path: str, method: str = "GET",
-         body: dict | None = None) -> dict:
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
 
 
 def status_for(account: dict | None) -> str:
@@ -120,10 +102,10 @@ def main(argv) -> int:
         print(f"Service-account key not found: {key_path}")
         return 1
 
-    token = _token(key_path)
+    token = api.token(key_path)
 
     # Resolve the tab's numeric id (needed for formatting requests).
-    meta = _api(token, args.sheet_id,
+    meta = api.call(token, args.sheet_id,
                 "?fields=sheets(properties(title,sheetId))")
     gid = next((s["properties"]["sheetId"] for s in meta["sheets"]
                 if s["properties"]["title"] == args.tab), None)
@@ -133,7 +115,7 @@ def main(argv) -> int:
 
     # Read the username column; its length fixes the data-row range.
     rng = urllib.parse.quote(f"{args.tab}!{USERNAME_COL}2:{USERNAME_COL}")
-    got = _api(token, args.sheet_id, f"/values/{rng}").get("values", [])
+    got = api.call(token, args.sheet_id, f"/values/{rng}").get("values", [])
     usernames = [(row[0].strip() if row else "") for row in got]
     n = len(usernames)
     if n == 0:
@@ -156,7 +138,7 @@ def main(argv) -> int:
     values = [["STATUS"]] + [[s] for s in statuses]
     body = {"range": f"{args.tab}!G1:G{n + 1}",
             "majorDimension": "ROWS", "values": values}
-    _api(token, args.sheet_id,
+    api.call(token, args.sheet_id,
          f"/values/{urllib.parse.quote(f'{args.tab}!G1:G{n + 1}')}"
          "?valueInputOption=RAW", method="PUT", body=body)
 
@@ -193,7 +175,7 @@ def main(argv) -> int:
             "horizontalAlignment": "CENTER"}},
         "fields": "userEnteredFormat(textFormat,horizontalAlignment)"}})
 
-    _api(token, args.sheet_id, ":batchUpdate", method="POST",
+    api.call(token, args.sheet_id, ":batchUpdate", method="POST",
          body={"requests": requests})
 
     print(f"Wrote STATUS to {n} row(s) with {len(requests)} format block(s).")

@@ -106,6 +106,32 @@ def read_credentials(xlsx: Path) -> dict:
     return creds
 
 
+def read_credentials_from_sheet() -> dict:
+    """username -> password, straight from the Google Sheet via the API.
+
+    Used when no local .xlsx is present: the roster now lives in the sheet.
+    USERNAME and PASSWORD columns are located by their header labels, so a
+    reordered sheet cannot pair the wrong password with an account. Passwords
+    are held in memory for the run only.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # ensure scripts/ importable
+    import sheets_api as api
+    tok = api.token()
+    rows = api.get_values(tok, api.DEFAULT_SHEET_ID, f"{api.DEFAULT_TAB}!A1:Z")
+    cols = api.header_columns(rows, "USERNAME", "PASSWORD")
+    if "USERNAME" not in cols or "PASSWORD" not in cols:
+        raise SystemExit("Sheet needs USERNAME and PASSWORD columns; found "
+                         f"{rows[0] if rows else '(empty)'}")
+    cu, cp = cols["USERNAME"], cols["PASSWORD"]
+    creds = {}
+    for row in rows[1:]:
+        u = row[cu].strip() if len(row) > cu else ""
+        p = row[cp].strip() if len(row) > cp else ""
+        if u and p:
+            creds[u.lower()] = p
+    return creds
+
+
 def ask(prompt: str) -> str:
     try:
         return input(prompt).strip().lower()
@@ -295,10 +321,11 @@ async def login_one(account: dict, password: str, log,
 async def run(args) -> int:
     from src.storage import database as db
 
+    # Credential source: an explicit --sheet path, else the local xlsx if it
+    # is still there, else the Google Sheet over the API. The roster now lives
+    # in the sheet, so a missing xlsx is normal, not an error.
     xlsx = Path(args.sheet) if args.sheet else ROOT / DEFAULT_SHEET
-    if not xlsx.exists():
-        print(f"Spreadsheet not found: {xlsx}")
-        return 1
+    use_sheet = args.from_sheet or not xlsx.exists()
 
     # Disabled accounts are excluded: Facebook says the decision cannot be
     # appealed, so re-attempting them only adds failed logins.
@@ -313,7 +340,14 @@ async def run(args) -> int:
               "scripts/provision_profiles.py first.")
         return 0
 
-    creds = read_credentials(xlsx)
+    try:
+        creds = read_credentials_from_sheet() if use_sheet else read_credentials(xlsx)
+    except Exception as e:
+        src = "Google Sheet" if use_sheet else str(xlsx)
+        print(f"Could not read credentials from {src}: {e}")
+        return 1
+    print(f"Credential source             : "
+          f"{'Google Sheet' if use_sheet else xlsx.name}")
     missing = [a["username"] for a in accounts
                if a["username"].lower() not in creds]
 
@@ -395,7 +429,10 @@ async def run(args) -> int:
 
 def main(argv) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sheet", help=f"path to the xlsx (default: {DEFAULT_SHEET})")
+    ap.add_argument("--sheet", help=f"path to a local xlsx (default: {DEFAULT_SHEET})")
+    ap.add_argument("--from-sheet", action="store_true",
+                    help="read credentials from the Google Sheet API even if a "
+                         "local xlsx exists (default when no xlsx is present)")
     ap.add_argument("--count", type=int, help="attempt at most this many")
     ap.add_argument("--include-disabled", action="store_true",
                     help="also attempt accounts already marked disabled")
