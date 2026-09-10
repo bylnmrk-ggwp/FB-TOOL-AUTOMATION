@@ -113,6 +113,134 @@ def make_info_entry(number: int, display_name: str) -> dict:
     }
 
 
+def desired_names(rows: list[dict]) -> dict:
+    """username -> the Facebook name to use as the profile name.
+
+    Facebook names are not unique (two "Dagul Cruz", two "Bobet Gamboa"), but
+    profile names are dict keys in the app config and identify a profile in
+    Brave's picker, so later duplicates get a " (2)" style suffix. Order is by
+    spreadsheet row so the mapping is stable across runs.
+    """
+    ordered = sorted(rows, key=lambda a: (a.get("sheet_no") is None,
+                                          a.get("sheet_no") or 0))
+    seen, out = {}, {}
+    for a in ordered:
+        base = (a.get("facebook_name") or "").strip() or a["username"]
+        n = seen.get(base.lower(), 0) + 1
+        seen[base.lower()] = n
+        out[a["username"]] = base if n == 1 else f"{base} ({n})"
+    return out
+
+
+def rename_from_roster(dry_run: bool, force_close: bool) -> int:
+    """Rename every provisioned profile to its account's Facebook name.
+
+    Brave's display name and the app's saved profile name are kept identical,
+    because auto_sync_brave_profiles() rewrites the app name from Brave's when
+    they diverge.
+    """
+    from src.storage import config_manager as cfg
+    from src.storage import database as db
+
+    rows = [a for a in db.list_accounts() if a.get("linked_profile")]
+    if not rows:
+        print("No linked accounts to rename.")
+        return 0
+
+    state = load_local_state()
+    info = state["profile"]["info_cache"]
+    wanted = desired_names(rows)
+
+    # Names held by profiles that are not part of the roster must not be taken.
+    roster_paths = {cfg.get_profile_path(a["linked_profile"]) for a in rows}
+    outsiders = {v.get("name", "").lower()
+                 for d, v in info.items()
+                 if str(BRAVE_USER_DATA / d) not in roster_paths}
+
+    plan, skipped = [], []
+    for a in rows:
+        old = a["linked_profile"]
+        new = wanted[a["username"]]
+        path = cfg.get_profile_path(old)
+        if not path:
+            skipped.append((old, "no Brave path"))
+            continue
+        dir_name = Path(path).name
+        if dir_name not in info:
+            skipped.append((old, "not registered in Local State"))
+            continue
+        if new == old:
+            continue
+        if new.lower() in outsiders:
+            skipped.append((old, f"'{new}' is used by a non-roster profile"))
+            continue
+        plan.append({"dir": dir_name, "old": old, "new": new,
+                     "path": path, "username": a["username"]})
+
+    print(f"Linked accounts     : {len(rows)}")
+    print(f"Renames to apply    : {len(plan)}")
+    if skipped:
+        print(f"Skipped             : {len(skipped)}")
+        for who, why in skipped[:8]:
+            print(f"   {who}: {why}")
+    for item in plan[:6]:
+        print(f"   {item['dir']:<12} {item['old'][:30]:<30} -> {item['new']}")
+    if len(plan) > 6:
+        print(f"   ... {len(plan) - 6} more")
+
+    if dry_run:
+        print("\n--dry-run: nothing written.")
+        return 0
+    if not plan:
+        print("Nothing to do.")
+        return 0
+
+    if brave_is_running():
+        if not force_close:
+            print("\nBrave is running and rewrites Local State on exit. Close it")
+            print("and run again, or pass --force-close.")
+            return 1
+        subprocess.run(["taskkill", "/F", "/IM", "brave.exe", "/T"],
+                       capture_output=True, timeout=15)
+        time.sleep(2)
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = LOCAL_STATE.with_name(f"Local State.backup-{stamp}")
+    shutil.copy2(LOCAL_STATE, backup)
+    print(f"\nBacked up Local State -> {backup.name}")
+
+    state = load_local_state()
+    info = state["profile"]["info_cache"]
+
+    done = 0
+    for item in plan:
+        try:
+            entry = info.get(item["dir"])
+            if entry is None:
+                print(f"  SKIP {item['dir']}: vanished from Local State")
+                continue
+            entry["name"] = item["new"]
+            entry["shortcut_name"] = item["new"]
+            entry["is_using_default_name"] = False
+            # config has no rename API: add under the new key, drop the old.
+            cfg.save_profile(item["new"], item["path"])
+            if item["new"] != item["old"]:
+                cfg.delete_profile(item["old"])
+            db.link_account(item["username"], item["new"])
+            done += 1
+        except Exception as e:
+            print(f"  FAILED {item['dir']} ({item['old']}): {e}")
+
+    LOCAL_STATE.write_text(json.dumps(state), encoding="utf-8")
+    total, linked = db.count_accounts()
+    print(f"\nRenamed {done} profile(s).")
+    print(f"App profiles: {len(cfg.list_profiles())}   roster: {total} ({linked} linked)")
+    print(f"Undo: python {Path(__file__).name} --restore-backup \"{backup}\"")
+    print("Note: the config profile names were rewritten too and are not")
+    print("covered by that backup; re-run with the old naming to reverse them.")
+    return 0
+
+
 def restore_backup(path: str) -> int:
     src = Path(path)
     if not src.exists():
@@ -136,10 +264,18 @@ def main(argv) -> int:
                     help="kill running Brave processes first (loses open tabs)")
     ap.add_argument("--restore-backup", metavar="PATH",
                     help="restore a Local State backup and exit")
+    ap.add_argument("--rename-from-roster", action="store_true",
+                    help="rename provisioned profiles to their Facebook name")
     args = ap.parse_args(argv)
 
     if args.restore_backup:
         return restore_backup(args.restore_backup)
+
+    if args.rename_from_roster:
+        if not LOCAL_STATE.exists():
+            print(f"Brave Local State not found at {LOCAL_STATE}")
+            return 1
+        return rename_from_roster(args.dry_run, args.force_close)
 
     if not LOCAL_STATE.exists():
         print(f"Brave Local State not found at {LOCAL_STATE}")
