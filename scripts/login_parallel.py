@@ -68,6 +68,16 @@ def _stage_copy_back(new_dir: str, real_dir: str) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _is_retryable(msg: str) -> bool:
+    """True for a transient failure worth another immediate attempt.
+
+    short_reason() tags exactly these with a trailing '- retry' (form not
+    ready, browser error, timeout). Deterministic verdicts - wrong password,
+    needs 2FA, bad username, disabled - are never retried.
+    """
+    return la.short_reason(msg).endswith("- retry")
+
+
 def _profile_intact(path: str) -> bool:
     """A rough integrity check: the profile dir exists and carries a cookie DB."""
     p = Path(path)
@@ -134,7 +144,8 @@ async def _attempt(pw, wid: int, account: dict, password: str,
 
 
 async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
-                  twofa_timeout: float, live, results: list, lock: asyncio.Lock):
+                  twofa_timeout: float, retries: int, live, results: list,
+                  lock: asyncio.Lock):
     while True:
         try:
             account = q.get_nowait()
@@ -152,9 +163,17 @@ async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
         src = cfg.get_profile_path(profile)
         iso = workroot / f"w{wid}"
         dst = iso / profile
+        pw_str = creds[account["username"].lower()]
         try:
-            ok, msg = await _attempt(pw, wid, account, creds[account["username"].lower()],
-                                     workroot, twofa_timeout, log)
+            # Retry a transient failure (form not ready, browser error, timeout)
+            # on the same account before moving on; each attempt re-copies a
+            # fresh profile, so a retry starts clean.
+            for attempt in range(1, retries + 2):
+                ok, msg = await _attempt(pw, wid, account, pw_str,
+                                         workroot, twofa_timeout, log)
+                if ok or not _is_retryable(msg):
+                    break
+                print(f"    [w{wid}] retry {attempt}/{retries} ({la.short_reason(msg)})")
             # Copy the updated session back only when login actually succeeded.
             if ok and os.path.isdir(dst) and src:
                 _stage_copy_back(str(dst), src)
@@ -223,7 +242,7 @@ async def run(args) -> int:
         lock = asyncio.Lock()
         await asyncio.gather(*[
             _worker(i + 1, q, pw, creds, workroot, args.twofa_timeout,
-                    live, results, lock)
+                    args.retries, live, results, lock)
             for i in range(min(args.workers, len(todo)))])
     finally:
         await pw.stop()
@@ -267,6 +286,9 @@ def main(argv) -> int:
     ap.add_argument("--no-live-sheet", action="store_true")
     ap.add_argument("--twofa-timeout", type=float, default=45.0,
                     help="seconds to allow a login before treating it as 2FA")
+    ap.add_argument("--retries", type=int, default=2,
+                    help="retry a transient failure (form not ready / browser "
+                         "error / timeout) this many times before moving on")
     ap.add_argument("--backup-dir", help="copy every targeted profile here first")
     ap.add_argument("--work-dir",
                     default=str(ROOT / ".parallel-work"),
