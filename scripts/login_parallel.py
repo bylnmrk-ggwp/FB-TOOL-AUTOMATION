@@ -82,6 +82,31 @@ def _has_cookie_store(path: Path) -> bool:
     return any((path / c).exists() for c in ("Network/Cookies", "Cookies"))
 
 
+def _session_on_disk(profile_dir: Path) -> bool:
+    """True only if c_user AND xs are written to the profile's cookie DB.
+
+    A fresh Facebook login often issues a non-persistent (session-only) cookie
+    that lives in memory and is never flushed to disk. has_session() sees it in
+    the live context and reports success, but once the browser closes the disk
+    profile has no session - so a copy-back would persist a logged-out profile.
+    Checking the on-disk cookie names is what tells a durable login from that.
+    """
+    import sqlite3
+    for c in ("Network/Cookies", "Cookies"):
+        f = profile_dir / c
+        if not f.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{f}?mode=ro&immutable=1", uri=True)
+            names = {r[0] for r in con.execute(
+                "SELECT name FROM cookies WHERE host_key LIKE '%facebook%'")}
+            con.close()
+            return "c_user" in names and "xs" in names
+        except Exception:
+            return False
+    return False
+
+
 def _profile_damaged(path: str, backup: Path | None) -> bool:
     """True only if the profile lost something it had before the run.
 
@@ -185,6 +210,13 @@ async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
                 if ok or not _is_retryable(msg) or attempt > retries:
                     break           # success, deterministic, or no retries left
                 print(f"    [w{wid}] retry {attempt}/{retries} ({la.short_reason(msg)})")
+            # A login that Facebook only granted a non-persistent session for
+            # leaves nothing on disk, so a copy-back would save a logged-out
+            # profile and mark it ok. Require the session on disk before
+            # trusting the success.
+            if ok and os.path.isdir(dst) and not _session_on_disk(dst):
+                ok, msg = False, ("session did not persist to disk "
+                                  "(Facebook issued a non-persistent session)")
             # Copy the updated session back only when login actually succeeded.
             if ok and os.path.isdir(dst) and src:
                 _stage_copy_back(str(dst), src)
