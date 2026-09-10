@@ -578,6 +578,18 @@ async def run(args) -> int:
         if len(who) > 12:
             print(f"     ... {len(who) - 12} more")
     print("\nPasswords were held in memory only; nothing was written.")
+
+    # Final reconcile: live cell writes are best-effort, so a dropped one could
+    # leave the sheet a step behind the database. Rewrite every STATUS cell from
+    # the database once at the end so the sheet always matches when a run ends.
+    if live.on:
+        try:
+            import sync_sheet_status as sync
+            sync.main([])
+            print("Sheet reconciled with the database.")
+        except Exception as e:
+            print(f"(sheet reconcile skipped: {e})")
+
     if aborted:
         return 3
     return 0 if not results["failed"] else 2
