@@ -811,7 +811,7 @@ class QueueTab(ttk.Frame):
         text = self._text_content_widget.get("1.0", "end-1c").strip()
         if not text:
             return
-        profiles = cfg.list_profiles()
+        profiles = self._displayed_profiles()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -846,7 +846,7 @@ class QueueTab(ttk.Frame):
             messagebox.showerror("Invalid URL", "Post URL must start with http:// or https://")
             return
         
-        profiles = cfg.list_profiles()
+        profiles = self._displayed_profiles()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -945,7 +945,7 @@ class QueueTab(ttk.Frame):
             messagebox.showerror("Invalid URL", "Post URL must start with http:// or https://")
             return
 
-        profiles = cfg.list_profiles()
+        profiles = self._displayed_profiles()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -1040,7 +1040,7 @@ class QueueTab(ttk.Frame):
                                    "Enter the comment text (one comment per line).")
             return
 
-        profiles = cfg.list_profiles()
+        profiles = self._displayed_profiles()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
