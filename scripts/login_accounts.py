@@ -115,6 +115,23 @@ def ask(prompt: str) -> str:
 
 SESSION_COOKIES = ("c_user", "xs")
 
+
+def short_reason(msg: str) -> str:
+    """A brief, sheet-friendly detail for a failed login."""
+    if msg == DISABLED:
+        return ""                       # the DISABLED status already says it
+    if msg == NEEDS_2FA:
+        return "needs 2FA"
+    if msg == BAD_PASSWORD:
+        return "wrong password"
+    if msg == BAD_IDENTIFIER:
+        return "bad username"
+    m = (msg or "").lower()
+    if "checkpoint" in m:
+        return "checkpoint"
+    return (msg or "").strip()[:40]
+
+
 # Outcomes worth telling apart, because the follow-up action differs:
 # a disabled account is dead, a wrong password is a spreadsheet fix, and a
 # 2FA prompt means the credentials were accepted and only a code is missing.
@@ -344,6 +361,11 @@ async def run(args) -> int:
         ok, msg = await login_one(a, creds[a["username"].lower()], log,
                                   unattended=args.unattended,
                                   hand_off_2fa=args.hand_off_2fa)
+        # Persist why it failed so the roster and the sheet can show it. A
+        # success already cleared the status inside login_one via _mark_ok,
+        # and DISABLED was recorded there too; everything else lands here.
+        if not ok and msg != DISABLED:
+            db.set_account_status(a["username"], "", short_reason(msg))
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 

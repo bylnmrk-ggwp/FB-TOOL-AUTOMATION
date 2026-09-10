@@ -75,7 +75,11 @@ def _api(token: str, sheet_id: str, path: str, method: str = "GET",
 
 
 def status_for(account: dict | None) -> str:
-    """The pill text for one sheet row, or '' when it is not in the database."""
+    """The pill text for one sheet row, or '' when it is not in the database.
+
+    A not-logged-in row carries its reason after a slash when one is known,
+    e.g. "NOT LOGGED IN / WRONG PASSWORD", so the sheet says why.
+    """
     if account is None:
         return ""
     if (account.get("status") or "") == "disabled":
@@ -83,12 +87,18 @@ def status_for(account: dict | None) -> str:
     linked = account.get("linked_profile") or ""
     logged_in = (account.get("status") == "ok"
                  or (linked and state_cache.load_state(linked) is not None))
-    return LOGGED_IN if logged_in else NOT_LOGGED_IN
+    if logged_in:
+        return LOGGED_IN
+    reason = (account.get("status_reason") or "").strip()
+    return f"{NOT_LOGGED_IN} / {reason.upper()}" if reason else NOT_LOGGED_IN
 
 
 def _fill(status: str) -> tuple[dict, dict]:
-    """(backgroundColor, textFormat) for a status."""
-    if status in (DISABLED, NOT_LOGGED_IN):
+    """(backgroundColor, textFormat) for a status, by category.
+
+    status may carry a "/ reason" suffix, so match on the prefix, not equality.
+    """
+    if status == DISABLED or status.startswith(NOT_LOGGED_IN):
         return RED, WHITE_TEXT
     if status == LOGGED_IN:
         return GREEN, WHITE_TEXT

@@ -80,6 +80,7 @@ def init_db():
             number          TEXT    NOT NULL DEFAULT '',
             linked_profile  TEXT    NOT NULL DEFAULT '',
             status          TEXT    NOT NULL DEFAULT '',
+            status_reason   TEXT    NOT NULL DEFAULT '',
             imported_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             UNIQUE(username)
         );
@@ -115,6 +116,9 @@ def _migrate(conn):
     have = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
     if have and "status" not in have:
         conn.execute("ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT ''")
+    if have and "status_reason" not in have:
+        conn.execute("ALTER TABLE accounts ADD COLUMN status_reason "
+                     "TEXT NOT NULL DEFAULT ''")
 
 
 # ── Join History ──────────────────────────────────────────
@@ -372,7 +376,7 @@ def list_accounts(linked_only: bool = False,
     """
     conn = _get_conn()
     sql = ("SELECT sheet_no, facebook_name, username, email, number, "
-           "linked_profile, status FROM accounts")
+           "linked_profile, status, status_reason FROM accounts")
     where, params = [], []
     if linked_only:
         where.append("linked_profile != ''")
@@ -387,11 +391,17 @@ def list_accounts(linked_only: bool = False,
     return [dict(r) for r in conn.execute(sql, params)]
 
 
-def set_account_status(username: str, status: str) -> bool:
-    """Record an outcome against an account ('disabled', 'ok', '' to clear)."""
+def set_account_status(username: str, status: str, reason: str = "") -> bool:
+    """Record an outcome against an account.
+
+    status is the coarse state a run filters on ('disabled', 'ok', '' to
+    clear); reason is the human detail shown to the operator ('wrong
+    password', 'needs 2FA', ...). A success clears the reason.
+    """
     conn = _get_conn()
-    cur = conn.execute("UPDATE accounts SET status = ? WHERE username = ?",
-                       (status, username))
+    cur = conn.execute(
+        "UPDATE accounts SET status = ?, status_reason = ? WHERE username = ?",
+        (status, reason, username))
     conn.commit()
     return cur.rowcount > 0
 
