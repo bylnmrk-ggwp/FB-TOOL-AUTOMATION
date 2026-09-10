@@ -79,9 +79,6 @@ class ShareTab(ttk.Frame):
         ttk.Label(form, text="Share to Group",
                   style="Header.TLabel").grid(row=0, column=0, columnspan=4,
                                               sticky="w", **pad)
-        ttk.Separator(form, orient="horizontal").grid(row=1, column=0,
-                                                       columnspan=4,
-                                                       sticky="ew", **pad)
 
         # Row 2: Post URL
         ttk.Label(form, text="Post URL:").grid(row=2, column=0, sticky="w",

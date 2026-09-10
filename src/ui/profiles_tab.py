@@ -5,7 +5,7 @@ import threading
 from src.storage import config_manager as cfg
 from src.ui import theme
 from src.ui.effects import (attach_listbox_hover, attach_button_hover,
-                            wait_for_thread)
+                            wait_for_thread, bind_wrap, FlowFrame)
 
 
 ROSTER_COLLAPSED = "\u25b8 Account Roster"
@@ -38,8 +38,6 @@ class ProfilesTab(ttk.Frame):
         ttk.Label(inner, text="Saved Brave Profiles",
                   style="Header.TLabel").pack(anchor="w", **pad)
 
-        ttk.Separator(inner, orient="horizontal").pack(fill="x", **pad)
-
         # Profile list
         list_frame = ttk.Frame(inner)
         list_frame.pack(fill="both", expand=True, **pad)
@@ -57,42 +55,37 @@ class ProfilesTab(ttk.Frame):
         self.profile_listbox.bind("<<ListboxSelect>>", self._on_select)
         self._clear_profile_hover = attach_listbox_hover(self.profile_listbox)
 
-        # Buttons — grid layout for responsive wrapping
-        btn_frame = ttk.Frame(inner)
+        # Per-profile actions wrap to the pane width: five buttons need
+        # ~800px in one line, and the profiles pane is often narrower.
+        btn_frame = FlowFrame(inner)
         btn_frame.pack(fill="x", **pad)
 
-        self.add_btn = ttk.Button(btn_frame, text="+ Add Brave Profile",
-                                  command=self._on_add, style="Accent.TButton")
-        self.add_btn.grid(row=0, column=0, padx=(0, 6), pady=2)
+        self.add_btn = btn_frame.add(ttk.Button(
+            btn_frame, text="+ Add Brave Profile",
+            command=self._on_add, style="Accent.TButton"))
+        self.scan_btn = btn_frame.add(ttk.Button(
+            btn_frame, text="Scan for New Profiles", command=self._on_scan))
+        self.fetch_name_btn = btn_frame.add(ttk.Button(
+            btn_frame, text="Update FB Name",
+            command=self._on_fetch_fb_name, state="disabled"))
+        self.launch_btn = btn_frame.add(ttk.Button(
+            btn_frame, text="Launch Profile",
+            command=self._on_launch, state="disabled"))
+        self.delete_btn = btn_frame.add(ttk.Button(
+            btn_frame, text="Remove", command=self._on_delete,
+            state="disabled"))
 
-        self.scan_btn = ttk.Button(btn_frame, text="Scan for New Profiles",
-                                   command=self._on_scan)
-        self.scan_btn.grid(row=0, column=1, padx=(0, 6), pady=2)
-
-        self.fetch_name_btn = ttk.Button(btn_frame, text="Update FB Name",
-                                         command=self._on_fetch_fb_name, state="disabled")
-        self.fetch_name_btn.grid(row=0, column=2, padx=(0, 6), pady=2)
-
-        self.launch_btn = ttk.Button(btn_frame, text="Launch Profile",
-                                     command=self._on_launch, state="disabled")
-        self.launch_btn.grid(row=0, column=3, padx=(0, 6), pady=2)
-
-        self.delete_btn = ttk.Button(btn_frame, text="Remove",
-                                     command=self._on_delete, state="disabled")
-        self.delete_btn.grid(row=0, column=4, padx=(0, 6), pady=2)
-
-        # Second row for bulk operations
-        self.bulk_fetch_btn = ttk.Button(btn_frame, text="Update All FB Names",
+        # Bulk operations span the full width on their own rows
+        self.bulk_fetch_btn = ttk.Button(inner, text="Update All FB Names",
                                          command=self._on_bulk_fetch_fb_names,
                                          style="Accent.TButton")
-        self.bulk_fetch_btn.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(6, 2))
+        self.bulk_fetch_btn.pack(fill="x", padx=pad["padx"], pady=(6, 2))
 
-        # Third row: live login-status check
-        self.check_login_btn = ttk.Button(btn_frame, text="Check Login Status (All Profiles)",
+        self.check_login_btn = ttk.Button(inner, text="Check Login Status (All Profiles)",
                                           command=self._on_check_login_status,
                                           state="normal",
                                           style="TButton")
-        self.check_login_btn.grid(row=2, column=0, columnspan=5, sticky="ew", pady=(4, 0))
+        self.check_login_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
 
         # Status
         status_frame = ttk.Frame(inner)
@@ -115,8 +108,10 @@ class ProfilesTab(ttk.Frame):
                   style="Heading.TLabel").pack(anchor="w")
 
         tt = "Check & fix: no friends → auto-add, missing profile pic → auto-assign gender-based images"
-        ttk.Label(setup_frame, text=tt,
-                  foreground=theme.get()["muted"], wraplength=500).pack(anchor="w", pady=(2, 6))
+        setup_hint = ttk.Label(setup_frame, text=tt,
+                               foreground=theme.get()["muted"])
+        setup_hint.pack(anchor="w", pady=(2, 6))
+        bind_wrap(setup_hint)
 
         options_frame = ttk.Frame(inner)
         options_frame.pack(fill="x", **pad)
@@ -226,8 +221,10 @@ class ProfilesTab(ttk.Frame):
         info = ("Add Profile → pick your Brave profile → saved as a reference.\n"
                 "No files are copied — your existing Facebook session is used directly.\n"
                 "Launch → opens Brave with your profile → ready to share.")
-        ttk.Label(inner, text=info, foreground=theme.get()["muted"],
-                  wraplength=500).pack(anchor="w", **pad)
+        info_label = ttk.Label(inner, text=info,
+                               foreground=theme.get()["muted"])
+        info_label.pack(anchor="w", **pad)
+        bind_wrap(info_label, pad=2 * pad["padx"])
 
     # ── Properties ─────────────────────────────────────────
 

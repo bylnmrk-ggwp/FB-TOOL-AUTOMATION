@@ -49,58 +49,67 @@ class MainWindow(tk.Tk):
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
 
         # ── Buttons ──────────────────────────────────────
+        # Ghost by default: a secondary button carries no resting fill or
+        # border, so a screen full of them reads as a list of actions rather
+        # than a wall of boxes. Only hover and press draw a surface.
         style.configure("TButton", background=c["secondary"],
                         foreground=c["secondary_fg"],
                         borderwidth=1, relief="flat", focusthickness=0,
-                        padding=(14, 7))
+                        bordercolor=c["border"], lightcolor=c["border"],
+                        darkcolor=c["border"],
+                        padding=(12, 6))
         style.map("TButton",
                   background=[("pressed", c["btn_pressed"]),
                               ("active", c["btn_hover"]),
                               ("disabled", c["disabled_bg"])],
-                  foreground=[("disabled", c["disabled_fg"])],
+                  foreground=[("disabled", c["disabled_fg"]),
+                              ("active", c["fg"])],
                   bordercolor=[("active", c["secondary_border"]),
-                               ("pressed", c["secondary_border"])],
+                               ("disabled", c["disabled_bg"])],
                   lightcolor=[("active", c["secondary_border"]),
-                              ("pressed", c["secondary_border"])],
+                              ("disabled", c["disabled_bg"])],
                   darkcolor=[("active", c["secondary_border"]),
-                              ("pressed", c["secondary_border"])],
-                  relief=[("pressed", "sunken"), ("!pressed", "flat")],
+                             ("disabled", c["disabled_bg"])],
+                  relief=[("pressed", "flat"), ("!pressed", "flat")],
                   cursor=[("!disabled", "hand2")])
 
         style.configure("Accent.TButton", background=c["accent"],
                         foreground="white", borderwidth=0, relief="flat",
-                        focusthickness=0, padding=(16, 8))
+                        focusthickness=0, padding=(14, 7))
         style.map("Accent.TButton",
                   background=[("pressed", c["accent_pressed"]),
                               ("active", c["accent_hover"]),
                               ("disabled", c["accent_disabled"])],
-                  foreground=[("disabled", "#ffffff")],
-                  relief=[("pressed", "sunken"), ("!pressed", "flat")],
+                  foreground=[("disabled", c["disabled_fg"])],
+                  relief=[("pressed", "flat"), ("!pressed", "flat")],
                   cursor=[("!disabled", "hand2")])
 
         style.configure("Timeline.TButton", background=c["timeline"],
                         foreground="white", borderwidth=0, relief="flat",
-                        focusthickness=0, padding=(16, 8))
+                        focusthickness=0, padding=(14, 7))
         style.map("Timeline.TButton",
                   background=[("pressed", c["timeline_pressed"]),
                               ("active", c["timeline_hover"]),
                               ("disabled", c["timeline_disabled"])],
-                  foreground=[("disabled", "#ffffff")],
-                  relief=[("pressed", "sunken"), ("!pressed", "flat")],
+                  foreground=[("disabled", c["disabled_fg"])],
+                  relief=[("pressed", "flat"), ("!pressed", "flat")],
                   cursor=[("!disabled", "hand2")])
 
         style.configure("Header.TButton", background=c["toolbar_bg"],
-                        foreground=c["toolbar_fg"],
+                        foreground=c["muted"],
                         borderwidth=0, relief="flat", focusthickness=0,
-                        padding=(12, 6))
+                        padding=(10, 5))
         style.map("Header.TButton",
                   background=[("pressed", c["header_pressed"]),
                               ("active", c["header_hover"])],
+                  foreground=[("active", c["fg"])],
                   cursor=[("!disabled", "hand2")])
 
         # ── Inputs ───────────────────────────────────────
         style.configure("TEntry", fieldbackground=c["input_bg"],
                         foreground=c["input_fg"], insertcolor=c["input_fg"],
+                        bordercolor=c["border"], lightcolor=c["border"],
+                        darkcolor=c["border"],
                         borderwidth=1, relief="solid", padding=(8, 5))
         style.map("TEntry",
                   bordercolor=[("focus", c["accent"])],
@@ -109,7 +118,9 @@ class MainWindow(tk.Tk):
                   fieldbackground=[("disabled", c["disabled_bg"])])
 
         style.configure("TCombobox", fieldbackground=c["input_bg"],
-                        foreground=c["input_fg"], arrowcolor=c["fg"],
+                        foreground=c["input_fg"], arrowcolor=c["muted"],
+                        bordercolor=c["border"], lightcolor=c["border"],
+                        darkcolor=c["border"],
                         borderwidth=1, padding=(6, 4))
         style.map("TCombobox",
                   fieldbackground=[("readonly", c["input_bg"])],
@@ -118,8 +129,10 @@ class MainWindow(tk.Tk):
                   darkcolor=[("focus", c["accent"])])
 
         style.configure("TSpinbox", fieldbackground=c["input_bg"],
-                        foreground=c["input_fg"], arrowcolor=c["fg"],
-                        buttonbackground=c["secondary"],
+                        foreground=c["input_fg"], arrowcolor=c["muted"],
+                        buttonbackground=c["input_bg"],
+                        bordercolor=c["border"], lightcolor=c["border"],
+                        darkcolor=c["border"],
                         borderwidth=1, padding=(6, 4))
         style.map("TSpinbox",
                   bordercolor=[("focus", c["accent"])],
@@ -127,36 +140,66 @@ class MainWindow(tk.Tk):
                   darkcolor=[("focus", c["accent"])])
 
         # ── Notebook tabs ────────────────────────────────
+        # Tabs read as text, not as boxes: clam's default tab layout draws a
+        # raised border on every state, so the border element is dropped from
+        # the layout and selection is carried by colour and weight alone.
         style.configure("TNotebook", background=c["bg"], borderwidth=0,
-                        tabmargins=(6, 6, 6, 0))
+                        tabmargins=(8, 4, 8, 0),
+                        bordercolor=c["bg"], lightcolor=c["bg"],
+                        darkcolor=c["bg"])
+        try:
+            style.layout("TNotebook.Tab", [
+                ("Notebook.tab", {"sticky": "nswe", "children": [
+                    ("Notebook.padding", {"side": "top", "sticky": "nswe",
+                                          "children": [
+                        ("Notebook.label", {"side": "top", "sticky": ""}),
+                    ]}),
+                ]}),
+            ])
+        except tk.TclError:
+            pass
         style.configure("TNotebook.Tab", background=c["bg"],
-                        foreground=c["muted"], padding=(18, 9), borderwidth=0,
-                        focuscolor=c["bg"])
+                        foreground=c["muted"], padding=(14, 9), borderwidth=0,
+                        focuscolor=c["bg"], font=(theme.UI_FONT, 10),
+                        bordercolor=c["bg"], lightcolor=c["bg"],
+                        darkcolor=c["bg"])
         style.map("TNotebook.Tab",
-                  background=[("selected", c["accent"]), ("active", c["notebook_hover"])],
-                  foreground=[("selected", "#ffffff"), ("active", c["fg"])])
+                  background=[("selected", c["bg"]), ("active", c["bg"])],
+                  foreground=[("selected", c["accent"]), ("active", c["fg"])],
+                  bordercolor=[("selected", c["bg"]), ("active", c["bg"])],
+                  lightcolor=[("selected", c["bg"]), ("active", c["bg"])],
+                  darkcolor=[("selected", c["bg"]), ("active", c["bg"])],
+                  font=[("selected", (theme.UI_FONT, 10, "bold"))])
 
         # ── Labels ───────────────────────────────────────
+        # Section headings differ from body text by weight, not by size, so a
+        # screen of stacked sections keeps one type scale.
         style.configure("Heading.TLabel", font=(theme.UI_FONT, 10, "bold"),
                         foreground=c["heading"])
-        style.configure("Header.TLabel", font=(theme.UI_FONT, 11, "bold"),
+        style.configure("Header.TLabel", font=(theme.UI_FONT, 10, "bold"),
                         foreground=c["heading"])
         style.configure("Status.TLabel", foreground=c["status"])
         style.configure("Success.TLabel", foreground=c["success"])
         style.configure("Error.TLabel", foreground=c["error"])
         style.configure("Muted.TLabel", foreground=c["muted"])
         style.configure("StatusDot.TLabel", font=(theme.UI_FONT, 14))
+        # Labels placed on a Card.TFrame: a ttk label defaults to the page
+        # background, which draws a box of the wrong colour on a card.
+        style.configure("Card.TLabel", background=c["card"])
+        style.configure("CardMuted.TLabel", background=c["card"],
+                        foreground=c["muted"])
+        style.configure("CardValue.TLabel", background=c["card"],
+                        foreground=c["heading"],
+                        font=(theme.UI_FONT, 18, "bold"))
 
         # ── Frames ───────────────────────────────────────
-        style.configure("Card.TFrame", background=c["card"], relief="solid",
-                        borderwidth=1, bordercolor=c["border"])
-        style.configure("Header.TFrame", background=c["toolbar_bg"])
-        style.configure("AppTitle.TLabel",
-                        font=(theme.UI_FONT, 16, "bold"),
-                        background=c["toolbar_bg"], foreground=c["toolbar_fg"])
-        style.configure("AppSubtitle.TLabel",
-                        font=(theme.UI_FONT, 9),
-                        background=c["toolbar_bg"], foreground=c["toolbar_accent"])
+        # One boundary per section. A card is separated from the page by its
+        # own fill, so it carries no border as well.
+        style.configure("Card.TFrame", background=c["card"], relief="flat",
+                        borderwidth=0)
+        # Header.TFrame still backs the action strip overlaid on the tab row;
+        # AppTitle/AppSubtitle went with the title band that used to carry them.
+        style.configure("Header.TFrame", background=c["bg"])
         style.configure("StatusBar.TFrame", background=c["status_bg"],
                         relief="flat", borderwidth=0)
         style.configure("StatusBar.TLabel",
@@ -168,20 +211,40 @@ class MainWindow(tk.Tk):
 
         # ── Paned windows (2-tab consolidated layout) ────
         style.configure("TPanedwindow", background=c["bg"])
-        style.configure("Sash", sashthickness=6, gripcount=0,
-                        background=c["border"])
+        style.configure("Sash", sashthickness=8, gripcount=0,
+                        background=c["bg"])
         style.configure("SectionTitle.TLabel",
                         font=(theme.UI_FONT, 9, "bold"),
                         foreground=c["muted"])
 
-        style.configure("Vertical.TScrollbar", gripcount=0,
-                        background=c["notebook_inactive"], arrowcolor=c["fg"],
-                        bordercolor=c["border"], troughcolor=c["bg"],
-                        borderwidth=0, relief="flat")
-        style.configure("Horizontal.TScrollbar", gripcount=0,
-                        background=c["notebook_inactive"], arrowcolor=c["fg"],
-                        bordercolor=c["border"], troughcolor=c["bg"],
-                        borderwidth=0, relief="flat")
+        # clam's scrollbar layout includes two stepper arrows, which is where
+        # the blocky look came from - colour alone cannot remove them. Replace
+        # the layout with trough + thumb only.
+        for orient, side in (("Vertical", "left"), ("Horizontal", "top")):
+            try:
+                style.layout(f"{orient}.TScrollbar", [
+                    (f"{orient}.Scrollbar.trough", {"sticky": "nswe",
+                                                    "children": [
+                        (f"{orient}.Scrollbar.thumb",
+                         {"expand": "1", "sticky": "nswe"}),
+                    ]}),
+                ])
+            except tk.TclError:
+                pass
+            # clam sizes the whole bar from arrowsize even with the arrows
+            # gone from the layout (arrowsize=0 collapses it to 1px), so this
+            # is the thumb width, not a leftover.
+            style.configure(f"{orient}.TScrollbar", gripcount=0,
+                            background=c["scroll_thumb"],
+                            troughcolor=c["bg"], bordercolor=c["bg"],
+                            lightcolor=c["scroll_thumb"],
+                            darkcolor=c["scroll_thumb"],
+                            arrowsize=8,
+                            borderwidth=0, relief="flat")
+            style.map(f"{orient}.TScrollbar",
+                      background=[("active", c["scroll_thumb_hover"])],
+                      lightcolor=[("active", c["scroll_thumb_hover"])],
+                      darkcolor=[("active", c["scroll_thumb_hover"])])
 
         style.configure("Horizontal.TProgressbar", troughcolor=c["track"],
                         background=c["accent"], bordercolor=c["track"],
@@ -196,10 +259,7 @@ class MainWindow(tk.Tk):
         from src.storage import config_manager as cfg
         cfg.save_setting("ui_theme", mode)
         self._apply_theme()
-        if hasattr(self, "_accent_line"):
-            self._accent_line.configure(bg=theme.get()["accent"])
-        self.theme_btn.config(
-            text="🌙 Dark Mode" if mode == "light" else "☀️ Light Mode")
+        self.theme_btn.config(text="Dark" if mode == "light" else "Light")
         self._retheme_tabs()
 
     def _retheme_tabs(self):
@@ -216,47 +276,41 @@ class MainWindow(tk.Tk):
     # ── UI Build ──────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Top header ──────────────────────────────────────
-        header = ttk.Frame(self, style="Header.TFrame")
-        header.pack(fill="x")
-
-        header_left = ttk.Frame(header, style="Header.TFrame")
-        header_left.pack(side="left", padx=16, pady=(10, 10))
-        ttk.Label(header_left, text="FB TOOL AUTOMATION",
-                  style="AppTitle.TLabel").pack(anchor="w")
-        ttk.Label(header_left, text="Facebook Automation Suite",
-                  style="AppSubtitle.TLabel").pack(anchor="w")
-
-        self.theme_btn = ttk.Button(
-            header,
-            text="🌙 Dark Mode" if theme.current == "light" else "☀️ Light Mode",
-            command=self._toggle_theme,
-            style="Header.TButton")
-        self.theme_btn.pack(side="right", padx=14, pady=(12, 12))
-
-        # Session-level action, so it lives in the window chrome rather than
-        # in a tab: it closes the browser and clears saved credentials.
-        self.logout_btn = ttk.Button(header, text="Log Out",
-                                     command=self._on_logout,
-                                     style="Header.TButton")
-        self.logout_btn.pack(side="right", padx=(0, 4), pady=(12, 12))
-
-        # Thin flat accent underline
-        self._accent_line = tk.Frame(self, height=2, bg=theme.get()["accent"])
-        self._accent_line.pack(fill="x")
-
         # ── Bottom status bar ───────────────────────────────
         statusbar = ttk.Frame(self, style="StatusBar.TFrame")
         statusbar.pack(side="bottom", fill="x")
         self._sb_left = ttk.Label(statusbar, text="Ready",
                                   style="StatusBar.TLabel")
-        self._sb_left.pack(side="left", padx=14, pady=4)
+        self._sb_left.pack(side="left", padx=16, pady=3)
         self._sb_right = ttk.Label(statusbar, text="",
                                    style="StatusBar.TLabel")
-        self._sb_right.pack(side="right", padx=14, pady=4)
+        self._sb_right.pack(side="right", padx=16, pady=3)
 
+        # There is no title band: the OS title bar already names the app, so a
+        # second copy of the name plus a tagline was ~100px of pure chrome.
+        # The notebook starts at the top of the window instead.
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=8, pady=(6, 8))
+        self.notebook.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+
+        # Session-level actions share the tab strip's row rather than owning a
+        # band of their own. They are placed over the notebook (not packed
+        # beside it) because the tab strip belongs to the notebook itself and
+        # the strip's right-hand side is otherwise dead space.
+        self._topbar = ttk.Frame(self)
+        self._topbar.place(in_=self.notebook, relx=1.0, x=-10, y=6,
+                           anchor="ne")
+
+        self.logout_btn = ttk.Button(self._topbar, text="Log Out",
+                                     command=self._on_logout,
+                                     style="Header.TButton")
+        self.logout_btn.pack(side="left")
+
+        self.theme_btn = ttk.Button(
+            self._topbar,
+            text="Dark" if theme.current == "light" else "Light",
+            command=self._toggle_theme,
+            style="Header.TButton")
+        self.theme_btn.pack(side="left")
 
         # ── Tab 1: Workspace — Profiles | Queue, Log strip below ──
         self.workspace_pane = ttk.PanedWindow(self.notebook, orient="vertical")

@@ -19,6 +19,7 @@ after re-theming, or after repopulating the listbox contents.
 
 import time
 import tkinter as tk
+from tkinter import ttk
 
 from src.ui import theme
 
@@ -196,3 +197,69 @@ def attach_button_hover(button, hover_bg=None, hover_fg=None):
     button.bind("<Enter>", _on_enter, add="+")
     button.bind("<Leave>", _on_leave, add="+")
     return button
+
+
+# ── Responsive text and button rows ───────────────────────────
+
+
+def bind_wrap(label, pad: int = 0, min_width: int = 80):
+    """Make a label's wraplength follow its parent's width.
+
+    A fixed wraplength only fits one pane width; in a resizable pane the text
+    either clips or leaves a ragged right margin. `pad` is the horizontal
+    space the label does not get (its own padx plus the parent's padding).
+    """
+    parent = label.master
+
+    def _on_resize(event):
+        width = event.width - pad
+        if width >= min_width:
+            label.configure(wraplength=width)
+
+    parent.bind("<Configure>", _on_resize, add="+")
+
+
+class FlowFrame(ttk.Frame):
+    """A row of widgets that wraps onto new lines when the frame is narrow.
+
+    Children are laid out left to right in grid cells; whenever the frame's
+    width changes, the row breaks are recomputed from each child's requested
+    width, so nothing is ever clipped at the right edge. Add children with
+    add() rather than grid()/pack() so the frame owns their placement.
+    """
+
+    def __init__(self, parent, gap: int = 6, row_gap: int = 4, **kwargs):
+        super().__init__(parent, **kwargs)
+        self._items = []
+        self._gap = gap
+        self._row_gap = row_gap
+        self._layout_key = None
+        self.bind("<Configure>", self._reflow, add="+")
+
+    def add(self, widget):
+        self._items.append(widget)
+        self._layout_key = None
+        self._reflow()
+        return widget
+
+    def _reflow(self, event=None):
+        width = event.width if event is not None else self.winfo_width()
+        if width <= 1 or not self._items:
+            return
+        rows, row, used = [], [], 0
+        for w in self._items:
+            need = w.winfo_reqwidth() + self._gap
+            if row and used + need > width:
+                rows.append(row)
+                row, used = [], 0
+            row.append(w)
+            used += need
+        rows.append(row)
+        key = tuple(len(r) for r in rows)
+        if key == self._layout_key:
+            return
+        self._layout_key = key
+        for r, items in enumerate(rows):
+            for c, w in enumerate(items):
+                w.grid(row=r, column=c, padx=(0, self._gap),
+                       pady=(0 if r == 0 else self._row_gap, 0), sticky="w")

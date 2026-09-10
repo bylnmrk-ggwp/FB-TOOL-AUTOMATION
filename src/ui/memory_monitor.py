@@ -81,7 +81,8 @@ class MemoryMonitorTab(ttk.Frame):
         list_card = ttk.Frame(self, style="Card.TFrame", padding=10)
         list_card.pack(fill="both", expand=True, padx=12, pady=(8, 4))
         ttk.Label(list_card, text="Per-Profile Memory",
-                  style="Heading.TLabel").pack(anchor="w")
+                  style="Heading.TLabel", background=theme.get()["card"]
+                  ).pack(anchor="w")
 
         list_wrap = ttk.Frame(list_card)
         list_wrap.pack(fill="both", expand=True, pady=(6, 0))
@@ -104,10 +105,10 @@ class MemoryMonitorTab(ttk.Frame):
         """Create a flat stat card; returns (value_label, sub_label)."""
         card = ttk.Frame(parent, style="Card.TFrame", padding=10)
         card.grid(row=0, column=col, sticky="nsew", padx=6, pady=4)
-        ttk.Label(card, text=title, style="Muted.TLabel").pack(anchor="w")
-        value = ttk.Label(card, text="—", font=(theme.UI_FONT, 18, "bold"))
+        ttk.Label(card, text=title, style="CardMuted.TLabel").pack(anchor="w")
+        value = ttk.Label(card, text="—", style="CardValue.TLabel")
         value.pack(anchor="w", pady=(4, 0))
-        sub = ttk.Label(card, text="", style="Muted.TLabel")
+        sub = ttk.Label(card, text="", style="CardMuted.TLabel")
         sub.pack(anchor="w")
         # Keep a handle on the RAM card so the progress bar can be placed in it
         if col == 0:
@@ -131,10 +132,10 @@ class MemoryMonitorTab(ttk.Frame):
 
     def apply_theme(self, colors: dict):
         self._configure_bar_styles(colors)
-        # Warning banner (flat solid block)
-        self._warn_frame.configure(bg=colors["warning"])
-        warn_fg = "#1f2937" if theme.current == "light" else "#0b0f19"
-        self._warn_label.configure(bg=colors["warning"], fg=warn_fg)
+        # Warning banner: warning-coloured text on a quiet surface, not a
+        # full-bleed amber slab.
+        self._warn_frame.configure(bg=colors["surface"])
+        self._warn_label.configure(bg=colors["surface"], fg=colors["warning"])
         # Profile list
         self._profile_list.configure(
             bg=colors["list_bg"], fg=colors["list_fg"],

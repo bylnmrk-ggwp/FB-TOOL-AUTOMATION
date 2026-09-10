@@ -5,7 +5,7 @@ from pathlib import Path
 
 from src.storage import config_manager as cfg
 from src.ui import theme
-from src.ui.effects import attach_listbox_hover
+from src.ui.effects import attach_listbox_hover, bind_wrap
 
 SAVED_FILE = Path.home() / ".autoshare" / "saved_shares.json"
 
@@ -59,6 +59,9 @@ class QueueTab(ttk.Frame):
 
         def _configure_canvas(event):
             canvas.itemconfig(canvas_window, width=event.width)
+            # The viewport is the only width that does not depend on what the
+            # dot grid lays out, so the column count has to be derived here.
+            self._on_status_frame_resize(event)
         canvas.bind("<Configure>", _configure_canvas)
 
         # Wheel scrolling is handled by the app-wide router (see effects.py)
@@ -67,8 +70,10 @@ class QueueTab(ttk.Frame):
 
         ttk.Label(inner, text="Share Queue",
                   style="Header.TLabel").pack(anchor="w", **pad)
-        ttk.Label(inner, text="Load saved presets or add timeline shares — each item uses its own profile.",
-                  foreground=theme.get()["muted"]).pack(anchor="w", **pad)
+        intro = ttk.Label(inner, text="Load saved presets or add timeline shares — each item uses its own profile.",
+                          foreground=theme.get()["muted"])
+        intro.pack(anchor="w", **pad)
+        bind_wrap(intro, pad=2 * pad["padx"])
 
         # ── Profile status ────────────────────────────────
         status_header = ttk.Frame(inner)
@@ -79,11 +84,15 @@ class QueueTab(ttk.Frame):
         self._profile_status_frame = ttk.Frame(inner)
         self._profile_status_frame.pack(fill="x", **pad)
         self._status_labels: dict[str, ttk.Label] = {}
+        self._status_grid_cols: int | None = None  # cols the grid was built at
         self._profile_status_cols = 6  # dots per row (responsive, see below)
-        # Recompute dot columns from available width so the grid adapts
-        # when the tab lives in a resizable pane.
-        self._profile_status_frame.bind("<Configure>",
-                                        self._on_status_frame_resize)
+        self._status_avail_px: int | None = None   # viewport width for the grid
+        self._status_rendered: dict[str, tuple[str, str]] = {}  # last text/colour
+        self._status_font = None                    # cached for name measuring
+        # Column count is recomputed from the canvas viewport in
+        # _configure_canvas above. Binding <Configure> on this frame instead
+        # would feed the grid's own width back into the column count and
+        # diverge; see _on_status_frame_resize.
 
         ttk.Separator(inner, orient="horizontal").pack(fill="x", **pad)
 
@@ -91,8 +100,10 @@ class QueueTab(ttk.Frame):
         add_label = ttk.Label(inner, text="Quick Add — All Profiles",
                               style="Heading.TLabel")
         add_label.pack(anchor="w", **pad)
-        ttk.Label(inner, text="Choose a command, fill in the form, then add it to the queue.",
-                  foreground=theme.get()["muted"]).pack(anchor="w", **pad)
+        add_hint = ttk.Label(inner, text="Choose a command, fill in the form, then add it to the queue.",
+                             foreground=theme.get()["muted"])
+        add_hint.pack(anchor="w", **pad)
+        bind_wrap(add_hint, pad=2 * pad["padx"])
 
         self._quick_mode_var = tk.StringVar(value="timeline")
         mode_row = ttk.Frame(inner)
@@ -527,29 +538,91 @@ class QueueTab(ttk.Frame):
         self._refresh_profile_status()
 
     def _on_status_frame_resize(self, event):
-        """Adapt the dot-grid column count to the available pane width."""
-        if event.width <= 1:
+        """Adapt the dot-grid column count to the available viewport width.
+
+        `event` must come from the scroll canvas, never from
+        _profile_status_frame. The frame is inside a scrollable canvas, so its
+        own width follows the widgets this handler lays out: reading it here
+        would make the column count its own input and grow without bound
+        (139 profiles drove the width past 5800px and froze the main loop).
+        """
+        if getattr(self, "_profile_status_frame", None) is None:
             return
-        cols = max(1, event.width // 130)
-        if cols != self._profile_status_cols:
-            self._profile_status_cols = cols
-            self._refresh_profile_status()
+        # inner's padx=12 plus the status frame's own padx=12, both sides.
+        avail = event.width - 48
+        if avail <= 1 or avail == self._status_avail_px:
+            return
+        self._status_avail_px = avail
+        self._refresh_profile_status()
+
+    def _status_columns(self, profiles: list[str]) -> int:
+        """Columns that fit the viewport, sized so no name is clipped.
+
+        A fixed 130px column cut long names at the right edge; the column is
+        instead as wide as the longest name currently shown.
+        """
+        if self._status_avail_px is None:
+            return self._profile_status_cols
+        if self._status_font is None:
+            import tkinter.font as tkfont
+            from src.ui import theme
+            self._status_font = tkfont.Font(family=theme.UI_FONT, size=10)
+        longest = max((self._status_font.measure(f"● {p}")
+                       for p in profiles), default=0)
+        col_px = max(130, longest + 14)  # +14 = the grid cell's padx
+        return max(1, self._status_avail_px // col_px)
+
+    def _dot_for(self, name: str, colors: dict) -> tuple[str, str]:
+        """Glyph and colour describing one profile's current login state."""
+        if name in self._rate_limited_profiles:
+            return "⚠", colors["warning"]
+        state = self._profile_status.get(name)
+        if state is True:
+            return "●", colors["success"]
+        if state is False:
+            return "○", colors["muted"]
+        return "○", colors["dot_unknown"]
 
     def _refresh_profile_status(self):
-        """Rebuild the profile status indicator row using grid for wrapping."""
+        """Refresh the profile status row, rebuilding widgets only when needed."""
         from src.ui import theme
         colors = theme.get()
-        for w in self._profile_status_frame.winfo_children():
-            w.destroy()
-        self._status_labels.clear()
 
-        # Clean up stale entries for deleted profiles
-        existing = set(cfg.list_profiles())
+        profiles = cfg.list_profiles()
+        self._profile_status_cols = self._status_columns(profiles)
+
+        # Clean up stale entries for deleted profiles. The rate-limit set is
+        # pruned too, or a re-provisioned profile inherits a stale warning dot.
+        existing = set(profiles)
         for key in list(self._profile_status):
             if key not in existing:
                 del self._profile_status[key]
+        self._rate_limited_profiles.intersection_update(existing)
 
-        profiles = cfg.list_profiles()
+        # Tearing every label down costs ~250ms at 139 profiles, and a run calls
+        # this once per profile as each logs in. Only a changed profile set or
+        # column count needs new widgets; a status or theme change just relabels
+        # the ones already on screen.
+        if (self._status_labels
+                and self._status_grid_cols == self._profile_status_cols
+                and list(self._status_labels) == profiles):
+            # configure() on an unchanged label still costs a Tcl round trip
+            # and a relayout (~98ms across 139 labels), so only touch the
+            # ones whose glyph or colour actually moved.
+            for name, lbl in self._status_labels.items():
+                dot, color = self._dot_for(name, colors)
+                want = (f"{dot} {name}", color)
+                if self._status_rendered.get(name) != want:
+                    lbl.configure(text=want[0], foreground=want[1])
+                    self._status_rendered[name] = want
+            return
+
+        for w in self._profile_status_frame.winfo_children():
+            w.destroy()
+        self._status_labels.clear()
+        self._status_rendered.clear()
+        self._status_grid_cols = None
+
         if not profiles:
             ttk.Label(self._profile_status_frame, text="(no profiles)",
                       foreground=colors["muted"]).pack(side="left")
@@ -558,23 +631,13 @@ class QueueTab(ttk.Frame):
         cols = self._profile_status_cols
         for idx, p in enumerate(profiles):
             row, col = divmod(idx, cols)
-            if p in self._rate_limited_profiles:
-                dot = "\u26a0"
-                color = colors["warning"]
-            elif self._profile_status.get(p) is True:
-                dot = "\u25cf"
-                color = colors["success"]
-            elif self._profile_status.get(p) is False:
-                dot = "\u25cb"
-                color = colors["muted"]
-            else:
-                dot = "\u25cb"
-                color = colors["dot_unknown"]
-
+            dot, color = self._dot_for(p, colors)
             lbl = ttk.Label(self._profile_status_frame,
                            text=f"{dot} {p}", foreground=color)
             lbl.grid(row=row, column=col, sticky="w", padx=(0, 14), pady=2)
             self._status_labels[p] = lbl
+            self._status_rendered[p] = (f"{dot} {p}", color)
+        self._status_grid_cols = cols
 
     def set_running(self, running: bool):
         state = "disabled" if running else "normal"
