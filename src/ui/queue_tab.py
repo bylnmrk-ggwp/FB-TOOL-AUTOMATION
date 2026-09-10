@@ -22,6 +22,8 @@ class QueueTab(ttk.Frame):
 
         self._items: list[dict] = []
         self._on_run_queue_cb = None
+        self._on_watch_url_cb = None
+        self._on_stop_watch_cb = None
         # Track login status per profile: profile_name → True (logged in) / False (not) / None (unknown)
         self._profile_status: dict[str, bool | None] = {}
         self._rate_limited_profiles: set[str] = set()
@@ -436,6 +438,21 @@ class QueueTab(ttk.Frame):
                                   style="Accent.TButton")
         self.run_btn.grid(row=0, column=3, padx=(6, 0), pady=2, sticky="e")
 
+        # ── Live watch: open every active profile on a pasted URL ─────
+        watch_frame = ttk.Frame(inner)
+        watch_frame.pack(fill="x", **pad)
+        ttk.Label(watch_frame, text="Watch URL:").pack(side="left")
+        self._watch_url_var = tk.StringVar()
+        watch_entry = ttk.Entry(watch_frame, textvariable=self._watch_url_var)
+        watch_entry.pack(side="left", fill="x", expand=True, padx=(6, 6))
+        self.stop_watch_btn = ttk.Button(watch_frame, text="Stop",
+                                         command=self._on_stop_watch)
+        self.stop_watch_btn.pack(side="right")
+        self.watch_btn = ttk.Button(watch_frame, text="Watch (active profiles)",
+                                    command=self._on_watch,
+                                    style="Accent.TButton")
+        self.watch_btn.pack(side="right", padx=(0, 6))
+
         # ── Browser render mode ───────────────────────────
         # Facebook serves a stripped page to the legacy headless engine, so
         # comments can't find the composer. "Hidden (recommended)" uses the
@@ -489,6 +506,25 @@ class QueueTab(ttk.Frame):
 
     def set_on_run_queue(self, callback):
         self._on_run_queue_cb = callback
+
+    def set_on_watch_url(self, callback):
+        self._on_watch_url_cb = callback
+
+    def set_on_stop_watch(self, callback):
+        self._on_stop_watch_cb = callback
+
+    def _on_watch(self):
+        url = self._watch_url_var.get().strip()
+        if not url.startswith(("http://", "https://")):
+            messagebox.showerror("Invalid URL",
+                                 "Watch URL must start with http:// or https://")
+            return
+        if self._on_watch_url_cb:
+            self._on_watch_url_cb(url)
+
+    def _on_stop_watch(self):
+        if self._on_stop_watch_cb:
+            self._on_stop_watch_cb()
 
     def set_status(self, text: str):
         self.status_var.set(text)

@@ -427,6 +427,8 @@ class MainWindow(tk.Tk):
 
         # Queue tab
         self.queue_tab.set_on_run_queue(self.manager.run_queue)
+        self.queue_tab.set_on_watch_url(self.manager.watch_url)
+        self.queue_tab.set_on_stop_watch(self.manager.stop_watch)
         
         # Profiles tab
         self.profiles_tab._log_callback = self.log_tab.write

@@ -58,6 +58,12 @@ class DriverManager:
         # Single-profile automation (for login, share, start_profile commands)
         self._automation = None
 
+        # Live-watch: a separate visible browser holding one window per active
+        # profile on a pasted URL, kept open until stop_watch / quit.
+        self._watch_pw = None
+        self._watch_browser = None
+        self._watch_autos: dict = {}
+
         # Concurrent batch mode — each profile gets its own browser window
         self._batch_pw = None
         self._batch_automations: dict[str, "FacebookAutomation"] = {}  # noqa: F821
@@ -240,6 +246,14 @@ class DriverManager:
     def run_queue(self, items: list[dict]):
         self.cmd_queue.put({"type": "run_queue", "items": items})
 
+    def watch_url(self, url: str):
+        """Open every active (logged-in) profile in a visible window on `url`."""
+        self.cmd_queue.put({"type": "watch_url", "url": url})
+
+    def stop_watch(self):
+        """Close the live-watch windows."""
+        self.cmd_queue.put({"type": "stop_watch"})
+
     def send_user_response(self, response: dict):
         """Send a user response from the UI thread to a waiting background command.
 
@@ -327,6 +341,10 @@ class DriverManager:
                 await self._do_check_login_status(cmd)
             elif cmd_type == "run_queue":
                 await self._do_batch(cmd["items"])
+            elif cmd_type == "watch_url":
+                await self._do_watch(cmd["url"])
+            elif cmd_type == "stop_watch":
+                await self._stop_watch()
             elif cmd_type == "cleanup":
                 await self._do_cleanup()
             elif cmd_type == "logout":
@@ -3358,12 +3376,121 @@ class DriverManager:
 
     async def _do_quit(self):
         await self._cleanup_batch()
+        await self._stop_watch()
         if self._automation:
             try:
                 await self._automation.quit()
             except Exception:
                 pass
         self.state = DriverState.STOPPED
+
+    async def _do_watch(self, url: str):
+        """Open one visible window per active profile on `url` and leave them open.
+
+        Reuses the batch primitives - storage-state extraction (cached where
+        possible) and init_from_storage on a single shared browser - but the
+        browser is VISIBLE, resource blocking is off so the page renders fully,
+        and nothing is closed afterwards. "Active" is the logged-in set
+        (status='ok'), the same source the UI filters on.
+        """
+        from src.core.facebook_automation import (FacebookAutomation,
+                                                   CHROME_PATH, MEMORY_FLAGS)
+        from src.storage import state_cache
+
+        await self._stop_watch()        # replace any previous watch
+
+        url = (url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            self.log("Watch: URL must start with http:// or https://")
+            return
+
+        ok = db.logged_in_profiles()
+        profiles = [p for p in cfg.list_profiles() if p in ok]
+        if not profiles:
+            self.log("Watch: no active (logged-in) profiles to open.")
+            return
+
+        self.log(f"👁 Watch: opening {len(profiles)} active profile(s) on {url}")
+
+        states: dict = {}
+        for i, p in enumerate(profiles):
+            st = state_cache.load_state(p)
+            if st is None:
+                bp = cfg.get_profile_path(p)
+                if bp:
+                    temp = self._create_temp_automation()
+                    try:
+                        st = await temp.extract_storage_state(bp, skip_navigation=True)
+                        if st:
+                            state_cache.save_state(p, st)
+                    except Exception as e:
+                        self.log(f"  ⚠️  extract failed '{p}': {e}")
+                        st = None
+                    finally:
+                        try:
+                            await temp.quit()
+                        except Exception:
+                            pass
+                    if i < len(profiles) - 1:
+                        await asyncio.sleep(0.5)   # release singleton lock
+            states[p] = st
+
+        active = [p for p in profiles if states.get(p) is not None]
+        if not active:
+            self.log("Watch: no usable sessions - nothing opened.")
+            return
+
+        self._watch_pw = await async_playwright().start()
+        self._watch_browser = await self._watch_pw.chromium.launch(
+            executable_path=CHROME_PATH, headless=False,
+            args=[f"--window-size={SMALL_VIEWPORT['width']},{SMALL_VIEWPORT['height']}",
+                  *MEMORY_FLAGS])
+        self._watch_autos = {}
+
+        sem = asyncio.Semaphore(5)
+
+        async def _open(profile_name: str):
+            async with sem:
+                auto = FacebookAutomation(log_callback=self.log, debug=self._debug)
+                await auto.init_from_storage(self._watch_browser,
+                                             states[profile_name],
+                                             viewport=SMALL_VIEWPORT)
+                auto._block_resources = False     # render the page fully
+                try:
+                    await auto.page.goto(url, wait_until="domcontentloaded",
+                                         timeout=45000)
+                    self.log(f"  👁 watching '{profile_name}'")
+                except Exception as e:
+                    self.log(f"  ⚠️  '{profile_name}' navigation failed: {e}")
+                self._watch_autos[profile_name] = auto
+
+        await asyncio.gather(*(_open(p) for p in active), return_exceptions=True)
+        self.log(f"👁 Watch: {len(self._watch_autos)} window(s) open. "
+                 f"They stay open until you press Stop.")
+
+    async def _stop_watch(self):
+        """Close every live-watch window and its browser, if any."""
+        autos = getattr(self, "_watch_autos", {})
+        if autos:
+            self.log(f"👁 Watch: closing {len(autos)} window(s)...")
+        for auto in list(autos.values()):
+            try:
+                await auto.quit()
+            except Exception:
+                pass
+        self._watch_autos = {}
+        if getattr(self, "_watch_browser", None):
+            try:
+                await self._watch_browser.close()
+            except Exception:
+                pass
+            self._watch_browser = None
+        if getattr(self, "_watch_pw", None):
+            try:
+                await self._watch_pw.stop()
+            except Exception:
+                pass
+            self._watch_pw = None
 
     def _detect_gender_from_name(self, name: str) -> str:
         """Detect gender from profile name using Groq AI.
