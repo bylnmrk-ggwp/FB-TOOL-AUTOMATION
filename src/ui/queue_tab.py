@@ -607,6 +607,12 @@ class QueueTab(ttk.Frame):
         colors = theme.get()
 
         profiles = cfg.list_profiles()
+        # Same "logged in only" filter the Profiles tab exposes, read from
+        # the persisted setting so both panes agree without extra wiring.
+        if cfg.get_setting("show_logged_in_only", True):
+            from src.storage import database as db
+            ok = db.logged_in_profiles()
+            profiles = [p for p in profiles if p in ok]
         self._profile_status_cols = self._status_columns(profiles)
 
         # Clean up stale entries for deleted profiles. The rate-limit set is

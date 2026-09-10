@@ -176,6 +176,16 @@ class ProfilesTab(ttk.Frame):
         roster_search.pack(side="left")
         roster_search.bind("<KeyRelease>", lambda e: self._render_roster())
 
+        # Show only accounts/profiles a login run has confirmed. On by default
+        # and persisted, so the app opens to the usable set; the queue's dot
+        # grid reads the same setting.
+        self._logged_in_only = tk.BooleanVar(
+            value=bool(cfg.get_setting("show_logged_in_only", True)))
+        ttk.Checkbutton(roster_header, text="Logged in only",
+                        variable=self._logged_in_only,
+                        command=self._on_logged_in_only_toggle
+                        ).pack(side="left", padx=(12, 0))
+
         self._roster_count_var = tk.StringVar(value="")
         ttk.Label(roster_header, textvariable=self._roster_count_var,
                   style="Status.TLabel").pack(side="left", padx=(12, 0))
@@ -298,6 +308,8 @@ class ProfilesTab(ttk.Frame):
     def _render_roster(self):
         """Draw the roster, filtered by the search box, into the listbox."""
         accounts = getattr(self, "_accounts", [])
+        if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
+            accounts = [a for a in accounts if a.get("status") == "ok"]
         needle = self._roster_search_var.get().strip().lower()
         if needle:
             accounts = [
@@ -435,11 +447,25 @@ class ProfilesTab(ttk.Frame):
             self.refresh_accounts()
             self._roster_status_var.set("Unlinked")
 
+    def _on_logged_in_only_toggle(self):
+        cfg.save_setting("show_logged_in_only", bool(self._logged_in_only.get()))
+        self.refresh_profiles()
+        self._render_roster()
+
+    def _visible_profiles(self) -> list[str]:
+        """Profile names to list, honouring the "logged in only" filter."""
+        names = cfg.list_profiles()
+        if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
+            from src.storage import database as db
+            ok = db.logged_in_profiles()
+            names = [n for n in names if n in ok]
+        return names
+
     def refresh_profiles(self):
         if hasattr(self, "_clear_profile_hover"):
             self._clear_profile_hover()
         self.profile_listbox.delete(0, "end")
-        for name in cfg.list_profiles():
+        for name in self._visible_profiles():
             display = f"\u26a0 {name} — RATE LIMITED" if name in self._rate_limited else name
             self.profile_listbox.insert("end", display)
         self._update_buttons()

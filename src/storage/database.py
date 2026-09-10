@@ -416,6 +416,19 @@ def link_account(username: str, profile_name: str) -> bool:
     return cur.rowcount > 0
 
 
+def logged_in_profiles() -> set[str]:
+    """Names of Brave profiles whose linked account is logged in (status 'ok').
+
+    The UI's "logged in only" filter keys off this, so a profile shows up
+    the moment a login run marks its account ok.
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT linked_profile FROM accounts "
+        "WHERE status = 'ok' AND linked_profile != ''").fetchall()
+    return {r[0] for r in rows}
+
+
 def count_accounts() -> tuple[int, int]:
     """(total imported, number linked to a Brave profile)."""
     conn = _get_conn()
