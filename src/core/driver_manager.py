@@ -1794,6 +1794,13 @@ class DriverManager:
                         "message": f"[{idx}/{total}] '{profile_name}' — could not extract session",
                     })
                 else:
+                    # Persist what the scan learned, so the login count and
+                    # the next queue run start from it instead of from zero.
+                    from src.storage import state_cache
+                    if logged_in:
+                        state_cache.save_state(profile_name, state)
+                    else:
+                        state_cache.invalidate(profile_name)
                     reason = "logged_in" if logged_in else getattr(
                         temp_auto, "last_account_status", "unknown_not_logged_in")
                     removed = False

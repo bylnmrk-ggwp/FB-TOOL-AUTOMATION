@@ -25,6 +25,13 @@ class QueueTab(ttk.Frame):
         # Track login status per profile: profile_name → True (logged in) / False (not) / None (unknown)
         self._profile_status: dict[str, bool | None] = {}
         self._rate_limited_profiles: set[str] = set()
+        # Start from the last scan or run rather than from "unknown" for
+        # everyone: a profile with a valid cached session was logged in the
+        # last time anything looked (state_cache checks c_user/xs and TTL).
+        from src.storage import state_cache
+        for name in cfg.list_profiles():
+            if state_cache.load_state(name) is not None:
+                self._profile_status[name] = True
 
         self._build_ui()
 
@@ -611,8 +618,16 @@ class QueueTab(ttk.Frame):
         self._rate_limited_profiles.intersection_update(existing)
 
         active, total = self.logged_in_count()
-        self._active_count_var.set(
-            f"{active} / {total} logged in" if total else "")
+        unchecked = sum(1 for p in profiles if self._profile_status.get(p) is None)
+        if not total:
+            text = ""
+        elif unchecked == total:
+            text = f"{total} profiles - not checked yet"
+        elif unchecked:
+            text = f"{active} / {total} logged in  ({unchecked} not checked)"
+        else:
+            text = f"{active} / {total} logged in"
+        self._active_count_var.set(text)
 
         # Tearing every label down costs ~250ms at 139 profiles, and a run calls
         # this once per profile as each logs in. Only a changed profile set or
