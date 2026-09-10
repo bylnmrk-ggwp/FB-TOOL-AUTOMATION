@@ -8,6 +8,10 @@ from src.ui.effects import (attach_listbox_hover, attach_button_hover,
                             wait_for_thread)
 
 
+ROSTER_COLLAPSED = "\u25b8 Account Roster"
+ROSTER_EXPANDED = "\u25be Account Roster"
+
+
 class ProfilesTab(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
@@ -152,6 +156,71 @@ class ProfilesTab(ttk.Frame):
         ttk.Label(inner, textvariable=self._setup_status_var,
                   style="Status.TLabel").pack(anchor="w", padx=12, pady=(0, 4))
 
+        # -- Account roster ---------------------------------
+        # Imported from the account spreadsheet (IMPORT_ACCOUNTS.bat). These
+        # are NOT drivable on their own: every action resolves a Brave profile
+        # path, so an account is usable only once linked to one of the saved
+        # profiles listed above. Collapsed by default so the drivable
+        # profiles stay the focus of the tab.
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=8)
+
+        self._roster_open = False
+        roster_header = ttk.Frame(inner)
+        roster_header.pack(fill="x", padx=12)
+
+        self._roster_toggle = ttk.Button(roster_header,
+                                         text=ROSTER_COLLAPSED,
+                                         command=self._toggle_roster)
+        self._roster_toggle.pack(side="left")
+
+        ttk.Label(roster_header, text="Search:").pack(side="left", padx=(12, 4))
+        self._roster_search_var = tk.StringVar()
+        roster_search = ttk.Entry(roster_header,
+                                  textvariable=self._roster_search_var,
+                                  width=24)
+        roster_search.pack(side="left")
+        roster_search.bind("<KeyRelease>", lambda e: self._render_roster())
+
+        self._roster_count_var = tk.StringVar(value="")
+        ttk.Label(roster_header, textvariable=self._roster_count_var,
+                  style="Status.TLabel").pack(side="left", padx=(12, 0))
+
+        # Body stays unpacked until the section is expanded.
+        self._roster_body = ttk.Frame(inner)
+
+        rl_frame = ttk.Frame(self._roster_body)
+        rl_frame.pack(fill="both", expand=True)
+
+        roster_sb = Scrollbar(rl_frame)
+        self.roster_listbox = Listbox(
+            rl_frame, height=10, font=(theme.MONO_FONT, 9),
+            borderwidth=0, highlightthickness=1,
+            highlightbackground=theme.get()["border"],
+            yscrollcommand=roster_sb.set, activestyle="none",
+            selectmode="single")
+        roster_sb.config(command=self.roster_listbox.yview)
+        roster_sb.pack(side="right", fill="y")
+        self.roster_listbox.pack(side="left", fill="both", expand=True)
+        self._clear_roster_hover = attach_listbox_hover(self.roster_listbox)
+        self.roster_listbox.bind("<<ListboxSelect>>", self._on_roster_select)
+
+        roster_btns = ttk.Frame(self._roster_body)
+        roster_btns.pack(fill="x", pady=(6, 0))
+
+        self.link_account_btn = ttk.Button(
+            roster_btns, text="Link to Brave Profile...",
+            command=self._on_link_account, state="disabled")
+        self.link_account_btn.pack(side="left")
+
+        self.unlink_account_btn = ttk.Button(
+            roster_btns, text="Unlink",
+            command=self._on_unlink_account, state="disabled")
+        self.unlink_account_btn.pack(side="left", padx=(6, 0))
+
+        self._roster_status_var = tk.StringVar(value="")
+        ttk.Label(roster_btns, textvariable=self._roster_status_var,
+                  style="Status.TLabel").pack(side="left", padx=(12, 0))
+
         # Info
         ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=8)
         info = ("Add Profile → pick your Brave profile → saved as a reference.\n"
@@ -197,6 +266,177 @@ class ProfilesTab(ttk.Frame):
 
     def set_launch_enabled(self, enabled: bool):
         self.launch_btn.config(state="normal" if enabled else "disabled")
+
+    # -- Account roster -------------------------------------
+
+    def _toggle_roster(self):
+        """Expand or collapse the roster.
+
+        Rows load on first expand, so an empty accounts table costs nothing
+        at startup and the query is not run until the section is opened.
+        """
+        self._roster_open = not self._roster_open
+        if self._roster_open:
+            self._roster_body.pack(fill="both", expand=True, padx=12,
+                                   pady=(6, 0))
+            self._roster_toggle.config(text=ROSTER_EXPANDED)
+            self.refresh_accounts()
+        else:
+            self._roster_body.pack_forget()
+            self._roster_toggle.config(text=ROSTER_COLLAPSED)
+
+    def refresh_accounts(self):
+        """Reload the roster from the database and redraw it."""
+        from src.storage import database as db
+        try:
+            self._accounts = db.list_accounts()
+            total, linked = db.count_accounts()
+        except Exception as e:
+            self._accounts = []
+            total = linked = 0
+            self._roster_status_var.set(f"Could not read accounts: {e}")
+        self._roster_count_var.set(f"{total} account(s), {linked} linked")
+        self._render_roster()
+
+    def _render_roster(self):
+        """Draw the roster, filtered by the search box, into the listbox."""
+        accounts = getattr(self, "_accounts", [])
+        needle = self._roster_search_var.get().strip().lower()
+        if needle:
+            accounts = [
+                a for a in accounts
+                if needle in (a.get("facebook_name") or "").lower()
+                or needle in (a.get("username") or "").lower()
+                or needle in (a.get("email") or "").lower()
+                or needle in (a.get("linked_profile") or "").lower()
+            ]
+        self._roster_visible = accounts
+
+        if hasattr(self, "_clear_roster_hover"):
+            self._clear_roster_hover()
+        self.roster_listbox.delete(0, "end")
+        for a in accounts:
+            no = a.get("sheet_no")
+            no_txt = "" if no is None else str(no)
+            name = (a.get("facebook_name") or "")[:24]
+            user = (a.get("username") or "")[:30]
+            linked = a.get("linked_profile") or "-"
+            self.roster_listbox.insert(
+                "end", f"{no_txt:>4}  {name:<24}  {user:<30}  {linked}")
+        self._clear_roster_hover = attach_listbox_hover(self.roster_listbox)
+
+        if needle:
+            self._roster_status_var.set(f"{len(accounts)} match(es)")
+        elif not accounts:
+            self._roster_status_var.set(
+                "No accounts imported - run IMPORT_ACCOUNTS.bat")
+        else:
+            self._roster_status_var.set("")
+        self._on_roster_select()
+
+    @property
+    def selected_account(self) -> dict | None:
+        """The roster row currently selected, or None."""
+        sel = self.roster_listbox.curselection()
+        visible = getattr(self, "_roster_visible", [])
+        if not sel or sel[0] >= len(visible):
+            return None
+        return visible[sel[0]]
+
+    def _on_roster_select(self, event=None):
+        acct = self.selected_account
+        self.link_account_btn.config(state="normal" if acct else "disabled")
+        self.unlink_account_btn.config(
+            state="normal" if acct and acct.get("linked_profile")
+            else "disabled")
+
+    def _pick_saved_profile(self, account_label: str) -> str | None:
+        """Modal chooser over the SAVED profiles, the ones that can be driven.
+
+        Mirrors _show_brave_picker, which instead chooses from the Brave
+        installation's own profile directories.
+        """
+        names = cfg.list_profiles()
+        if not names:
+            messagebox.showinfo(
+                "No Profiles",
+                "No Brave profiles are saved yet. Add one first.",
+                parent=self)
+            return None
+
+        picker = Toplevel(self)
+        picker.title("Link to Brave Profile")
+        picker.geometry("420x340")
+        picker.transient(self.winfo_toplevel())
+        picker.grab_set()
+        picker.configure(bg=theme.get()["bg"])
+
+        result = {"name": None}
+
+        Label(picker, text=f"Link '{account_label}' to:",
+              font=(theme.UI_FONT, 11, "bold"),
+              wraplength=380).pack(pady=(15, 5))
+        Label(picker,
+              text="The account will use this Brave profile's session.",
+              fg=theme.get()["muted"],
+              font=(theme.UI_FONT, 9)).pack(pady=(0, 10))
+
+        lf = tk.Frame(picker)
+        lf.pack(fill="both", expand=True, padx=20, pady=5)
+        sb = Scrollbar(lf)
+        lb = Listbox(lf, height=10, font=(theme.MONO_FONT, 10),
+                     yscrollcommand=sb.set, activestyle="none",
+                     selectmode="single")
+        sb.config(command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.pack(side="left", fill="both", expand=True)
+        attach_listbox_hover(lb)
+        for n in names:
+            lb.insert("end", n)
+
+        def on_select():
+            sel = lb.curselection()
+            if not sel:
+                return
+            result["name"] = names[sel[0]]
+            picker.destroy()
+
+        bf = tk.Frame(picker)
+        bf.pack(pady=15)
+        ok_btn = Button(bf, text="Link", command=on_select, width=12)
+        ok_btn.pack(side="left", padx=5)
+        cancel_btn = Button(bf, text="Cancel", command=picker.destroy,
+                            width=12)
+        cancel_btn.pack(side="left", padx=5)
+        attach_button_hover(ok_btn)
+        attach_button_hover(cancel_btn)
+
+        self.wait_window(picker)
+        return result["name"]
+
+    def _on_link_account(self):
+        acct = self.selected_account
+        if not acct:
+            return
+        label = acct.get("facebook_name") or acct.get("username") or "account"
+        profile = self._pick_saved_profile(label)
+        if not profile:
+            return
+        from src.storage import database as db
+        if db.link_account(acct["username"], profile):
+            self.refresh_accounts()
+            self._roster_status_var.set(f"Linked '{label}' to '{profile}'")
+        else:
+            self._roster_status_var.set("Link failed - account not found")
+
+    def _on_unlink_account(self):
+        acct = self.selected_account
+        if not acct or not acct.get("linked_profile"):
+            return
+        from src.storage import database as db
+        if db.link_account(acct["username"], ""):
+            self.refresh_accounts()
+            self._roster_status_var.set("Unlinked")
 
     def refresh_profiles(self):
         if hasattr(self, "_clear_profile_hover"):
