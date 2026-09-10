@@ -403,9 +403,19 @@ async def run(args) -> int:
         accounts = [a for a in accounts
                     if a["username"].lower() == args.only.lower()]
 
+    # Accounts already marked logged in (status 'ok') are skipped up front so a
+    # re-run does not reopen a browser for them - the status the previous run
+    # committed is trusted. --relogin (or --only) forces them back in.
+    if not args.relogin and not args.only:
+        already = [a for a in accounts if a.get("status") == "ok"]
+        if already:
+            print(f"Skipping already logged in (status=ok): {len(already)}  "
+                  f"(--relogin to include them)")
+        accounts = [a for a in accounts if a.get("status") != "ok"]
+
     if not accounts:
-        print("No accounts with a linked Brave profile. Run "
-              "scripts/provision_profiles.py first.")
+        print("No accounts to attempt (all linked accounts are already "
+              "logged in; use --relogin to force).")
         return 0
 
     try:
@@ -521,6 +531,9 @@ def main(argv) -> int:
                     help="skip the first N of the queue, so a known-bad "
                          "account is not re-attempted")
     ap.add_argument("--only", metavar="USERNAME", help="attempt a single account")
+    ap.add_argument("--relogin", action="store_true",
+                    help="also attempt accounts already marked logged in "
+                         "(by default status=ok accounts are skipped)")
     ap.add_argument("--dry-run", action="store_true",
                     help="list who would be attempted, open nothing")
     ap.add_argument("--keep-going", action="store_true",
