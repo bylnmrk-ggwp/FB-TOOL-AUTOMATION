@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.autoshare/
+autoshare_config.enc
+.env
+.venv/
+venv/
+*.log
+dump_*.json
+nul
+.claude/settings.local.json

@@ -1,0 +1,100 @@
+╔═══════════════════════════════════════════════════════════════════════╗
+║                   FB TOOL AUTOMATION - HOW TO FIX                     ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+WHY THE SYSTEM WON'T RUN:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The error message is:
+  "ModuleNotFoundError: No module named 'playwright'"
+
+This means the required Python packages are NOT INSTALLED on your system.
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                          SOLUTION (EASY FIX)                          ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+Follow these steps IN ORDER:
+
+STEP 1: Install Dependencies
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Double-click:  INSTALL_DEPENDENCIES.bat
+   
+   This will:
+   ✓ Check your Python version
+   ✓ Install playwright (browser automation)
+   ✓ Install Pillow (image handling)
+   ✓ Install groq (AI features)
+   ✓ Download Chromium browser
+   ✓ Test all imports
+
+   Wait for it to complete (may take 3-5 minutes)
+
+STEP 2: Run the Application
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Double-click:  RUN_APP.bat
+   
+   The FB Tool Automation GUI should now open!
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                      WHAT WAS THE PROBLEM?                            ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+1. Wrong Python Path
+   ─────────────────
+   Old: C:\Users\MCARSPH\AppData\Local\Programs\Python\Python313\python.exe
+   Issue: Username was wrong (MCARSPH vs M2CarsPH)
+   Fixed: Now uses system Python
+
+2. Missing Dependencies
+   ────────────────────
+   The application requires 3 Python packages:
+   • playwright - for Facebook automation
+   • Pillow - for image processing  
+   • groq - for AI features
+   
+   These were NEVER installed, so the app couldn't start.
+
+3. Missing Browser
+   ───────────────
+   Playwright needs a browser (Chromium) to control Facebook.
+   This also needs to be installed.
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                         TROUBLESHOOTING                               ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+If INSTALL_DEPENDENCIES.bat fails:
+─────────────────────────────────────
+Try installing manually in Command Prompt:
+
+   python -m pip install playwright Pillow groq
+   python -m playwright install chromium
+
+If you get "python is not recognized":
+──────────────────────────────────────
+1. Press Windows key
+2. Type "Python" and open it
+3. In the Microsoft Store, install Python 3.11 or 3.12
+4. Try again
+
+If the GUI still doesn't open:
+────────────────────────────────
+1. Open Command Prompt
+2. Navigate to this folder:
+   cd "C:\Users\M2CarsPH\Desktop\FB TOOL AUTOMATION-MAIN"
+3. Run:
+   python main.py
+4. Copy the error message and share it
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                              SUMMARY                                  ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+Required Actions:
+  1. Run INSTALL_DEPENDENCIES.bat (FIRST TIME ONLY)
+  2. Run RUN_APP.bat (EVERY TIME YOU WANT TO USE THE APP)
+
+That's it! Your system will be ready to automate Facebook.
+
+═══════════════════════════════════════════════════════════════════════
