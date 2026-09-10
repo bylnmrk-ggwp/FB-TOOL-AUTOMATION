@@ -107,9 +107,32 @@ def ask(prompt: str) -> str:
         return "s"
 
 
+SESSION_COOKIES = ("c_user", "xs")
+
+
+async def has_session(auto) -> bool:
+    """True only if Facebook actually issued a logged-in session.
+
+    _is_logged_in() infers login from the absence of a login form or overlay,
+    which can pass transiently on a page that never authenticated: a real
+    test run reported "Login successful" while the profile ended up holding
+    only datr/fr/sb/wd, i.e. device identifiers and no session at all.
+    c_user (the account id) and xs (the session token) are the two cookies
+    that constitute a session, so check for those instead of guessing.
+    """
+    try:
+        cookies = await auto.context.cookies()
+    except Exception:
+        return False
+    names = {c.get("name") for c in cookies
+             if "facebook" in (c.get("domain") or "")}
+    return all(n in names for n in SESSION_COOKIES)
+
+
 async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
     """Open this account's Brave profile and log it in, assisted."""
-    from src.core.facebook_automation import FacebookAutomation
+    from src.core.facebook_automation import (FacebookAutomation,
+                                              LOGIN_FLAGS)
     from src.storage import config_manager as cfg
 
     profile_name = account["linked_profile"]
@@ -120,28 +143,38 @@ async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
     auto = FacebookAutomation()
     auto.log = log
     try:
-        await auto.start_browser(brave_path)      # visible, by design
+        # Visible: a checkpoint cannot be cleared in a headless window, and
+        # start_browser is headless by default.
+        await auto.start_browser(brave_path, headless=False,
+                                 flags=LOGIN_FLAGS)
         await auto.go_to_facebook()
 
-        if await auto._is_logged_in(timeout=8):
+        if await has_session(auto):
             return True, "already logged in - skipped"
 
         ok, msg = await auto.login_with_credentials(account["username"], password)
+
+        # Trust cookies over the DOM heuristic, whichever way they disagree.
+        if ok and not await has_session(auto):
+            ok, msg = False, ("reported success but no session cookies "
+                              "(c_user/xs missing) - not logged in")
+
         if ok:
             return True, msg
 
-        # The built-in wait is 120s. If a challenge is still on screen, give
-        # the operator as long as they need instead of failing the account.
-        if "2FA" in msg or "timed out" in msg or "manually" in msg:
-            while True:
-                choice = ask("    challenge still open - [Enter] I finished it, "
-                             "[s] skip this account: ")
-                if choice == "s":
-                    return False, "skipped at challenge"
-                if await auto._is_logged_in(timeout=8):
-                    return True, "logged in after manual challenge"
-                print("    still not logged in.")
-        return False, msg
+        # Give the operator as long as they need on a challenge, rather than
+        # failing the account at the built-in 120s wait.
+        while True:
+            try:
+                url = auto.page.url[:80]
+            except Exception:
+                url = "?"
+            print(f"    not logged in. current page: {url}")
+            choice = ask("    [Enter] I cleared it, re-check  /  [s] skip: ")
+            if choice == "s":
+                return False, f"skipped - {msg}"
+            if await has_session(auto):
+                return True, "logged in after manual step"
     except Exception as e:
         return False, f"error: {e}"
     finally:

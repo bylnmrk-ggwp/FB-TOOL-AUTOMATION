@@ -284,6 +284,22 @@ MEMORY_FLAGS = [
 ]
 
 # Lighter memory flags for dual-browser mode (less aggressive)
+# Interactive login needs a permissive browser, not a memory-tuned one.
+# MEMORY_FLAGS breaks the 2FA step two ways: --renderer-process-limit=1
+# starves the cross-origin google.com reCAPTCHA iframe of a renderer, and
+# --disable-background-networking plus the 256MB JS heap cap leave the widget
+# reporting "Cannot contact reCAPTCHA". One human-driven browser makes the RAM
+# savings irrelevant, so keep only the flags that aid stability.
+LOGIN_FLAGS = [
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--no-first-run",
+    "--disable-extensions",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+]
+
 DUAL_BROWSER_FLAGS = [
     "--disable-gpu",
     "--disable-dev-shm-usage",
@@ -509,8 +525,16 @@ class FacebookAutomation:
 
     # ── Driver lifecycle ───────────────────────────────────
 
-    async def start_browser(self, profile_path: str):
+    async def start_browser(self, profile_path: str, headless: bool = True,
+                            flags: list | None = None):
         """Launch the browser with the given Brave profile directory.
+
+        headless defaults to True, which is what every existing caller relies
+        on. Pass headless=False when a human has to interact with the page,
+        e.g. clearing a Facebook login checkpoint.
+
+        flags defaults to MEMORY_FLAGS. Pass LOGIN_FLAGS for interactive
+        login, where reCAPTCHA has to work and RAM tuning does not matter.
         
         The profile_path should point to a specific Brave profile directory
         (e.g., C:/Users/.../Brave-Browser/User Data/Default).
@@ -539,16 +563,17 @@ class FacebookAutomation:
         self.context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             executable_path=CHROME_PATH,
-            headless=True,  # Background mode - no browser windows
+            headless=headless,  # background by default; False shows a window
             viewport=SMALL_VIEWPORT,
             args=[
                 f"--profile-directory={profile_dir_name}",
                 "--window-position=50,50",
-                *MEMORY_FLAGS,
+                *(MEMORY_FLAGS if flags is None else flags),
             ],
         )
         
-        self.log("Browser started in background mode")
+        self.log("Browser started in background mode" if headless
+                 else "Browser started in a visible window")
 
         # Use first restored tab as main page, close extras
         pages = self.context.pages
@@ -2640,6 +2665,11 @@ class FacebookAutomation:
         """Fill in email/password on the Facebook login page and submit.
         Returns (ok, message). On success, session cookies are stored in the profile.
         If 2FA is triggered, waits for the user to complete it manually."""
+        # reCAPTCHA and the 2FA challenge need images and fonts. With blocking
+        # on, the widget fails with "Cannot contact reCAPTCHA" - the same
+        # failure class as the comment composer (see _auto_comment).
+        self._block_resources = False
+
         self.log("Navigating to Facebook login page...")
         for attempt in range(2):
             try:
@@ -2752,7 +2782,11 @@ class FacebookAutomation:
         except Exception:
             current_url = ""
 
-        checkpoint_keywords = ["checkpoint", "twofactor", "approvals", "review"]
+        # "two_step_verification" is Facebook's current 2FA path and matches
+        # none of the older keywords ("twofactor" is a different string), so
+        # a 2FA page used to read as a completed login.
+        checkpoint_keywords = ["checkpoint", "twofactor", "two_step_verification",
+                               "approvals", "review", "login/device-based"]
         if any(kw in current_url for kw in checkpoint_keywords):
             self.log("\u26a0\ufe0f 2FA / checkpoint detected! Complete it manually in the browser.")
             self.log(f"Current URL: {current_url}")
@@ -4085,7 +4119,8 @@ class FacebookAutomation:
                 await asyncio.sleep(0.5)
                 continue
 
-            login_indicators = ["login", "checkpoint", "twofactor", "approvals"]
+            login_indicators = ["login", "checkpoint", "twofactor",
+                                "two_step_verification", "approvals"]
             on_login_page = any(kw in page_url for kw in login_indicators)
 
             email_count = await self.page.locator('input[name="email"]').count()
