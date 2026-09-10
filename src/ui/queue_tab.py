@@ -80,6 +80,11 @@ class QueueTab(ttk.Frame):
         status_header.pack(fill="x", **pad)
         ttk.Label(status_header, text="Profile Status:",
                   style="Heading.TLabel").pack(side="left", padx=(0, 8))
+        # Live "logged in / total" next to the heading, kept current by
+        # _refresh_profile_status so it tracks a login scan or queue run.
+        self._active_count_var = tk.StringVar(value="")
+        ttk.Label(status_header, textvariable=self._active_count_var,
+                  style="Muted.TLabel").pack(side="left")
 
         self._profile_status_frame = ttk.Frame(inner)
         self._profile_status_frame.pack(fill="x", **pad)
@@ -527,6 +532,12 @@ class QueueTab(ttk.Frame):
         """Rebuild profile status display."""
         self._refresh_profile_status()
 
+    def logged_in_count(self) -> tuple[int, int]:
+        """(profiles with a confirmed session, saved profiles)."""
+        profiles = cfg.list_profiles()
+        active = sum(1 for p in profiles if self._profile_status.get(p) is True)
+        return active, len(profiles)
+
     def update_profile_status(self, profile_name: str, logged_in: bool):
         """Update login status for a profile and refresh the display."""
         self._profile_status[profile_name] = logged_in
@@ -598,6 +609,10 @@ class QueueTab(ttk.Frame):
             if key not in existing:
                 del self._profile_status[key]
         self._rate_limited_profiles.intersection_update(existing)
+
+        active, total = self.logged_in_count()
+        self._active_count_var.set(
+            f"{active} / {total} logged in" if total else "")
 
         # Tearing every label down costs ~250ms at 139 profiles, and a run calls
         # this once per profile as each logs in. Only a changed profile set or

@@ -483,7 +483,12 @@ class MainWindow(tk.Tk):
             n_queue = len(self.queue_tab._items)
         except Exception:
             n_queue = 0
-        text = f"Profiles: {n_profiles}   •   Queue: {n_queue}"
+        try:
+            n_active, _ = self.queue_tab.logged_in_count()
+        except Exception:
+            n_active = 0
+        text = (f"Profiles: {n_profiles}   •   Active: {n_active}"
+                f"   •   Queue: {n_queue}")
         if self._sb_right.cget("text") != text:
             self._sb_right.config(text=text)
         # Profiles and Queue now share a tab — refresh the queue's
