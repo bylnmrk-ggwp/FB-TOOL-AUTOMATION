@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "google-sheets": {
+      "command": "C:\\Users\\M2CarsPH\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+      "args": ["-m", "uv", "tool", "run", "mcp-google-sheets@latest"],
+      "env": {
+        "SERVICE_ACCOUNT_PATH": "C:\\Users\\M2CarsPH\\Desktop\\FB TOOL AUTOMATION-MAIN\\.secrets\\sheets-service-account.json"
+      }
+    }
+  }
+}

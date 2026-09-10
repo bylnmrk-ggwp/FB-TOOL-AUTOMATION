@@ -14,3 +14,9 @@ nul
 *.xlsx
 *.xls
 *.csv
+
+# Google service-account key — never commit
+.secrets/
+*service-account*.json
+# service-account key (exact name)
+mcarsmainwebsite-01d2cff94ed8.json
