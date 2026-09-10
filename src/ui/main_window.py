@@ -385,12 +385,29 @@ class MainWindow(tk.Tk):
     # ── Queue Polling ─────────────────────────────────────
 
     def _start_queue_polling(self):
+        self._poll_id = None
         self._poll_queue()
+
+    def destroy(self):
+        """Cancel the pending poll before tearing down.
+
+        _poll_queue reschedules itself every 100ms, so without this a
+        callback survives the window and fires into a dead interpreter:
+        Tcl reports 'invalid command name "..._poll_queue"' on every exit.
+        """
+        poll_id = getattr(self, "_poll_id", None)
+        if poll_id is not None:
+            try:
+                self.after_cancel(poll_id)
+            except Exception:
+                pass
+            self._poll_id = None
+        super().destroy()
 
     def _poll_queue(self):
         if not self.manager:
             self._update_status_counts()
-            self.after(100, self._poll_queue)
+            self._poll_id = self.after(100, self._poll_queue)
             return
 
         result = self.manager.poll_result()
@@ -399,7 +416,7 @@ class MainWindow(tk.Tk):
             result = self.manager.poll_result()
 
         self._update_status_counts()
-        self.after(100, self._poll_queue)
+        self._poll_id = self.after(100, self._poll_queue)
 
     def _update_status_counts(self):
         """Refresh the profile / queue counters in the status bar."""

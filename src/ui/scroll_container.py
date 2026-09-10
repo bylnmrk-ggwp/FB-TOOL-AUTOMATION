@@ -35,15 +35,43 @@ class ScrollFrame(ttk.Frame):
         self.interior = ttk.Frame(self.canvas)
         self._window = self.canvas.create_window((0, 0), window=self.interior,
                                                  anchor="nw")
-        self.interior.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(
-                scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind(
-            "<Configure>",
-            lambda e: self.canvas.itemconfigure(self._window, width=e.width))
+
+        # Recomputing the scrollregion on every <Configure> is quadratic in
+        # practice: pinning the interior width reflows the interior, which
+        # fires another interior <Configure>, and each pass walks every canvas
+        # item via bbox("all"). Showing a large widget stack then costs
+        # seconds. Both handlers below collapse a burst of events into one
+        # bbox call per idle cycle, and skip the write when nothing moved.
+        self._scrollregion_pending = False
+        self._last_region = None
+        self._last_width = None
+
+        self.interior.bind("<Configure>", self._queue_scrollregion)
+        self.canvas.bind("<Configure>", self._pin_interior_width)
 
         register_wheel_target(self.canvas)
+
+    def _queue_scrollregion(self, _event=None):
+        if self._scrollregion_pending:
+            return
+        self._scrollregion_pending = True
+        self.after_idle(self._apply_scrollregion)
+
+    def _apply_scrollregion(self):
+        self._scrollregion_pending = False
+        try:
+            region = self.canvas.bbox("all")
+        except tk.TclError:
+            return  # canvas destroyed while the idle call was queued
+        if region and region != self._last_region:
+            self._last_region = region
+            self.canvas.configure(scrollregion=region)
+
+    def _pin_interior_width(self, event):
+        if event.width == self._last_width:
+            return
+        self._last_width = event.width
+        self.canvas.itemconfigure(self._window, width=event.width)
 
     def apply_theme(self, colors: dict):
         self.canvas.configure(bg=colors["bg"])
