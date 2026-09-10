@@ -151,7 +151,7 @@ class QueueTab(ttk.Frame):
 
         self.add_timeline_btn = ttk.Button(timeline_form, text="Add to Queue (All Profiles)",
                                            command=self._on_add_timeline,
-                                           state="disabled")
+                                           state="disabled", style="Accent.TButton")
         self.add_timeline_btn.grid(row=0, column=3, sticky="e")
 
         ttk.Label(timeline_form, text="Comment:").grid(row=1, column=0, padx=(0, 6), pady=(6, 0), sticky="w")
@@ -190,7 +190,8 @@ class QueueTab(ttk.Frame):
         features_url_entry.bind("<Return>", lambda e: self._on_add_features())
 
         self.add_features_btn = ttk.Button(features_form, text="Add to Queue (All Profiles)",
-                                           command=self._on_add_features, state="disabled")
+                                           command=self._on_add_features, state="disabled",
+                                           style="Accent.TButton")
         self.add_features_btn.grid(row=0, column=3, sticky="e")
 
         self._feat_comment_var = tk.BooleanVar(value=False)
@@ -317,7 +318,7 @@ class QueueTab(ttk.Frame):
         self._onecomment_btn = ttk.Button(onecomment_form,
                                           text="Add to Queue (All URLs × All Accounts)",
                                           command=self._on_add_one_comment_each,
-                                          state="disabled")
+                                          state="disabled", style="Accent.TButton")
         self._onecomment_btn.grid(row=2, column=1, columnspan=3, sticky="ew",
                                   padx=(0, 6), pady=(6, 0))
 
@@ -389,7 +390,7 @@ class QueueTab(ttk.Frame):
 
         self.add_text_all_btn = ttk.Button(text_frame, text="Post to All Profiles",
                                             command=self._on_add_text_post,
-                                            state="disabled")
+                                            state="disabled", style="Accent.TButton")
         self.add_text_all_btn.grid(row=2, column=1, columnspan=3, sticky="ew",
                                    padx=(0, 0), pady=(6, 0))
 
