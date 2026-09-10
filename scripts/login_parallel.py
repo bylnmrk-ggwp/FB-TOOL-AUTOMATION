@@ -171,8 +171,8 @@ async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
             for attempt in range(1, retries + 2):
                 ok, msg = await _attempt(pw, wid, account, pw_str,
                                          workroot, twofa_timeout, log)
-                if ok or not _is_retryable(msg):
-                    break
+                if ok or not _is_retryable(msg) or attempt > retries:
+                    break           # success, deterministic, or no retries left
                 print(f"    [w{wid}] retry {attempt}/{retries} ({la.short_reason(msg)})")
             # Copy the updated session back only when login actually succeeded.
             if ok and os.path.isdir(dst) and src:
