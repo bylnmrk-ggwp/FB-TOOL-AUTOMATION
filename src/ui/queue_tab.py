@@ -389,8 +389,7 @@ class QueueTab(ttk.Frame):
 
         self.add_text_all_btn = ttk.Button(text_frame, text="Post to All Profiles",
                                             command=self._on_add_text_post,
-                                            state="disabled",
-                                            style="Accent.TButton")
+                                            state="disabled")
         self.add_text_all_btn.grid(row=2, column=1, columnspan=3, sticky="ew",
                                    padx=(0, 0), pady=(6, 0))
 
