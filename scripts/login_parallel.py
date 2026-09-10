@@ -78,12 +78,23 @@ def _is_retryable(msg: str) -> bool:
     return la.short_reason(msg).endswith("- retry")
 
 
-def _profile_intact(path: str) -> bool:
-    """A rough integrity check: the profile dir exists and carries a cookie DB."""
+def _has_cookie_store(path: Path) -> bool:
+    return any((path / c).exists() for c in ("Network/Cookies", "Cookies"))
+
+
+def _profile_damaged(path: str, backup: Path | None) -> bool:
+    """True only if the profile lost something it had before the run.
+
+    A freshly provisioned profile is an empty directory with no cookie store,
+    so "no cookie DB" alone is not damage. Damage is: the directory is gone,
+    or the backup had a cookie store and the live profile no longer does.
+    """
     p = Path(path)
     if not p.is_dir():
-        return False
-    return any((p / c).exists() for c in ("Network/Cookies", "Cookies"))
+        return True
+    if backup is None or not backup.is_dir():
+        return False                    # nothing to compare against
+    return _has_cookie_store(backup) and not _has_cookie_store(p)
 
 
 async def _attempt(pw, wid: int, account: dict, password: str,
@@ -269,14 +280,17 @@ async def run(args) -> int:
           f"across {args.workers} workers)")
 
     if args.backup_dir:
+        bdir = Path(args.backup_dir)
         bad = [a["linked_profile"] for a in todo
-               if not _profile_intact(cfg.get_profile_path(a["linked_profile"]) or "")]
+               if _profile_damaged(cfg.get_profile_path(a["linked_profile"]) or "",
+                                   bdir / a["linked_profile"])]
         if bad:
-            print(f"INTEGRITY WARNING: {len(bad)} profile(s) look damaged: {bad}")
-            print(f"Restore from {args.backup_dir} if needed.")
+            print(f"INTEGRITY WARNING: {len(bad)} profile(s) lost their cookie "
+                  f"store: {bad}")
+            print(f"Restore from {args.backup_dir}.")
         else:
-            print(f"Integrity: all {len(todo)} targeted profiles still carry a "
-                  f"cookie store.")
+            print(f"Integrity: none of the {len(todo)} targeted profiles lost "
+                  f"anything it had before the run.")
 
     if live.on:
         try:
