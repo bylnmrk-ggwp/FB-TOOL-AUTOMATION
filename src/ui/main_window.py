@@ -475,18 +475,16 @@ class MainWindow(tk.Tk):
     def _update_status_counts(self):
         """Refresh the profile / queue counters in the status bar."""
         try:
-            from src.storage import config_manager as cfg
-            n_profiles = len(cfg.list_profiles())
-        except Exception:
-            n_profiles = 0
-        try:
             n_queue = len(self.queue_tab._items)
         except Exception:
             n_queue = 0
+        # Profiles reflects what is on screen: with the logged-in-only filter
+        # on it is the confirmed set (4), not every registered Brave profile
+        # (140). logged_in_count() returns (active, shown) from that same set.
         try:
-            n_active, _ = self.queue_tab.logged_in_count()
+            n_active, n_profiles = self.queue_tab.logged_in_count()
         except Exception:
-            n_active = 0
+            n_active = n_profiles = 0
         text = (f"Profiles: {n_profiles}   •   Active: {n_active}"
                 f"   •   Queue: {n_queue}")
         if self._sb_right.cget("text") != text:
