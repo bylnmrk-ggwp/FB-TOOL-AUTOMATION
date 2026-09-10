@@ -614,8 +614,11 @@ class QueueTab(ttk.Frame):
         """Glyph and colour describing one profile's current login state."""
         if name in self._rate_limited_profiles:
             return "⚠", colors["warning"]
+        # A persisted status='ok' is a confirmed login, so it shows green even
+        # before this session's live scan has run - otherwise a profile the
+        # filter calls "logged in" would still draw a grey unknown dot.
         state = self._profile_status.get(name)
-        if state is True:
+        if state is True or name in getattr(self, "_db_ok", ()):
             return "●", colors["success"]
         if state is False:
             return "○", colors["muted"]
@@ -624,8 +627,12 @@ class QueueTab(ttk.Frame):
     def _refresh_profile_status(self):
         """Refresh the profile status row, rebuilding widgets only when needed."""
         from src.ui import theme
+        from src.storage import database as db
         colors = theme.get()
 
+        # Fetch the confirmed-login set once per refresh; _dot_for reads it so
+        # every persisted-ok profile is green, not just this session's scans.
+        self._db_ok = db.logged_in_profiles()
         profiles = self._displayed_profiles()
         self._profile_status_cols = self._status_columns(profiles)
 
