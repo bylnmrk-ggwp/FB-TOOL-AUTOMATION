@@ -143,7 +143,13 @@ SESSION_COOKIES = ("c_user", "xs")
 
 
 def short_reason(msg: str) -> str:
-    """A brief, sheet-friendly detail for a failed login."""
+    """A brief, sheet-friendly detail for a failed login.
+
+    Technical/transient failures (a headless browser that closed, a login form
+    that did not render) collapse to short tags rather than dumping a raw
+    Playwright stack line into the sheet. These stay non-'ok' in the database,
+    so the next pass retries them.
+    """
     if msg == DISABLED:
         return ""                       # the DISABLED status already says it
     if msg == NEEDS_2FA:
@@ -155,6 +161,15 @@ def short_reason(msg: str) -> str:
     m = (msg or "").lower()
     if "checkpoint" in m:
         return "checkpoint"
+    if ("launch" in m or "browser has been closed" in m
+            or "target page" in m or "context or browser" in m):
+        return "browser error - retry"
+    if "not found" in m or "no session cookies" in m:
+        return "login form not ready - retry"
+    if "timeout" in m or "timed out" in m:
+        return "timeout - retry"
+    if m.startswith("error:"):
+        return "error - retry"
     return (msg or "").strip()[:40]
 
 
@@ -218,6 +233,11 @@ class Live:
     def mark_in_progress(self, username: str):
         self._write(username, self.sync.IN_PROGRESS if self.on else "")
 
+    def clear(self, username: str):
+        """Revert a row to plain NOT LOGGED IN (e.g. an aborted attempt)."""
+        if self.on:
+            self._write(username, self.sync.NOT_LOGGED_IN)
+
     def mark_result(self, username: str, ok: bool, msg: str):
         if not self.on:
             return
@@ -230,6 +250,30 @@ class Live:
             text = (f"{self.sync.NOT_LOGGED_IN} / {reason.upper()}"
                     if reason else self.sync.NOT_LOGGED_IN)
         self._write(username, text)
+
+
+def is_infra_error(msg: str) -> bool:
+    """True for a browser-launch/lock failure, not a Facebook login verdict.
+
+    Once the shared Brave User Data directory is locked (an orphaned brave.exe
+    holding Chromium's process singleton), every launch_persistent_context
+    fails the same way. That is infrastructure, not the account - the run must
+    stop rather than march the rest of the queue into false failures.
+    """
+    m = (msg or "").lower()
+    return any(k in m for k in (
+        "launch_persistent", "browsertype", "browser has been closed",
+        "target page, context or browser", "failed to load login page"))
+
+
+def brave_running() -> bool:
+    """True if any brave.exe is alive (it would hold the profile lock)."""
+    try:
+        import psutil
+        return any((p.info.get("name") or "").lower() == "brave.exe"
+                   for p in psutil.process_iter(["name"]))
+    except Exception:
+        return False        # cannot tell -> do not block the run
 
 
 def classify(url: str, msg: str) -> str | None:
@@ -448,6 +492,15 @@ async def run(args) -> int:
         print("\n--dry-run: no browser opened.")
         return 0
 
+    # Preflight: any running brave.exe holds Chromium's process-singleton lock
+    # on the shared User Data directory, so every launch_persistent_context
+    # would fail. Refuse to start rather than mark the whole queue as failed.
+    if brave_running():
+        print("Brave is running and locks the shared profile directory, so no "
+              "login can launch.\nClose every Brave window, or run:\n"
+              "    taskkill /F /IM brave.exe /T\nthen start this again.")
+        return 1
+
     print("\nOne at a time; Brave's profile lock allows no parallelism.")
     if args.unattended:
         print("Unattended: challenges are skipped and listed at the end.\n")
@@ -458,6 +511,7 @@ async def run(args) -> int:
     if live.on:
         print(f"Live sheet updates: {live.rows} row(s) matched.\n")
 
+    aborted = False
     results = {"ok": [], "failed": []}
     for i, a in enumerate(todo, 1):
         # Batch pacing: a long run of fresh logins from one machine is the
@@ -479,6 +533,19 @@ async def run(args) -> int:
                                   unattended=args.unattended,
                                   hand_off_2fa=args.hand_off_2fa,
                                   headless=args.headless)
+        # A browser-launch failure means the shared profile is locked; every
+        # later account would fail identically. Stop now, and do NOT record it
+        # as an account verdict - the account was never really attempted.
+        if not ok and is_infra_error(msg):
+            live.clear(a["username"])
+            print(f"    ABORTED: {msg}")
+            print("\nThe shared Brave profile is locked (an orphaned brave.exe "
+                  "holds it).\nClose Brave / run: taskkill /F /IM brave.exe /T, "
+                  "then start again.\nAccounts already done keep their status; "
+                  "the rest are untouched.")
+            aborted = True
+            break
+
         # Persist why it failed so the roster and the sheet can show it. A
         # success already cleared the status inside login_one via _mark_ok,
         # and DISABLED was recorded there too; everything else lands here.
@@ -495,6 +562,8 @@ async def run(args) -> int:
                 break
 
     print("=" * 60)
+    if aborted:
+        print("RUN ABORTED early on a browser-lock error - see above.")
     print(f"Logged in : {len(results['ok'])}")
     print(f"Failed    : {len(results['failed'])}")
     import collections
@@ -509,6 +578,8 @@ async def run(args) -> int:
         if len(who) > 12:
             print(f"     ... {len(who) - 12} more")
     print("\nPasswords were held in memory only; nothing was written.")
+    if aborted:
+        return 3
     return 0 if not results["failed"] else 2
 
 
