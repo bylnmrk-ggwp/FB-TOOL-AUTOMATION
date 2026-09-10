@@ -47,6 +47,7 @@ STATUS_COL_INDEX = 6        # 0-based: column G
 # Cell backgrounds. Red and green are the pill fills; white text reads on both.
 RED = {"red": 0.80, "green": 0.16, "blue": 0.16}
 GREEN = {"red": 0.11, "green": 0.53, "blue": 0.28}
+AMBER = {"red": 0.90, "green": 0.62, "blue": 0.15}    # in-progress
 WHITE_TEXT = {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True}
 NO_FILL = {"red": 1, "green": 1, "blue": 1}
 DARK_TEXT = {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "bold": False}
@@ -54,6 +55,7 @@ DARK_TEXT = {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "bold": False
 DISABLED = "DISABLED"
 NOT_LOGGED_IN = "NOT LOGGED IN"
 LOGGED_IN = "LOGGED IN"
+IN_PROGRESS = "LOGGING IN"          # a live run sets this while it works a row
 
 
 def status_for(account: dict | None) -> str:
@@ -84,7 +86,47 @@ def _fill(status: str) -> tuple[dict, dict]:
         return RED, WHITE_TEXT
     if status == LOGGED_IN:
         return GREEN, WHITE_TEXT
+    if status.startswith(IN_PROGRESS):
+        return AMBER, WHITE_TEXT
     return NO_FILL, DARK_TEXT
+
+
+# ── Live single-row updates (used by login_accounts.py while it runs) ──────
+
+def resolve_gid(tok: str, sheet_id: str, tab: str) -> int | None:
+    """The numeric sheetId of a tab, needed for formatting requests."""
+    meta = api.call(tok, sheet_id, "?fields=sheets(properties(title,sheetId))")
+    return next((s["properties"]["sheetId"] for s in meta["sheets"]
+                 if s["properties"]["title"] == tab), None)
+
+
+def build_row_index(tok: str, sheet_id: str, tab: str,
+                    username_col: str = USERNAME_COL) -> dict[str, int]:
+    """Map each USERNAME (lower-cased) to its 1-based sheet row."""
+    rng = f"{tab}!{username_col}2:{username_col}"
+    rows = api.get_values(tok, sheet_id, rng)
+    out = {}
+    for i, row in enumerate(rows):
+        u = (row[0].strip() if row else "")
+        if u:
+            out[u.lower()] = i + 2      # data starts at row 2
+    return out
+
+
+def write_status(tok: str, sheet_id: str, gid: int, tab: str,
+                 row: int, text: str) -> None:
+    """Write one STATUS cell's value and colour it by category."""
+    col = chr(ord("A") + STATUS_COL_INDEX)      # 'G'
+    api.update_values(tok, sheet_id, f"{tab}!{col}{row}:{col}{row}", [[text]])
+    bg, tf = _fill(text)
+    api.batch_update(tok, sheet_id, [{"repeatCell": {
+        "range": {"sheetId": gid, "startRowIndex": row - 1, "endRowIndex": row,
+                  "startColumnIndex": STATUS_COL_INDEX,
+                  "endColumnIndex": STATUS_COL_INDEX + 1},
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": bg, "horizontalAlignment": "CENTER",
+            "textFormat": tf}},
+        "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}])
 
 
 def main(argv) -> int:

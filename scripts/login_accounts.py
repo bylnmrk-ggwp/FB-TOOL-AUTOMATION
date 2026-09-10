@@ -167,6 +167,71 @@ BAD_PASSWORD = "wrong password in the spreadsheet"
 BAD_IDENTIFIER = "username is not a valid Facebook login"
 
 
+class Live:
+    """Pushes each account's status to the Google Sheet as the run works it.
+
+    Best-effort by design: a sheet write must never abort a login run, so every
+    call swallows its errors (and refreshes the token once, since a long batched
+    run can outlast the hour-long access token). When disabled, or when setup
+    fails, every method is a no-op.
+    """
+
+    def __init__(self, enabled: bool):
+        self.on = False
+        self.rows = 0
+        if not enabled:
+            return
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import sheets_api as api
+            import sync_sheet_status as sync
+            self.api, self.sync = api, sync
+            self.sheet_id = api.DEFAULT_SHEET_ID
+            self.tab = api.DEFAULT_TAB
+            self.tok = api.token()
+            self.gid = sync.resolve_gid(self.tok, self.sheet_id, self.tab)
+            self.rowmap = sync.build_row_index(self.tok, self.sheet_id, self.tab)
+            self.rows = len(self.rowmap)
+            self.on = self.gid is not None and self.rows > 0
+        except Exception as e:
+            print(f"  (live sheet updates off: {e})")
+
+    def _write(self, username: str, text: str):
+        if not self.on:
+            return
+        row = self.rowmap.get((username or "").strip().lower())
+        if not row:
+            return
+        for attempt in (1, 2):
+            try:
+                self.sync.write_status(self.tok, self.sheet_id, self.gid,
+                                       self.tab, row, text)
+                return
+            except Exception:
+                if attempt == 1:
+                    try:
+                        self.tok = self.api.token()   # token may have expired
+                    except Exception:
+                        return
+                # second failure: give up on this cell, keep the run going
+
+    def mark_in_progress(self, username: str):
+        self._write(username, self.sync.IN_PROGRESS if self.on else "")
+
+    def mark_result(self, username: str, ok: bool, msg: str):
+        if not self.on:
+            return
+        if ok:
+            text = self.sync.LOGGED_IN
+        elif msg == DISABLED:
+            text = self.sync.DISABLED
+        else:
+            reason = short_reason(msg)
+            text = (f"{self.sync.NOT_LOGGED_IN} / {reason.upper()}"
+                    if reason else self.sync.NOT_LOGGED_IN)
+        self._write(username, text)
+
+
 def classify(url: str, msg: str) -> str | None:
     """Name the failure from the final URL and Facebook's own error text."""
     u = (url or "").lower()
@@ -216,7 +281,8 @@ def _mark_ok(account: dict):
 
 async def login_one(account: dict, password: str, log,
                     unattended: bool = False,
-                    hand_off_2fa: bool = False) -> tuple[bool, str]:
+                    hand_off_2fa: bool = False,
+                    headless: bool = False) -> tuple[bool, str]:
     """Open this account's Brave profile and log it in.
 
     Assisted by default: a challenge waits for the operator. With
@@ -224,6 +290,8 @@ async def login_one(account: dict, password: str, log,
     the run finishes on its own and the summary says who still needs a hand.
     With `hand_off_2fa`, an unattended run still stops on a 2FA prompt (only
     a 2FA prompt) so the operator can type the code, then continues on its own.
+    With `headless`, no browser window is shown (background run); a challenge
+    then cannot be solved by hand, so headless is only used unattended.
     """
     from src.core.facebook_automation import (FacebookAutomation,
                                               LOGIN_FLAGS)
@@ -237,9 +305,9 @@ async def login_one(account: dict, password: str, log,
     auto = FacebookAutomation()
     auto.log = log
     try:
-        # Visible: a checkpoint cannot be cleared in a headless window, and
-        # start_browser is headless by default.
-        await auto.start_browser(brave_path, headless=False,
+        # Visible by default so a checkpoint can be cleared by hand; headless
+        # only when the caller runs unattended in the background.
+        await auto.start_browser(brave_path, headless=headless,
                                  flags=LOGIN_FLAGS)
         await auto.go_to_facebook()
 
@@ -376,6 +444,10 @@ async def run(args) -> int:
     else:
         print("A visible window opens per account. Solve any checkpoint in it.\n")
 
+    live = Live(use_sheet and not args.no_live_sheet)
+    if live.on:
+        print(f"Live sheet updates: {live.rows} row(s) matched.\n")
+
     results = {"ok": [], "failed": []}
     for i, a in enumerate(todo, 1):
         # Batch pacing: a long run of fresh logins from one machine is the
@@ -388,18 +460,21 @@ async def run(args) -> int:
 
         label = a.get("facebook_name") or a["username"]
         print(f"[{i}/{len(todo)}] {label}  ->  profile '{a['linked_profile']}'")
+        live.mark_in_progress(a["username"])
 
         def log(msg, _i=i):
             print(f"    {msg}")
 
         ok, msg = await login_one(a, creds[a["username"].lower()], log,
                                   unattended=args.unattended,
-                                  hand_off_2fa=args.hand_off_2fa)
+                                  hand_off_2fa=args.hand_off_2fa,
+                                  headless=args.headless)
         # Persist why it failed so the roster and the sheet can show it. A
         # success already cleared the status inside login_one via _mark_ok,
         # and DISABLED was recorded there too; everything else lands here.
         if not ok and msg != DISABLED:
             db.set_account_status(a["username"], "", short_reason(msg))
+        live.mark_result(a["username"], ok, msg)
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 
@@ -433,6 +508,12 @@ def main(argv) -> int:
     ap.add_argument("--from-sheet", action="store_true",
                     help="read credentials from the Google Sheet API even if a "
                          "local xlsx exists (default when no xlsx is present)")
+    ap.add_argument("--no-live-sheet", action="store_true",
+                    help="do not update the Google Sheet STATUS column live as "
+                         "the run works each account (on by default with the sheet)")
+    ap.add_argument("--headless", action="store_true",
+                    help="run with no visible browser window (background run); "
+                         "implies --unattended and cannot hand off a 2FA prompt")
     ap.add_argument("--count", type=int, help="attempt at most this many")
     ap.add_argument("--include-disabled", action="store_true",
                     help="also attempt accounts already marked disabled")
@@ -457,6 +538,12 @@ def main(argv) -> int:
     args = ap.parse_args(argv)
     if args.batch < 0 or args.pause < 0:
         ap.error("--batch and --pause must be >= 0")
+    if args.headless:
+        # No window means no way to solve a challenge by hand: force the
+        # hands-off path and refuse the 2FA hand-off.
+        if args.hand_off_2fa:
+            ap.error("--headless cannot hand off a 2FA prompt; drop --hand-off-2fa")
+        args.unattended = True
     if args.hand_off_2fa and not args.unattended:
         ap.error("--hand-off-2fa only applies with --unattended")
     return asyncio.run(run(args))
