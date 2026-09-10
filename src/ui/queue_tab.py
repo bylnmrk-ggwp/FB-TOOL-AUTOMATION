@@ -539,10 +539,30 @@ class QueueTab(ttk.Frame):
         """Rebuild profile status display."""
         self._refresh_profile_status()
 
-    def logged_in_count(self) -> tuple[int, int]:
-        """(profiles with a confirmed session, saved profiles)."""
+    def _displayed_profiles(self) -> list[str]:
+        """Profiles shown in the dot grid, honouring the logged-in-only filter.
+
+        The single source both the grid and the count read, so they can never
+        disagree the way the old session-based count did.
+        """
         profiles = cfg.list_profiles()
-        active = sum(1 for p in profiles if self._profile_status.get(p) is True)
+        if cfg.get_setting("show_logged_in_only", True):
+            from src.storage import database as db
+            ok = db.logged_in_profiles()
+            profiles = [p for p in profiles if p in ok]
+        return profiles
+
+    def logged_in_count(self) -> tuple[int, int]:
+        """(profiles whose account is logged in, profiles shown).
+
+        "Logged in" is the persisted status='ok', the same source as the
+        filter and the roster - not the live session scan, which starts empty
+        and made the label read 1/140 while four profiles were saved logged in.
+        """
+        from src.storage import database as db
+        profiles = self._displayed_profiles()
+        ok = db.logged_in_profiles()
+        active = sum(1 for p in profiles if p in ok)
         return active, len(profiles)
 
     def update_profile_status(self, profile_name: str, logged_in: bool):
@@ -606,13 +626,7 @@ class QueueTab(ttk.Frame):
         from src.ui import theme
         colors = theme.get()
 
-        profiles = cfg.list_profiles()
-        # Same "logged in only" filter the Profiles tab exposes, read from
-        # the persisted setting so both panes agree without extra wiring.
-        if cfg.get_setting("show_logged_in_only", True):
-            from src.storage import database as db
-            ok = db.logged_in_profiles()
-            profiles = [p for p in profiles if p in ok]
+        profiles = self._displayed_profiles()
         self._profile_status_cols = self._status_columns(profiles)
 
         # Clean up stale entries for deleted profiles. The rate-limit set is
@@ -624,16 +638,7 @@ class QueueTab(ttk.Frame):
         self._rate_limited_profiles.intersection_update(existing)
 
         active, total = self.logged_in_count()
-        unchecked = sum(1 for p in profiles if self._profile_status.get(p) is None)
-        if not total:
-            text = ""
-        elif unchecked == total:
-            text = f"{total} profiles - not checked yet"
-        elif unchecked:
-            text = f"{active} / {total} logged in  ({unchecked} not checked)"
-        else:
-            text = f"{active} / {total} logged in"
-        self._active_count_var.set(text)
+        self._active_count_var.set(f"{active} / {total} logged in" if total else "")
 
         # Tearing every label down costs ~250ms at 139 profiles, and a run calls
         # this once per profile as each logs in. Only a changed profile set or
