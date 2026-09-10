@@ -71,6 +71,18 @@ def init_db():
             UNIQUE(profile_a, profile_b)
         );
 
+        CREATE TABLE IF NOT EXISTS accounts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            sheet_no        INTEGER,
+            facebook_name   TEXT    NOT NULL DEFAULT '',
+            username        TEXT    NOT NULL,
+            email           TEXT    NOT NULL DEFAULT '',
+            number          TEXT    NOT NULL DEFAULT '',
+            linked_profile  TEXT    NOT NULL DEFAULT '',
+            imported_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            UNIQUE(username)
+        );
+
         CREATE TABLE IF NOT EXISTS used_images (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             image_path      TEXT    NOT NULL UNIQUE,
@@ -88,6 +100,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_pg_url     ON profile_groups(group_url);
         CREATE INDEX IF NOT EXISTS idx_fr_a ON friend_relationships(profile_a);
         CREATE INDEX IF NOT EXISTS idx_fr_b ON friend_relationships(profile_b);
+        CREATE INDEX IF NOT EXISTS idx_acct_linked ON accounts(linked_profile);
+        CREATE INDEX IF NOT EXISTS idx_acct_name ON accounts(facebook_name);
         CREATE INDEX IF NOT EXISTS idx_ui_path ON used_images(image_path);
         CREATE INDEX IF NOT EXISTS idx_ui_profile ON used_images(assigned_to);
     """)
@@ -304,6 +318,69 @@ def get_used_image_paths() -> set[str]:
     conn = _get_conn()
     rows = conn.execute("SELECT image_path FROM used_images").fetchall()
     return {r["image_path"] for r in rows}
+
+
+# ── Account roster ────────────────────────────────────────
+# Imported from the operator's account spreadsheet. Passwords are
+# deliberately NOT stored here: nothing in the app reads them (the
+# credential-login path is unreachable from the GUI) and persisting them
+# would create a second plaintext copy outside the spreadsheet.
+
+
+def upsert_account(sheet_no, facebook_name: str, username: str,
+                   email: str = "", number: str = "") -> str:
+    """Insert or refresh one account, keyed by username.
+
+    Returns "inserted" or "updated" so a caller can report real counts.
+    An existing linked_profile is preserved across re-imports.
+    """
+    conn = _get_conn()
+    if conn.execute("SELECT 1 FROM accounts WHERE username = ?",
+                    (username,)).fetchone():
+        conn.execute(
+            """UPDATE accounts SET sheet_no = ?, facebook_name = ?, email = ?,
+                                   number = ?,
+                                   imported_at = datetime('now','localtime')
+               WHERE username = ?""",
+            (sheet_no, facebook_name, email, number, username))
+        conn.commit()
+        return "updated"
+    conn.execute(
+        """INSERT INTO accounts (sheet_no, facebook_name, username, email, number)
+           VALUES (?, ?, ?, ?, ?)""",
+        (sheet_no, facebook_name, username, email, number))
+    conn.commit()
+    return "inserted"
+
+
+def list_accounts(linked_only: bool = False) -> list[dict]:
+    """Every imported account, ordered by its spreadsheet row number."""
+    conn = _get_conn()
+    sql = ("SELECT sheet_no, facebook_name, username, email, number, "
+           "linked_profile FROM accounts")
+    if linked_only:
+        sql += " WHERE linked_profile != ''"
+    sql += " ORDER BY CASE WHEN sheet_no IS NULL THEN 1 ELSE 0 END, sheet_no"
+    return [dict(r) for r in conn.execute(sql)]
+
+
+def link_account(username: str, profile_name: str) -> bool:
+    """Point an account at a saved Brave profile ('' clears the link)."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE accounts SET linked_profile = ? WHERE username = ?",
+        (profile_name, username))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def count_accounts() -> tuple[int, int]:
+    """(total imported, number linked to a Brave profile)."""
+    conn = _get_conn()
+    total = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+    linked = conn.execute(
+        "SELECT COUNT(*) FROM accounts WHERE linked_profile != ''").fetchone()[0]
+    return total, linked
 
 
 # Auto-init on import
