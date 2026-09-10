@@ -31,7 +31,8 @@ import sys
 import zipfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -109,6 +110,36 @@ def ask(prompt: str) -> str:
 
 SESSION_COOKIES = ("c_user", "xs")
 
+# Outcomes worth telling apart, because the follow-up action differs:
+# a disabled account is dead, a wrong password is a spreadsheet fix, and a
+# 2FA prompt means the credentials were accepted and only a code is missing.
+DISABLED = "ACCOUNT DISABLED by Facebook - no login possible"
+NEEDS_2FA = "credentials accepted, needs a 2FA code"
+BAD_PASSWORD = "wrong password in the spreadsheet"
+BAD_IDENTIFIER = "username is not a valid Facebook login"
+
+
+def classify(url: str, msg: str) -> str | None:
+    """Name the failure from the final URL and Facebook's own error text."""
+    u = (url or "").lower()
+    m = (msg or "").lower()
+    if "checkpoint/disabled" in u or "account has been disabled" in m:
+        return DISABLED
+    if "two_step_verification" in u or "twofactor" in u:
+        return NEEDS_2FA
+    # Facebook's copy varies ("...is invalid", "...you've entered is
+    # incorrect", "...isn't connected to an account"), so key on the subject
+    # word plus any rejection word rather than one exact sentence.
+    rejected = any(w in m for w in ("invalid", "incorrect", "didn't match",
+                                    "isn't connected", "not connected"))
+    if rejected and ("email" in m or "mobile" in m or "username" in m):
+        return BAD_IDENTIFIER
+    if rejected and "password" in m:
+        return BAD_PASSWORD
+    if "checkpoint" in u:
+        return "checkpoint - Facebook wants identity confirmation"
+    return None
+
 
 async def has_session(auto) -> bool:
     """True only if Facebook actually issued a logged-in session.
@@ -127,6 +158,12 @@ async def has_session(auto) -> bool:
     names = {c.get("name") for c in cookies
              if "facebook" in (c.get("domain") or "")}
     return all(n in names for n in SESSION_COOKIES)
+
+
+def _mark_ok(account: dict):
+    """Clear any earlier 'disabled' mark: this account just proved it works."""
+    from src.storage import database as db
+    db.set_account_status(account["username"], "ok")
 
 
 async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
@@ -150,6 +187,7 @@ async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
         await auto.go_to_facebook()
 
         if await has_session(auto):
+            _mark_ok(account)
             return True, "already logged in - skipped"
 
         ok, msg = await auto.login_with_credentials(account["username"], password)
@@ -160,20 +198,35 @@ async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
                               "(c_user/xs missing) - not logged in")
 
         if ok:
+            _mark_ok(account)
             return True, msg
 
         # Give the operator as long as they need on a challenge, rather than
         # failing the account at the built-in 120s wait.
         while True:
             try:
-                url = auto.page.url[:80]
+                url = auto.page.url
             except Exception:
-                url = "?"
-            print(f"    not logged in. current page: {url}")
+                url = ""
+            reason = classify(url, msg)
+
+            # A disabled account cannot be recovered by waiting, so do not
+            # sit at a prompt for it. Record it so --purge-disabled can
+            # remove the account and its Brave profile later.
+            if reason == DISABLED:
+                from src.storage import database as db
+                db.set_account_status(account["username"], "disabled")
+                return False, DISABLED
+
+            print(f"    not logged in: {reason or msg}")
+            print(f"    page: {url[:80]}")
+            if reason in (BAD_PASSWORD, BAD_IDENTIFIER):
+                return False, reason
             choice = ask("    [Enter] I cleared it, re-check  /  [s] skip: ")
             if choice == "s":
-                return False, f"skipped - {msg}"
+                return False, reason or msg
             if await has_session(auto):
+                _mark_ok(account)
                 return True, "logged in after manual step"
     except Exception as e:
         return False, f"error: {e}"
@@ -187,21 +240,22 @@ async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
 async def run(args) -> int:
     from src.storage import database as db
 
-    xlsx = Path(args.sheet) if args.sheet else Path(__file__).resolve().parent / DEFAULT_SHEET
+    xlsx = Path(args.sheet) if args.sheet else ROOT / DEFAULT_SHEET
     if not xlsx.exists():
         print(f"Spreadsheet not found: {xlsx}")
         return 1
 
-    accounts = [a for a in db.list_accounts() if a.get("linked_profile")]
+    # Disabled accounts are excluded: Facebook says the decision cannot be
+    # appealed, so re-attempting them only adds failed logins.
+    accounts = [a for a in db.list_accounts(include_disabled=args.include_disabled)
+                if a.get("linked_profile")]
     if args.only:
         accounts = [a for a in accounts
                     if a["username"].lower() == args.only.lower()]
-    if args.count is not None:
-        accounts = accounts[:args.count]
 
     if not accounts:
         print("No accounts with a linked Brave profile. Run "
-              "provision_profiles.py first.")
+              "scripts/provision_profiles.py first.")
         return 0
 
     creds = read_credentials(xlsx)
@@ -216,6 +270,10 @@ async def run(args) -> int:
             print(f"   {u}")
 
     todo = [a for a in accounts if a["username"].lower() in creds]
+    if args.skip:
+        todo = todo[args.skip:]
+    if args.count is not None:
+        todo = todo[:args.count]
     if args.dry_run:
         print("\nWould attempt, in order:")
         for a in todo:
@@ -247,8 +305,17 @@ async def run(args) -> int:
     print("=" * 60)
     print(f"Logged in : {len(results['ok'])}")
     print(f"Failed    : {len(results['failed'])}")
+    import collections
+    by_reason = collections.defaultdict(list)
     for label, msg in results["failed"]:
-        print(f"   {label}: {msg}")
+        by_reason[msg].append(label)
+    for reason, who in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+        print("")
+        print(f"  {reason}  ({len(who)})")
+        for label in who[:12]:
+            print(f"     {label}")
+        if len(who) > 12:
+            print(f"     ... {len(who) - 12} more")
     print("\nPasswords were held in memory only; nothing was written.")
     return 0 if not results["failed"] else 2
 
@@ -257,6 +324,11 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sheet", help=f"path to the xlsx (default: {DEFAULT_SHEET})")
     ap.add_argument("--count", type=int, help="attempt at most this many")
+    ap.add_argument("--include-disabled", action="store_true",
+                    help="also attempt accounts already marked disabled")
+    ap.add_argument("--skip", type=int, default=0,
+                    help="skip the first N of the queue, so a known-bad "
+                         "account is not re-attempted")
     ap.add_argument("--only", metavar="USERNAME", help="attempt a single account")
     ap.add_argument("--dry-run", action="store_true",
                     help="list who would be attempted, open nothing")

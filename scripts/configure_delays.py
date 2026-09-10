@@ -4,7 +4,10 @@ Configure delay settings for Facebook sharing to avoid spam detection.
 This script allows you to customize the delays between shares and actions
 to make the automation appear more human-like and avoid Facebook's spam filters.
 """
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.storage import config_manager as cfg
 
 

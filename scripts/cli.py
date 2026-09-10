@@ -30,7 +30,7 @@ import sys
 import os
 
 # Ensure project root is on sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.facebook_automation import FacebookAutomation
 from src.storage import config_manager as cfg

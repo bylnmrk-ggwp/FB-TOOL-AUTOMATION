@@ -7,14 +7,14 @@ Reports which profiles are still logged in and which need re-login.
 
 Usage:
     python check_login_status.py
-    python check_login_status.py "profile name" "other profile" ...
+    python scripts/check_login_status.py "profile name" "other profile" ...
 """
 import asyncio
 import os
 import random
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:

@@ -79,6 +79,7 @@ def init_db():
             email           TEXT    NOT NULL DEFAULT '',
             number          TEXT    NOT NULL DEFAULT '',
             linked_profile  TEXT    NOT NULL DEFAULT '',
+            status          TEXT    NOT NULL DEFAULT '',
             imported_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             UNIQUE(username)
         );
@@ -105,7 +106,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_ui_path ON used_images(image_path);
         CREATE INDEX IF NOT EXISTS idx_ui_profile ON used_images(assigned_to);
     """)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn):
+    """Add columns that CREATE TABLE IF NOT EXISTS cannot add retroactively."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
+    if have and "status" not in have:
+        conn.execute("ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT ''")
 
 
 # ── Join History ──────────────────────────────────────────
@@ -353,15 +362,38 @@ def upsert_account(sheet_no, facebook_name: str, username: str,
     return "inserted"
 
 
-def list_accounts(linked_only: bool = False) -> list[dict]:
-    """Every imported account, ordered by its spreadsheet row number."""
+def list_accounts(linked_only: bool = False,
+                  status: str | None = None,
+                  include_disabled: bool = True) -> list[dict]:
+    """Imported accounts, ordered by spreadsheet row number.
+
+    status filters to one exact status; include_disabled=False drops accounts
+    Facebook has disabled, which is what a login or share run wants.
+    """
     conn = _get_conn()
     sql = ("SELECT sheet_no, facebook_name, username, email, number, "
-           "linked_profile FROM accounts")
+           "linked_profile, status FROM accounts")
+    where, params = [], []
     if linked_only:
-        sql += " WHERE linked_profile != ''"
+        where.append("linked_profile != ''")
+    if status is not None:
+        where.append("status = ?")
+        params.append(status)
+    elif not include_disabled:
+        where.append("status != 'disabled'")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY CASE WHEN sheet_no IS NULL THEN 1 ELSE 0 END, sheet_no"
-    return [dict(r) for r in conn.execute(sql)]
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def set_account_status(username: str, status: str) -> bool:
+    """Record an outcome against an account ('disabled', 'ok', '' to clear)."""
+    conn = _get_conn()
+    cur = conn.execute("UPDATE accounts SET status = ? WHERE username = ?",
+                       (status, username))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def link_account(username: str, profile_name: str) -> bool:
@@ -381,6 +413,12 @@ def count_accounts() -> tuple[int, int]:
     linked = conn.execute(
         "SELECT COUNT(*) FROM accounts WHERE linked_profile != ''").fetchone()[0]
     return total, linked
+
+
+def count_disabled() -> int:
+    conn = _get_conn()
+    return conn.execute(
+        "SELECT COUNT(*) FROM accounts WHERE status = 'disabled'").fetchone()[0]
 
 
 # Auto-init on import

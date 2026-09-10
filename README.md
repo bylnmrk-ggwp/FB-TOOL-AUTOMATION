@@ -10,12 +10,15 @@ Tkinter GUI, Python 3.12+, Windows.
 ## Install
 
 ```bat
-FINAL_INSTALL.bat
+INSTALL.bat
 ```
 
-Installs `playwright`, `Pillow`, `groq`, downloads the Chromium runtime, then
-runs `check_status.py` to confirm every dependency imports. If something is
-already broken, `INSTALL_DEPENDENCIES.bat` runs `diagnose_and_fix.py` instead.
+Installs everything in `requirements.txt`, downloads the Chromium runtime, and
+confirms the app imports. To check without changing anything:
+
+```bat
+python scripts/diagnose_and_fix.py --check
+```
 
 ### Optional: Groq API key
 
@@ -43,16 +46,16 @@ Or `python main.py`. The window has two tabs:
 
 ## CLI
 
-`cli.py` covers the same operations without the GUI:
+`scripts/cli.py` covers the same operations without the GUI:
 
 ```bat
-python cli.py share <post_url> <group_url>
-python cli.py share-timeline <post_url>
-python cli.py login <email> <password>
-python cli.py batch
+python scripts/cli.py share <post_url> <group_url>
+python scripts/cli.py share-timeline <post_url>
+python scripts/cli.py login <email> <password>
+python scripts/cli.py batch <file.json>
 ```
 
-`python cli.py --help` lists every subcommand.
+`python scripts/cli.py --help` lists every subcommand.
 
 ## Anti-spam delays
 
@@ -63,22 +66,45 @@ to protect the accounts. Do not set them to zero.
 CONFIGURE_DELAYS.bat
 ```
 
-Full reference: [DELAY_SETTINGS_README.md](DELAY_SETTINGS_README.md).
+Full reference: [docs/delay-settings.md](docs/delay-settings.md).
+
+## Account roster
+
+The account list lives in `FB ACCOUNTS.xlsx` in the project root (gitignored:
+it holds plaintext credentials). The scripts below turn that sheet into
+logged-in Brave profiles, in this order:
+
+```bat
+IMPORT_ACCOUNTS.bat                              rows -> local database
+python scripts/provision_profiles.py --dry-run   plan Brave profiles, then run without --dry-run
+python scripts/login_accounts.py                 assisted login, one visible browser at a time
+python scripts/provision_profiles.py --rename-from-roster
+```
+
+Accounts Facebook has disabled are marked during login and skipped afterwards;
+`python scripts/provision_profiles.py --purge-disabled --dry-run` shows what
+`--purge-disabled` would remove.
 
 ## Utility scripts
 
-| Script | Purpose |
-|---|---|
-| `CHECK_FRIENDSHIPS.bat` → `check_friendships_simple.py` | Friendship status for every saved profile, read from the local database |
-| `check_login_status.py` | Live login scan of all Brave profiles; detects the "See more on Facebook" dialog that a URL check alone misses |
-| `check_status.py` | Dependency check plus an app-import smoke test |
-| `diagnose_and_fix.py` | Repairs a broken dependency install |
-| `verify.py` | Proof harness: compiles every module, imports all of them, builds the window and asserts the callback wiring |
+| Launcher | Script | Purpose |
+|---|---|---|
+| `CHECK_FRIENDSHIPS.bat` | `scripts/check_friendships.py` | Friendship status for every saved profile, from the local database |
+| | `scripts/check_login_status.py` | Live login scan of all Brave profiles; detects the "See more on Facebook" dialog a URL check misses |
+| `CONFIGURE_DELAYS.bat` | `scripts/configure_delays.py` | Edit the anti-spam delays |
+| `INSTALL.bat` | `scripts/diagnose_and_fix.py` | Install or repair dependencies; `--check` only reports |
+| | `verify.py` | Proof harness: compiles every module, imports all of them, builds the window and asserts the callback wiring |
 
 ## Layout
 
 ```
-main.py              entry point
+main.py              entry point (RUN_APP.bat)
+verify.py            proof harness
+requirements.txt     the only dependency list; INSTALL.bat reads it
+*.bat                double-click launchers; each one runs a script below
+scripts/             operator tools: roster import, profile provisioning,
+                     assisted login, status checks, delay config, CLI
+docs/                delay-settings.md
 src/app.py           builds DriverManager + MainWindow and wires the log
 src/core/            DriverManager (one asyncio worker behind a command queue)
                      FacebookAutomation (Playwright driving)

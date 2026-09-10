@@ -22,7 +22,7 @@ def step(name):
 
 step("compile")
 import compileall
-if not compileall.compile_dir("src", quiet=2) or not compileall.compile_file("main.py", quiet=2):
+if not all(compileall.compile_dir(d, quiet=2) for d in ("src", "scripts"))         or not compileall.compile_file("main.py", quiet=2):
     failures.append("compileall")
 print("ok" if not failures else "FAILED")
 

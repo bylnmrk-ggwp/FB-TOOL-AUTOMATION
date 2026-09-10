@@ -1,5 +1,4 @@
-@echo off
-REM Import / refresh the account roster from FB ACCOUNTS.xlsx
-echo Importing account roster...
-python import_accounts.py
-pause
+@echo off
+cd /d "%~dp0"
+python scripts\import_accounts.py
+pause

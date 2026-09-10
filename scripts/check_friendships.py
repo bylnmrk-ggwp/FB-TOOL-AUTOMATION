@@ -3,7 +3,7 @@ Simple friendship status checker - reads the autoshare database directly
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the database helpers directly
 from src.storage import config_manager as cfg

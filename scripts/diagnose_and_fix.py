@@ -2,9 +2,21 @@
 FB Tool Automation - System Diagnostic and Fix Script
 This script will check all requirements and install missing dependencies.
 """
+import re
 import sys
 import subprocess
 import importlib.util
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+# The status glyphs are non-cp1252; a plain Windows console would otherwise
+# crash on the first line of output.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 def print_header(text):
     print("\n" + "=" * 70)
@@ -45,15 +57,29 @@ def install_package(package):
         print(f"   Error: {e.stderr.decode() if e.stderr else 'Unknown error'}")
         return False
 
+# Import name for each distribution in requirements.txt whose module name
+# differs from the package name. requirements.txt is the single source of truth
+# for what gets installed; this only maps it to what gets imported.
+IMPORT_NAMES = {"Pillow": "PIL"}
+
+
+def read_requirements():
+    """(import_name, requirement_spec) for every line in requirements.txt."""
+    reqs = []
+    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        dist = re.split(r"[<>=!~;\s\[]", line, 1)[0]
+        reqs.append((IMPORT_NAMES.get(dist, dist), line))
+    return reqs
+
+
 def check_and_install_dependencies():
     print_header("Checking Required Packages")
     
-    required = {
-        "playwright": "playwright>=1.45.0",
-        "PIL": "Pillow>=10.0.0",
-        "groq": "groq>=0.4.0",
-        "tkinter": None  # Built-in, but we check it
-    }
+    required = dict(read_requirements())
+    required["tkinter"] = None  # Built-in, but we check it
     
     missing = []
     
@@ -125,7 +151,26 @@ def test_imports():
     
     return all_ok
 
+def check_only() -> int:
+    """Report what is installed and whether the app imports; change nothing."""
+    print_header("FB TOOL AUTOMATION - Dependency Check")
+    ok = check_python_version()
+    for module, _spec in read_requirements() + [("tkinter", None)]:
+        present = check_module(module)
+        print_status(f"{module:12} - {'installed' if present else 'MISSING'}",
+                     "ok" if present else "fail")
+        ok = ok and present
+    if ok:
+        ok = test_imports()
+    print_status("ready - run RUN_APP.bat" if ok else "not ready - run INSTALL.bat",
+                 "ok" if ok else "fail")
+    return 0 if ok else 1
+
+
 def main():
+    if "--check" in sys.argv[1:]:
+        return check_only()
+
     print_header("FB TOOL AUTOMATION - System Diagnostic")
     print("This script will check and fix all dependencies\n")
     

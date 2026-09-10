@@ -22,10 +22,10 @@ Brave must be closed: it rewrites Local State on exit and would discard
 whatever this script added.
 
 Usage:
-    python provision_profiles.py --dry-run          # plan only, writes nothing
-    python provision_profiles.py --count 3          # provision the first 3
-    python provision_profiles.py                    # provision all remaining
-    python provision_profiles.py --restore-backup <path>
+    python scripts/provision_profiles.py --dry-run          # plan only, writes nothing
+    python scripts/provision_profiles.py --count 3          # provision the first 3
+    python scripts/provision_profiles.py                    # provision all remaining
+    python scripts/provision_profiles.py --restore-backup <path>
 """
 import argparse
 import json
@@ -37,7 +37,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+SELF = Path(__file__).resolve().relative_to(ROOT).as_posix()
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -235,9 +237,115 @@ def rename_from_roster(dry_run: bool, force_close: bool) -> int:
     total, linked = db.count_accounts()
     print(f"\nRenamed {done} profile(s).")
     print(f"App profiles: {len(cfg.list_profiles())}   roster: {total} ({linked} linked)")
-    print(f"Undo: python {Path(__file__).name} --restore-backup \"{backup}\"")
+    print(f"Undo: python {SELF} --restore-backup \"{backup}\"")
     print("Note: the config profile names were rewritten too and are not")
     print("covered by that backup; re-run with the old naming to reverse them.")
+    return 0
+
+
+def purge_disabled(dry_run: bool, force_close: bool, keep_dirs: bool) -> int:
+    """Remove accounts Facebook has disabled, and their Brave profiles.
+
+    Facebook states the disable decision cannot be appealed, so the profile is
+    dead weight: it can never hold a usable session. This unregisters it from
+    Brave, drops it from the app config, clears the account's profile link,
+    and by default deletes the profile directory too. The account row stays,
+    still marked disabled, so a spreadsheet re-import cannot resurrect it.
+    """
+    from src.storage import config_manager as cfg
+    from src.storage import database as db
+
+    rows = db.list_accounts(status="disabled", linked_only=True)
+    if not rows:
+        print("No accounts are marked disabled. Nothing to purge.")
+        print("Accounts get marked when login_accounts.py sees "
+              "facebook.com/checkpoint/disabled.")
+        return 0
+
+    plan = []
+    for a in rows:
+        name = a.get("linked_profile") or ""
+        path = cfg.get_profile_path(name) if name else None
+        plan.append({
+            "username": a["username"],
+            "label": a.get("facebook_name") or a["username"],
+            "profile": name,
+            "path": path,
+            "dir": Path(path).name if path else None,
+        })
+
+    print(f"Accounts marked disabled : {len(plan)}")
+    total_bytes = 0
+    for item in plan:
+        size = ""
+        if item["path"] and Path(item["path"]).exists():
+            b = sum((Path(r) / f).stat().st_size
+                    for r, _, fs in os.walk(item["path"]) for f in fs
+                    if (Path(r) / f).exists())
+            total_bytes += b
+            size = f"{b / 2**20:.1f} MiB"
+        print(f"   {item['label'][:28]:<28} {item['dir'] or '(no profile)':<12} {size}")
+    print(f"Disk to reclaim          : {total_bytes / 2**20:.1f} MiB")
+    print(f"Profile directories      : {'kept' if keep_dirs else 'DELETED'}")
+
+    if dry_run:
+        print("\n--dry-run: nothing removed.")
+        return 0
+
+    if brave_is_running():
+        if not force_close:
+            print("\nBrave is running and rewrites Local State on exit. Close it")
+            print("and run again, or pass --force-close.")
+            return 1
+        subprocess.run(["taskkill", "/F", "/IM", "brave.exe", "/T"],
+                       capture_output=True, timeout=15)
+        time.sleep(2)
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = LOCAL_STATE.with_name(f"Local State.backup-{stamp}")
+    shutil.copy2(LOCAL_STATE, backup)
+    print(f"\nBacked up Local State -> {backup.name}")
+
+    state = load_local_state()
+    profile = state["profile"]
+    info = profile["info_cache"]
+    order = profile.get("profiles_order", [])
+
+    removed = 0
+    for item in plan:
+        try:
+            if item["dir"]:
+                info.pop(item["dir"], None)
+                if item["dir"] in order:
+                    order.remove(item["dir"])
+            if item["profile"]:
+                cfg.delete_profile(item["profile"])
+            db.link_account(item["username"], "")
+            if item["path"] and not keep_dirs and Path(item["path"]).exists():
+                # Only ever delete a directory this tool could have created:
+                # a "Profile N" directly under Brave's User Data. Anything
+                # else in config (Default, a hand-linked path) is left alone.
+                target = Path(item["path"]).resolve()
+                if (target.parent != BRAVE_USER_DATA.resolve()
+                        or not re.fullmatch(r"Profile \d+", target.name)):
+                    print(f"  kept directory {target} - not a provisioned "
+                          f"'Profile N' under Brave's User Data")
+                else:
+                    shutil.rmtree(target, ignore_errors=True)
+            removed += 1
+            print(f"  removed {item['label']}")
+        except Exception as e:
+            print(f"  FAILED {item['label']}: {e}")
+
+    LOCAL_STATE.write_text(json.dumps(state), encoding="utf-8")
+    total, linked = db.count_accounts()
+    print(f"\nPurged {removed} disabled account(s).")
+    print(f"Roster now: {total} account(s), {linked} linked")
+    print(f"App profiles: {len(cfg.list_profiles())}")
+    print(f"Local State undo: python {SELF} "
+          f"--restore-backup \"{backup}\"")
+    if not keep_dirs:
+        print("Deleted profile directories are NOT recoverable from that backup.")
     return 0
 
 
@@ -266,10 +374,20 @@ def main(argv) -> int:
                     help="restore a Local State backup and exit")
     ap.add_argument("--rename-from-roster", action="store_true",
                     help="rename provisioned profiles to their Facebook name")
+    ap.add_argument("--purge-disabled", action="store_true",
+                    help="remove accounts Facebook disabled, and their profiles")
+    ap.add_argument("--keep-dirs", action="store_true",
+                    help="with --purge-disabled, keep the profile directories")
     args = ap.parse_args(argv)
 
     if args.restore_backup:
         return restore_backup(args.restore_backup)
+
+    if args.purge_disabled:
+        if not LOCAL_STATE.exists():
+            print(f"Brave Local State not found at {LOCAL_STATE}")
+            return 1
+        return purge_disabled(args.dry_run, args.force_close, args.keep_dirs)
 
     if args.rename_from_roster:
         if not LOCAL_STATE.exists():
@@ -284,7 +402,8 @@ def main(argv) -> int:
     from src.storage import config_manager as cfg
     from src.storage import database as db
 
-    accounts = [a for a in db.list_accounts() if not a.get("linked_profile")]
+    accounts = [a for a in db.list_accounts(include_disabled=False)
+                if not a.get("linked_profile")]
     if args.count is not None:
         accounts = accounts[:args.count]
     if not accounts:
@@ -378,7 +497,7 @@ def main(argv) -> int:
     print(f"Roster           : {total} account(s), {linked} linked")
     print("\nThese profiles are LOGGED OUT. Open Brave to confirm they appear,")
     print("then log each account in before the app can drive it.")
-    print(f"To undo the Local State change: python {Path(__file__).name} "
+    print(f"To undo the Local State change: python {SELF} "
           f"--restore-backup \"{backup}\"")
     return 0
 

@@ -9,8 +9,8 @@ saved passwords, so persisting them would only create a second plaintext copy
 of the spreadsheet's most sensitive column.
 
 Usage:
-    python import_accounts.py                    # uses "FB ACCOUNTS.xlsx"
-    python import_accounts.py path/to/file.xlsx
+    python scripts/import_accounts.py                    # uses "FB ACCOUNTS.xlsx"
+    python scripts/import_accounts.py path/to/file.xlsx
     python import_accounts.py --dry-run          # report, write nothing
 """
 import re
@@ -18,7 +18,8 @@ import sys
 import zipfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -112,7 +113,7 @@ def read_accounts(xlsx: Path) -> list[dict]:
 def main(argv: list[str]) -> int:
     dry_run = "--dry-run" in argv
     args = [a for a in argv if not a.startswith("--")]
-    xlsx = Path(args[0]) if args else Path(__file__).resolve().parent / DEFAULT_SHEET
+    xlsx = Path(args[0]) if args else ROOT / DEFAULT_SHEET
     if not xlsx.exists():
         print(f"Spreadsheet not found: {xlsx}")
         return 1

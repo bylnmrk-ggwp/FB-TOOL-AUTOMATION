@@ -57,7 +57,7 @@ Without proper delays, Facebook may:
 ### Method 2: Using Python Script
 
 ```bash
-python configure_delays.py
+python scripts/configure_delays.py
 ```
 
 ### Method 3: Manual Configuration
@@ -160,11 +160,11 @@ All delays use **random values** within the specified range:
 
 ### Where Delays Are Applied
 
-1. **`facebook_automation.py`:**
+1. **`src/core/facebook_automation.py`:**
    - After clicking Share button
    - After clicking Post button
 
-2. **`driver_manager.py`:**
+2. **`src/core/driver_manager.py`:**
    - Between each group share in bulk operations
    - Applied across all profiles
 
@@ -177,7 +177,7 @@ All delays use **random values** within the specified range:
 ## Support
 
 If you experience issues:
-1. Try resetting to defaults (Option 3 in configure_delays.py)
+1. Try resetting to defaults (Option 3 in scripts/configure_delays.py)
 2. Check the logs for timing information
 3. Verify Facebook is not temporarily blocking your account
 4. Consider taking a break from automation for 24-48 hours
