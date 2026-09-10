@@ -19,10 +19,13 @@ the per-profile loop, the credential lookup, and an unlimited manual window
 when the built-in 120s wait runs out.
 
 Usage:
-    python login_accounts.py --dry-run        # show who would be attempted
-    python login_accounts.py --count 1        # try one account
-    python login_accounts.py                  # walk every linked account
-    python login_accounts.py --only <username>
+    python scripts/login_accounts.py --dry-run        # show who would be attempted
+    python scripts/login_accounts.py --count 1        # try one account
+    python scripts/login_accounts.py                  # walk every linked account
+    python scripts/login_accounts.py --only <username>
+    python scripts/login_accounts.py --unattended --batch 10 --pause 20
+        # no prompts: log in what logs in, skip and report the rest;
+        # 10 accounts, then a 20 minute pause, repeat
 """
 import argparse
 import asyncio
@@ -166,8 +169,14 @@ def _mark_ok(account: dict):
     db.set_account_status(account["username"], "ok")
 
 
-async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
-    """Open this account's Brave profile and log it in, assisted."""
+async def login_one(account: dict, password: str, log,
+                    unattended: bool = False) -> tuple[bool, str]:
+    """Open this account's Brave profile and log it in.
+
+    Assisted by default: a challenge waits for the operator. With
+    `unattended` nothing ever waits - a challenge is recorded and skipped, so
+    the run finishes on its own and the summary says who still needs a hand.
+    """
     from src.core.facebook_automation import (FacebookAutomation,
                                               LOGIN_FLAGS)
     from src.storage import config_manager as cfg
@@ -222,6 +231,10 @@ async def login_one(account: dict, password: str, log) -> tuple[bool, str]:
             print(f"    page: {url[:80]}")
             if reason in (BAD_PASSWORD, BAD_IDENTIFIER):
                 return False, reason
+            # A checkpoint or 2FA prompt is Facebook's decision; only a
+            # person can clear it. Unattended runs record it and move on.
+            if unattended:
+                return False, reason or msg
             choice = ask("    [Enter] I cleared it, re-check  /  [s] skip: ")
             if choice == "s":
                 return False, reason or msg
@@ -282,21 +295,33 @@ async def run(args) -> int:
         return 0
 
     print("\nOne at a time; Brave's profile lock allows no parallelism.")
-    print("A visible window opens per account. Solve any checkpoint in it.\n")
+    if args.unattended:
+        print("Unattended: challenges are skipped and listed at the end.\n")
+    else:
+        print("A visible window opens per account. Solve any checkpoint in it.\n")
 
     results = {"ok": [], "failed": []}
     for i, a in enumerate(todo, 1):
+        # Batch pacing: a long run of fresh logins from one machine is the
+        # pattern most likely to draw a checkpoint on every account at once.
+        # Spacing them out is the only lever that is ours to pull.
+        if args.batch and i > 1 and (i - 1) % args.batch == 0:
+            print(f"  batch of {args.batch} done - pausing {args.pause:g} min "
+                  f"({i - 1}/{len(todo)} attempted)\n")
+            await asyncio.sleep(args.pause * 60)
+
         label = a.get("facebook_name") or a["username"]
         print(f"[{i}/{len(todo)}] {label}  ->  profile '{a['linked_profile']}'")
 
         def log(msg, _i=i):
             print(f"    {msg}")
 
-        ok, msg = await login_one(a, creds[a["username"].lower()], log)
+        ok, msg = await login_one(a, creds[a["username"].lower()], log,
+                                  unattended=args.unattended)
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 
-        if not ok and not args.keep_going:
+        if not ok and not args.keep_going and not args.unattended:
             choice = ask("  continue with the next account? [Enter] yes, [q] stop: ")
             if choice == "q":
                 print("  stopped.")
@@ -334,7 +359,17 @@ def main(argv) -> int:
                     help="list who would be attempted, open nothing")
     ap.add_argument("--keep-going", action="store_true",
                     help="do not pause for confirmation after a failure")
-    return asyncio.run(run(ap.parse_args(argv)))
+    ap.add_argument("--unattended", action="store_true",
+                    help="never prompt: skip any checkpoint/2FA and list "
+                         "those accounts in the summary for a later --only run")
+    ap.add_argument("--batch", type=int, default=0, metavar="N",
+                    help="pause after every N accounts (0 = no pausing)")
+    ap.add_argument("--pause", type=float, default=15.0, metavar="MIN",
+                    help="minutes to wait between batches (default 15)")
+    args = ap.parse_args(argv)
+    if args.batch < 0 or args.pause < 0:
+        ap.error("--batch and --pause must be >= 0")
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

@@ -78,6 +78,8 @@ logged-in Brave profiles, in this order:
 IMPORT_ACCOUNTS.bat                              rows -> local database
 python scripts/provision_profiles.py --dry-run   plan Brave profiles, then run without --dry-run
 python scripts/login_accounts.py                 assisted login, one visible browser at a time
+python scripts/login_accounts.py --unattended --batch 10 --pause 20
+                                                 same, no prompts: skips any checkpoint, pauses between batches
 python scripts/provision_profiles.py --rename-from-roster
 ```
 
