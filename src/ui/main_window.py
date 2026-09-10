@@ -234,6 +234,13 @@ class MainWindow(tk.Tk):
             style="Header.TButton")
         self.theme_btn.pack(side="right", padx=14, pady=(12, 12))
 
+        # Session-level action, so it lives in the window chrome rather than
+        # in a tab: it closes the browser and clears saved credentials.
+        self.logout_btn = ttk.Button(header, text="Log Out",
+                                     command=self._on_logout,
+                                     style="Header.TButton")
+        self.logout_btn.pack(side="right", padx=(0, 4), pady=(12, 12))
+
         # Thin flat accent underline
         self._accent_line = tk.Frame(self, height=2, bg=theme.get()["accent"])
         self._accent_line.pack(fill="x")
@@ -348,6 +355,8 @@ class MainWindow(tk.Tk):
         """Connect UI callbacks to manager methods."""
         if not self.manager:
             return
+
+        from src.storage import config_manager as cfg
         
         # Share tab
         self.share_tab.set_on_share(self.manager.share)
@@ -357,6 +366,10 @@ class MainWindow(tk.Tk):
         self.share_tab.set_on_load_groups(self._load_saved_groups)
         self.share_tab.set_on_share_selected(self.manager.share_to_groups)
         self.share_tab.set_on_bulk_share(self.manager.share_to_groups_bulk)
+        self.share_tab.set_on_post_timeline(self.manager.post_to_timeline)
+        self.share_tab.set_on_fetch_one_profile(self.manager.fetch_my_groups)
+        # MainWindow owns config access, so it feeds the picker its choices.
+        self.share_tab.set_profiles(cfg.list_profiles())
 
         # Queue tab
         self.queue_tab.set_on_run_queue(self.manager.run_queue)
@@ -785,7 +798,47 @@ class MainWindow(tk.Tk):
             self.log_tab.write(f"Batch complete: {total} item(s) processed")
             self._set_activity("Ready")
 
+        elif rtype == "fetch_groups_result":
+            self.share_tab.set_fetch_one_enabled(True)
+            pname = result.get("profile_name", "")
+            if ok:
+                groups = result.get("groups", [])
+                count = result.get("count", len(groups))
+                self.share_tab.set_groups_list(groups)
+                self.share_tab.set_groups_status(
+                    f"{count} group(s) for '{pname}'")
+                self.share_tab.set_status(f"Found {count} group(s)")
+                self.log_tab.write(f"\n{'='*50}")
+                self.log_tab.write(f"Groups for '{pname}' — {count}:")
+                for g in groups:
+                    self.log_tab.write(f"  {g.get('name', '?')}")
+                self.log_tab.write(f"{'='*50}")
+            else:
+                err = result.get("error", "Unknown error")
+                self.share_tab.set_groups_status(f"Failed: {err}")
+                self.share_tab.set_status(f"Fetch groups failed: {err}")
+                self.log_tab.write(f"Fetch groups failed: {err}")
+
+        elif rtype == "logout_result":
+            self.logout_btn.config(state="normal")
+            self._set_activity("Ready")
+            self.log_tab.write("Logged out — browser closed, credentials cleared.")
+            self.share_tab.set_status("Logged out")
+
     # ── App lifecycle ─────────────────────────────────────
+
+    def _on_logout(self):
+        """Confirm, then close the browser and clear saved credentials."""
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Confirm Logout",
+                "Close the browser and clear saved credentials?",
+                parent=self):
+            return
+        self.logout_btn.config(state="disabled")
+        self._set_activity("Logging out...")
+        if self.manager:
+            self.manager.logout()
 
     def _on_tab_change(self, event=None):
         try:

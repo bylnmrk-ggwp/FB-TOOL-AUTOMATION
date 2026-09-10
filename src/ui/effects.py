@@ -17,6 +17,7 @@ Returns a `clear()` callable for listboxes — call it from apply_theme()
 after re-theming, or after repopulating the listbox contents.
 """
 
+import time
 import tkinter as tk
 
 from src.ui import theme
@@ -25,6 +26,30 @@ from src.ui import theme
 
 # Canvases that want wheel scrolling, in registration order.
 _WHEEL_TARGETS: list = []
+
+
+def wait_for_thread(widget, thread, timeout: float = 60.0,
+                    poll_ms: int = 50) -> bool:
+    """Wait for a worker thread without freezing Tk.
+
+    thread.join() blocks the event loop, so a modal progress dialog cannot
+    repaint and an indeterminate Progressbar never animates while the worker
+    runs. This pumps the event loop instead. Only call it while a modal grab
+    is held, so the pumped events cannot re-enter unrelated handlers.
+
+    Returns True if the thread finished, False on timeout or if the widget
+    was destroyed while waiting.
+    """
+    deadline = time.monotonic() + timeout
+    while thread.is_alive():
+        if time.monotonic() >= deadline:
+            return False
+        try:
+            widget.update()
+        except tk.TclError:
+            return False
+        time.sleep(poll_ms / 1000.0)
+    return True
 
 
 def register_wheel_target(canvas):

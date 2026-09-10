@@ -162,9 +162,14 @@ class DriverManager:
         else:
             self.cmd_queue.put({"type": "join_group", "group_url": group_url})
 
-    def fetch_my_groups(self):
-        """Fetch the list of groups for the current/first profile."""
-        self.cmd_queue.put({"type": "fetch_my_groups"})
+    def fetch_my_groups(self, profile_name: str | None = None):
+        """Fetch the group list for one profile.
+
+        profile_name selects which profile to launch; without it the open
+        context is reused, or the first saved profile launched.
+        """
+        self.cmd_queue.put({"type": "fetch_my_groups",
+                            "profile_name": profile_name})
 
     def fetch_my_groups_bulk(self):
         """Fetch groups from ALL profiles at once."""
@@ -421,17 +426,30 @@ class DriverManager:
             self.state = DriverState.ERROR
             self.result_queue.put({"type": "login_result", "ok": False, "error": str(e)})
 
-    async def _auto_launch_first_profile(self) -> bool:
-        """Auto-launch the first saved profile's browser if no context is active.
+    async def _auto_launch_first_profile(self, profile_name: str | None = None) -> bool:
+        """Auto-launch a saved profile's browser.
+
+        Called with no argument this behaves as it always has: launch the first
+        saved profile, for callers that only reach here when no context is open.
+        Pass profile_name to launch that specific profile instead, replacing any
+        context already open so the caller really gets the profile it asked for.
         Returns True if a profile was successfully launched."""
         profiles = cfg.list_profiles()
         if not profiles:
             return False
-        profile_name = profiles[0]
+        if profile_name is None:
+            profile_name = profiles[0]
+        elif profile_name not in profiles:
+            self.log(f"Profile '{profile_name}' is not saved")
+            return False
         brave_path = cfg.get_profile_path(profile_name)
         if not brave_path:
             return False
         try:
+            if self._automation.context:
+                self.log(f"Closing existing browser to launch '{profile_name}'...")
+                await self._automation.cleanup()
+                await asyncio.sleep(1)
             self.log(f"Auto-launching profile '{profile_name}'...")
             await self._automation.start_browser(brave_path)
             await self._automation.go_to_facebook()
@@ -817,8 +835,23 @@ class DriverManager:
             self.state = DriverState.LOGGED_IN
 
     async def _do_fetch_my_groups(self, cmd: dict):
-        """Fetch groups for one profile (first active or specified)."""
-        if not self._automation.context:
+        """Fetch groups for one profile.
+
+        With a profile_name, that profile's browser is launched (replacing any
+        open context) so the groups returned really belong to it.  Without one,
+        the already-open context is reused, or the first saved profile launched.
+        """
+        requested = cmd.get("profile_name")
+        if requested:
+            launched = await self._auto_launch_first_profile(requested)
+            if not launched:
+                self.result_queue.put({
+                    "type": "fetch_groups_result", "ok": False,
+                    "profile_name": requested,
+                    "error": f"Could not launch profile '{requested}'.",
+                })
+                return
+        elif not self._automation.context:
             launched = await self._auto_launch_first_profile()
             if not launched:
                 self.result_queue.put({
@@ -827,7 +860,8 @@ class DriverManager:
                 })
                 return
 
-        profile_name = cmd.get("profile_name") or (cfg.list_profiles()[0] if cfg.list_profiles() else "unknown")
+        _profiles = cfg.list_profiles()
+        profile_name = requested or (_profiles[0] if _profiles else "unknown")
         self.state = DriverState.SHARING
         try:
             groups = await self._automation.fetch_my_groups()
@@ -1017,7 +1051,8 @@ class DriverManager:
                 return
 
         group_url = cmd["group_url"]
-        profile_name = cfg.list_profiles()[0] if cfg.list_profiles() else "unknown"
+        _profiles = cfg.list_profiles()
+        profile_name = _profiles[0] if _profiles else "unknown"
 
         if db.has_joined(profile_name, group_url):
             self.result_queue.put({
@@ -1249,15 +1284,17 @@ class DriverManager:
                             })
                             consecutive_timeouts += 1
 
-                        # Adaptive delay: back off after consecutive timeouts
+                        # Adaptive delay: back off after consecutive timeouts.
+                        # Tunable via CONFIGURE_DELAYS.bat like the share delays.
+                        jd = cfg.get_share_delays()
                         if consecutive_timeouts >= 3:
-                            delay = random.uniform(20, 30)
+                            delay = random.uniform(jd["join_backoff_min"], jd["join_backoff_max"])
                             self.log(f"  '{profile_name}' {consecutive_timeouts} timeouts — backing off {delay:.0f}s")
                             consecutive_timeouts = 0
                         elif consecutive_timeouts >= 1:
-                            delay = random.uniform(8, 12)
+                            delay = random.uniform(jd["join_retry_min"], jd["join_retry_max"])
                         else:
-                            delay = random.uniform(3, 5)
+                            delay = random.uniform(jd["between_joins_min"], jd["between_joins_max"])
 
                         if i < total_urls:
                             await asyncio.sleep(delay)

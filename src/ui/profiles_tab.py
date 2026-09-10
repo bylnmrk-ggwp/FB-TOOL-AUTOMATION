@@ -4,7 +4,8 @@ import threading
 
 from src.storage import config_manager as cfg
 from src.ui import theme
-from src.ui.effects import attach_listbox_hover, attach_button_hover
+from src.ui.effects import (attach_listbox_hover, attach_button_hover,
+                            wait_for_thread)
 
 
 class ProfilesTab(ttk.Frame):
@@ -483,7 +484,9 @@ class ProfilesTab(ttk.Frame):
 
         thread = threading.Thread(target=_fetch_in_thread, daemon=True)
         thread.start()
-        thread.join(timeout=60)  # Max 60 seconds for browser launch + Facebook load
+        # Pump the event loop instead of joining, so the progressbar above
+        # actually animates. 60s cap covers browser launch + Facebook load.
+        wait_for_thread(fetch_dialog, thread, timeout=60)
 
         fetch_dialog.destroy()
 
@@ -660,7 +663,7 @@ class ProfilesTab(ttk.Frame):
 
         thread = threading.Thread(target=_fetch_in_thread, daemon=True)
         thread.start()
-        thread.join(timeout=60)  # Max 60 seconds
+        wait_for_thread(fetch_dialog, thread, timeout=60)
 
         fetch_dialog.destroy()
 
@@ -844,6 +847,27 @@ class ProfilesTab(ttk.Frame):
             "skipped": profiles_already_named,  # Add pre-skipped profiles
         }
         
+        # Tk is not thread-safe: the worker below must not touch widgets
+        # directly. These marshal every mutation onto the main thread, which
+        # is free to repaint because _check_thread polls with after().
+        def _ui(fn):
+            try:
+                progress_dialog.after(0, fn)
+            except tk.TclError:
+                pass  # dialog already closed
+
+        def _status(text):
+            _ui(lambda t=text: status_var.set(t))
+
+        def _append(text):
+            def apply(t=text):
+                results_text.insert("end", t)
+                results_text.see("end")
+            _ui(apply)
+
+        def _progress(value):
+            _ui(lambda v=value: progress_bar.configure(value=v))
+
         def _bulk_fetch_thread():
             import os
             import re
@@ -852,27 +876,23 @@ class ProfilesTab(ttk.Frame):
             for i, old_name in enumerate(profiles_to_update):
                 try:
                     # Update status
-                    status_var.set(f"Processing {i+1}/{len(profiles_to_update)}: {old_name}")
-                    results_text.insert("end", f"[{i+1}/{len(profiles_to_update)}] {old_name}...")
-                    results_text.see("end")
-                    progress_dialog.update()
+                    _status(f"Processing {i+1}/{len(profiles_to_update)}: {old_name}")
+                    _append(f"[{i+1}/{len(profiles_to_update)}] {old_name}...")
                     
                     profile_path = cfg.get_profile_path(old_name)
                     if not profile_path:
-                        results_text.insert("end", " ✗ Path not found\n")
+                        _append(" ✗ Path not found\n")
                         results["failed"].append((old_name, "Path not found"))
-                        progress_bar["value"] = i + 1
-                        progress_dialog.update()
+                        _progress(i + 1)
                         continue
                     
                     # Fetch Facebook name
                     fb_name = fetch_facebook_name_sync(profile_path)
                     
                     if not fb_name:
-                        results_text.insert("end", " ✗ Not logged in or failed\n")
+                        _append(" ✗ Not logged in or failed\n")
                         results["failed"].append((old_name, "Could not fetch name"))
-                        progress_bar["value"] = i + 1
-                        progress_dialog.update()
+                        _progress(i + 1)
                         continue
                     
                     # Extract Brave profile info
@@ -890,10 +910,9 @@ class ProfilesTab(ttk.Frame):
                     
                     # Check if already has this name
                     if new_name == old_name:
-                        results_text.insert("end", f" ✓ Already correct\n")
+                        _append(f" ✓ Already correct\n")
                         results["skipped"].append((old_name, "Already up-to-date"))
-                        progress_bar["value"] = i + 1
-                        progress_dialog.update()
+                        _progress(i + 1)
                         continue
                     
                     # Ensure uniqueness
@@ -914,24 +933,21 @@ class ProfilesTab(ttk.Frame):
                         config["facebook_urls"][new_name] = config["facebook_urls"].pop(old_name)
                         cfg._save_config(config)
                     
-                    results_text.insert("end", f" ✓ → {new_name}\n")
+                    _append(f" ✓ → {new_name}\n")
                     results["success"].append((old_name, new_name))
                     
                 except Exception as e:
-                    results_text.insert("end", f" ✗ Error: {e}\n")
+                    _append(f" ✗ Error: {e}\n")
                     results["failed"].append((old_name, str(e)))
                 
-                progress_bar["value"] = i + 1
-                results_text.see("end")
-                progress_dialog.update()
+                _progress(i + 1)
             
             # Show completion
-            status_var.set("Completed!")
-            results_text.insert("end", f"\n{'='*50}\n")
-            results_text.insert("end", f"✓ Success: {len(results['success'])}\n")
-            results_text.insert("end", f"⊘ Skipped: {len(results['skipped'])}\n")
-            results_text.insert("end", f"✗ Failed: {len(results['failed'])}\n")
-            results_text.see("end")
+            _status("Completed!")
+            _append(f"\n{'='*50}\n")
+            _append(f"✓ Success: {len(results['success'])}\n")
+            _append(f"⊘ Skipped: {len(results['skipped'])}\n")
+            _append(f"✗ Failed: {len(results['failed'])}\n")
         
         def _on_complete():
             # Re-enable buttons

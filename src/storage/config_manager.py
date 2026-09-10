@@ -305,6 +305,12 @@ def get_share_delays() -> dict:
         - after_share_button_max: Max seconds after clicking Share button (default: 5)
         - after_post_min: Min seconds to wait after posting (default: 8)
         - after_post_max: Max seconds to wait after posting (default: 15)
+        - between_joins_min: Min seconds between group joins (default: 3)
+        - between_joins_max: Max seconds between group joins (default: 5)
+        - join_retry_min: Min back-off after one join timeout (default: 8)
+        - join_retry_max: Max back-off after one join timeout (default: 12)
+        - join_backoff_min: Min back-off after 3 join timeouts (default: 20)
+        - join_backoff_max: Max back-off after 3 join timeouts (default: 30)
     """
     config = _load_config()
     defaults = {
@@ -314,6 +320,12 @@ def get_share_delays() -> dict:
         "after_share_button_max": 5,
         "after_post_min": 8,
         "after_post_max": 15,
+        "between_joins_min": 3,
+        "between_joins_max": 5,
+        "join_retry_min": 8,
+        "join_retry_max": 12,
+        "join_backoff_min": 20,
+        "join_backoff_max": 30,
     }
     delays = config.get("share_delays", {})
     return {**defaults, **delays}

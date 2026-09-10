@@ -34,6 +34,8 @@ class ShareTab(ttk.Frame):
         self._on_load_groups_cb = None
         self._on_share_selected_cb = None
         self._on_bulk_share_cb = None
+        self._on_post_timeline_cb = None
+        self._on_fetch_one_profile_cb = None
 
         self._load_saved()
         self._build_ui()
@@ -135,7 +137,10 @@ class ShareTab(ttk.Frame):
                        pady=(12, 0))
         btn_frame.columnconfigure(5, weight=1)
 
-        self.timeline_btn = ttk.Button(btn_frame, text="Post to Timeline",
+        # Shares the Post URL above to this profile's timeline. Named
+        # "Share" not "Post" because composing a NEW post is a separate
+        # action - see the New Timeline Post button.
+        self.timeline_btn = ttk.Button(btn_frame, text="Share to Timeline",
                                        command=self._on_share_timeline,
                                        state="disabled",
                                        style="Timeline.TButton")
@@ -146,14 +151,21 @@ class ShareTab(ttk.Frame):
                                     style="Accent.TButton")
         self.share_btn.grid(row=0, column=1, padx=(0, 8))
 
-        self.bulk_share_btn = ttk.Button(btn_frame, text="Bulk Share to My Groups",
+        # Same inputs as "Share to Selected" below; differs only in how many
+        # profiles do the sharing, so the label names that axis.
+        self.bulk_share_btn = ttk.Button(btn_frame,
+                                         text="Share Selected Groups (All Profiles)",
                                          command=self._on_bulk_share_to_groups,
                                          state="disabled")
         self.bulk_share_btn.grid(row=0, column=2, padx=(0, 8))
 
+        self.compose_btn = ttk.Button(btn_frame, text="New Timeline Post...",
+                                      command=self._open_compose_dialog)
+        self.compose_btn.grid(row=0, column=4, padx=(0, 12))
+
         self.save_btn = ttk.Button(btn_frame, text="Save Preset",
                                    command=self._save_preset, state="disabled")
-        self.save_btn.grid(row=0, column=3, padx=(0, 12))
+        self.save_btn.grid(row=0, column=3, padx=(0, 8))
 
         status_lbl = ttk.Label(btn_frame, textvariable=self._vars["status"],
                                style="Status.TLabel")
@@ -273,7 +285,7 @@ class ShareTab(ttk.Frame):
         self.send_join_btn.pack(side="left")
 
         self.share_selected_btn = ttk.Button(
-            act_frame, text="Share to Selected",
+            act_frame, text="Share Selected Groups (This Profile)",
             command=self._on_share_to_selected,
             state="disabled")
         self.share_selected_btn.pack(side="left", padx=(8, 0))
@@ -291,6 +303,26 @@ class ShareTab(ttk.Frame):
             fetch_frame, text="Load Saved",
             command=self._on_load_saved_groups)
         self.load_groups_btn.pack(side="left", padx=(8, 0))
+
+        # ── Single-profile fetch row ──
+        # Much faster than the all-profiles sweep when only one account
+        # needs refreshing. The profile list is injected by MainWindow so
+        # this tab stays free of storage imports.
+        one_frame = ttk.Frame(groups_form)
+        one_frame.pack(fill="x", pady=(6, 0))
+
+        ttk.Label(one_frame, text="One profile:").pack(side="left")
+
+        self._fetch_profile_var = tk.StringVar(value="")
+        self.fetch_profile_combo = ttk.Combobox(
+            one_frame, textvariable=self._fetch_profile_var,
+            state="readonly", width=26, values=[])
+        self.fetch_profile_combo.pack(side="left", padx=(6, 0))
+
+        self.fetch_one_btn = ttk.Button(
+            one_frame, text="Fetch Groups",
+            command=self._on_fetch_one_profile, state="disabled")
+        self.fetch_one_btn.pack(side="left", padx=(6, 0))
 
         self._groups_status_var = tk.StringVar(value="")
         ttk.Label(fetch_frame, textvariable=self._groups_status_var,
@@ -421,6 +453,27 @@ class ShareTab(ttk.Frame):
     def set_on_bulk_share(self, callback):
         self._on_bulk_share_cb = callback
 
+    def set_on_post_timeline(self, callback):
+        self._on_post_timeline_cb = callback
+
+    def set_on_fetch_one_profile(self, callback):
+        self._on_fetch_one_profile_cb = callback
+
+    def set_profiles(self, profiles: list[str]):
+        """Fill the single-profile fetch picker. Called by MainWindow, which
+        owns config access, so this tab needs no storage import."""
+        self.fetch_profile_combo.config(values=profiles)
+        current = self._fetch_profile_var.get()
+        if profiles and current not in profiles:
+            self._fetch_profile_var.set(profiles[0])
+        elif not profiles:
+            self._fetch_profile_var.set("")
+        self.fetch_one_btn.config(state="normal" if profiles else "disabled")
+
+    def set_fetch_one_enabled(self, enabled: bool):
+        self.fetch_one_btn.config(
+            state="normal" if enabled and self._fetch_profile_var.get() else "disabled")
+
     def update_join_progress(self, done: int, total: int, last_msg: str = ""):
         self._join_count_var.set(f"{done}/{total}")
         if last_msg:
@@ -515,6 +568,91 @@ class ShareTab(ttk.Frame):
                         "profiles": g.get("profiles", []),
                     })
         return groups
+
+    def _on_fetch_one_profile(self):
+        """Fetch groups for just the profile chosen in the picker."""
+        profile = self._fetch_profile_var.get()
+        if not profile:
+            self.set_groups_status("Pick a profile first")
+            return
+        self.fetch_one_btn.config(state="disabled")
+        self.set_groups_status(f"Fetching groups for '{profile}'...")
+        if self._on_fetch_one_profile_cb:
+            self._on_fetch_one_profile_cb(profile)
+
+    def _open_compose_dialog(self):
+        """Compose a NEW timeline post (text + optional images).
+
+        Distinct from the share buttons above, which republish an existing
+        post URL. Posts through the current profile only; use the Queue tab's
+        composer to post the same text from every profile.
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title("New Timeline Post")
+        dlg.transient(self.winfo_toplevel())
+        dlg.resizable(False, False)
+        colors = theme.get()
+        dlg.configure(bg=colors["bg"])
+
+        body = ttk.Frame(dlg, padding=14)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(body, text="What's on your mind?").pack(anchor="w")
+
+        text_widget = tk.Text(body, height=8, width=54, wrap="word",
+                              font=(theme.UI_FONT, 10), borderwidth=0,
+                              highlightthickness=1,
+                              highlightbackground=colors["border"])
+        text_widget.pack(fill="both", expand=True, pady=(4, 10))
+
+        image_paths: list[str] = []
+        img_row = ttk.Frame(body)
+        img_row.pack(fill="x")
+        img_var = tk.StringVar(value="Images: none")
+        ttk.Label(img_row, textvariable=img_var,
+                  style="Status.TLabel").pack(side="left")
+
+        def _attach():
+            from tkinter import filedialog
+            picked = filedialog.askopenfilenames(
+                parent=dlg, title="Select Images",
+                filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp")])
+            for path in picked:
+                if path not in image_paths:
+                    image_paths.append(path)
+            img_var.set(f"Images: {len(image_paths)}" if image_paths
+                        else "Images: none")
+
+        def _clear_images():
+            image_paths.clear()
+            img_var.set("Images: none")
+
+        ttk.Button(img_row, text="Attach...",
+                   command=_attach).pack(side="right")
+        ttk.Button(img_row, text="Clear",
+                   command=_clear_images).pack(side="right", padx=(0, 6))
+
+        btn_row = ttk.Frame(body)
+        btn_row.pack(fill="x", pady=(14, 0))
+
+        def _post():
+            text = text_widget.get("1.0", tk.END).strip()
+            if not text:
+                self.set_status("Enter some text to post")
+                return
+            dlg.destroy()
+            self.set_status("Posting to Timeline...")
+            if self._on_post_timeline_cb:
+                self._on_post_timeline_cb(text, image_paths or None)
+
+        ttk.Button(btn_row, text="Cancel",
+                   command=dlg.destroy).pack(side="right")
+        ttk.Button(btn_row, text="Post", command=_post,
+                   style="Accent.TButton").pack(side="right", padx=(0, 8))
+
+        text_widget.bind("<Control-Return>", lambda e: _post())
+        text_widget.focus_set()
+        dlg.grab_set()
 
     def _on_send_to_join(self):
         """Copy selected group URLs into the Join Group text box."""

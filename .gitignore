@@ -9,3 +9,8 @@ venv/
 dump_*.json
 nul
 .claude/settings.local.json
+
+# Account spreadsheets - plaintext credentials, never commit
+*.xlsx
+*.xls
+*.csv
