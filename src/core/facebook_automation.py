@@ -4672,40 +4672,66 @@ class FacebookAutomation:
             self.log(f"  ⚠️  Could not return to the post: {str(e)[:90]}")
             return False
 
-    async def _share_to_timeline(self) -> bool:
-        """Click Share → 'Share Now' to post to timeline.
-        Verifies the share was accepted by checking for success/error indicators.
-        """
-        if not await self._back_on_target_post("the Timeline share"):
-            return False
-        await self._debug_dump("timeline_before_share_btn")
+    # Facebook's "Something went wrong. Please try again." is a transient
+    # server-side refusal, not a verdict about the account or the post: in the
+    # same batch, the same post, other profiles went through seconds later.
+    # It is also safe to retry - the post's share counter never moved on a
+    # rejected attempt, so nothing was posted to duplicate.
+    SHARE_RETRY_ATTEMPTS = 3
+    _SHARE_TRANSIENT = ("something went wrong", "please try again",
+                        "try again later", "temporarily unavailable",
+                        "couldn't load", "could not load")
+
+    def _share_error_is_transient(self) -> bool:
+        said = (getattr(self, "last_share_error", "") or "").lower()
+        return any(kw in said for kw in self._SHARE_TRANSIENT)
+
+    async def _clear_share_dialog(self):
+        """Close whatever is on screen so a retry starts from the post."""
+        for _ in range(2):
+            try:
+                await self.page.keyboard.press("Escape")
+                await asyncio.sleep(0.8)
+            except Exception:
+                break
+
+    async def _share_once(self, options: tuple, what: str) -> bool:
+        """One share attempt. options are the modal labels to try, in order."""
+        # Cleared per attempt: a stale message from an earlier attempt would
+        # make an unrelated failure look like a retryable one.
+        self.last_share_error = ""
+        await self._debug_dump(f"{what.lower()}_before_share_btn")
         # Capture URL right before sharing for reliable redirect detection
         try:
             self._post_url_before_share = await self.page.evaluate("window.location.href") or ""
         except Exception:
             self._post_url_before_share = ""
-        self.log("Sharing to Timeline...")
-        
+        self.log(f"Sharing to {what}...")
+
         share_result = await self._click_share_button()
         if share_result == "already_shared":
-            # Post was already shared - skip to success
-            self.log("⏭️  Skipping share steps (already shared)")
+            self.log(f"⏭️  Skipping {what} share (already shared)")
             return True
         if not share_result:
             return False
-        
+
         # Popup opened — wait for it to fully render before clicking options
         await asyncio.sleep(random.uniform(1, 2))
-        
-        if not await self._pick_option_in_modal("Share Now"):
-            # Share Now not found — try alternate labels for Reels/video posts
-            if not await self._pick_option_in_modal("Share to feed"):
-                return False
+
+        # First label that works wins. Never evaluate the rest: clicking a
+        # second option after one already took would act twice.
+        picked = False
+        for opt in options:
+            if await self._pick_option_in_modal(opt):
+                picked = True
+                break
+        if not picked:
+            return False
         # Check for toast immediately after clicking (before it disappears)
         if not await self._verify_post_shared():
             return False
         delay = random.uniform(5, 10)
-        self.log(f"Waiting {delay:.0f}s for Timeline share...")
+        self.log(f"Waiting {delay:.0f}s for {what} share...")
         await asyncio.sleep(delay)
         if await self._is_modal_still_open():
             if getattr(self, "_share_toast_confirmed", False):
@@ -4714,66 +4740,41 @@ class FacebookAutomation:
                 # cosmetic. Dismiss it so the next step starts clean.
                 self.log("Share confirmed by toast; dismissing the dialog "
                          "Facebook left open")
-                try:
-                    await self.page.keyboard.press("Escape")
-                    await asyncio.sleep(1)
-                except Exception:
-                    pass
+                await self._clear_share_dialog()
                 return True
             self.log("Share modal still open after wait — share may have failed")
             return False
         return True
 
-    async def _share_to_story(self) -> bool:
-        """Click Share → 'Your Story' to post to story.
-        Verifies the share was accepted by checking for success/error indicators.
-        """
-        # The Timeline share almost always moves the page, so this is the step
-        # that was sharing strangers' posts.
-        if not await self._back_on_target_post("the Story share"):
-            return False
-        await self._debug_dump("story_before_share_btn")
-        # Capture current URL for redirect detection (page may have changed after timeline share)
-        try:
-            self._post_url_before_share = await self.page.evaluate("window.location.href") or ""
-        except Exception:
-            self._post_url_before_share = ""
-        self.log("Sharing to Story...")
-        
-        share_result = await self._click_share_button()
-        if share_result == "already_shared":
-            self.log("⏭️  Skipping Story share (already shared)")
-            return True
-        if not share_result:
-            return False
-        
-        # Popup opened — wait for it to fully render
-        await asyncio.sleep(random.uniform(1, 2))
-        
-        if not await self._pick_option_in_modal("Your Story"):
-            return False
-        # Check for toast immediately after clicking (before it disappears)
-        if not await self._verify_post_shared():
-            return False
-        delay = random.uniform(5, 10)
-        self.log(f"Waiting {delay:.0f}s for Story share...")
-        await asyncio.sleep(delay)
-        if await self._is_modal_still_open():
-            if getattr(self, "_share_toast_confirmed", False):
-                # Facebook confirmed the share in its own toast and the post's
-                # share count went up; a dialog left on screen afterwards is
-                # cosmetic. Dismiss it so the next step starts clean.
-                self.log("Share confirmed by toast; dismissing the dialog "
-                         "Facebook left open")
-                try:
-                    await self.page.keyboard.press("Escape")
-                    await asyncio.sleep(1)
-                except Exception:
-                    pass
+    async def _share_with_retry(self, options: tuple, what: str) -> bool:
+        """Share, retrying only Facebook's own "try again" style refusals."""
+        for attempt in range(1, self.SHARE_RETRY_ATTEMPTS + 1):
+            if not await self._back_on_target_post(f"the {what} share"):
+                return False
+            if await self._share_once(options, what):
                 return True
-            self.log("Share modal still open after wait — share may have failed")
-            return False
-        return True
+            if not self._share_error_is_transient():
+                return False            # a real refusal - retrying is pointless
+            if attempt == self.SHARE_RETRY_ATTEMPTS:
+                self.log(f"  {what} share still refused after "
+                         f"{self.SHARE_RETRY_ATTEMPTS} attempts - giving up")
+                return False
+            wait = random.uniform(8, 20) * attempt
+            self.log(f"  ↻ Facebook said \"{self.last_share_error}\" - "
+                     f"retrying {what} share in {wait:.0f}s "
+                     f"(attempt {attempt + 1}/{self.SHARE_RETRY_ATTEMPTS})")
+            await self._clear_share_dialog()
+            await asyncio.sleep(wait)
+        return False
+
+    async def _share_to_timeline(self) -> bool:
+        """Click Share → 'Share Now' to post to timeline."""
+        return await self._share_with_retry(("Share Now", "Share to feed"),
+                                            "Timeline")
+
+    async def _share_to_story(self) -> bool:
+        """Click Share → 'Your Story' to post to story."""
+        return await self._share_with_retry(("Your Story",), "Story")
 
     # ── Share flow ────────────────────────────────────────
 
