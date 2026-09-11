@@ -1,6 +1,8 @@
+import threading
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
+from pathlib import Path
 
 from src.ui import theme
 
@@ -8,10 +10,56 @@ from src.ui import theme
 class LogTab(ttk.Frame):
     MAX_LINES = 2000
 
+    # The widget keeps MAX_LINES and dies with the app, so anything worth
+    # reading after the fact - which page stalled, what the watch heartbeat
+    # said at 00:29 - was unrecoverable. Every line now also lands here, one
+    # file per day so the set prunes itself by date rather than by size.
+    LOG_DIR = Path.home() / ".autoshare" / "logs"
+
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
         self._line_count = 0
+        self._file = None
+        self._file_day = None
+        self._file_lock = threading.Lock()
         self._build_ui()
+
+    @property
+    def log_path(self) -> Path:
+        """Today's log file, whether or not it has been opened yet."""
+        return self.LOG_DIR / f"app-{datetime.now():%Y%m%d}.log"
+
+    def _write_to_file(self, stamp: str, message: str):
+        """Append one line to today's log. Best-effort: never breaks the UI.
+
+        The manager calls write() from its worker thread, so the handle is
+        guarded; a failed open is not retried per line, it just leaves the
+        file closed until the day rolls over.
+        """
+        try:
+            with self._file_lock:
+                day = datetime.now().strftime("%Y%m%d")
+                if self._file is not None and self._file_day != day:
+                    self._file.close()
+                    self._file = None
+                if self._file is None:
+                    self.LOG_DIR.mkdir(parents=True, exist_ok=True)
+                    self._file = open(self.log_path, "a", encoding="utf-8")
+                    self._file_day = day
+                self._file.write(f"{stamp} {message}\n")
+                self._file.flush()
+        except Exception:
+            pass
+
+    def close_log_file(self):
+        """Release the log file handle on shutdown."""
+        with self._file_lock:
+            if self._file is not None:
+                try:
+                    self._file.close()
+                except Exception:
+                    pass
+                self._file = None
 
     def _build_ui(self):
         pad = {"padx": 12, "pady": 4}
@@ -56,9 +104,14 @@ class LogTab(ttk.Frame):
             self.text.tag_config("info", foreground="#374151")
 
     def write(self, message: str):
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        now = datetime.now()
+        timestamp = now.strftime("%H:%M:%S")
         tag = "info"
         stripped = message.strip()
+
+        # To disk first: the widget trims itself and the file is the record
+        # that survives the session.
+        self._write_to_file(now.strftime("%Y-%m-%d %H:%M:%S"), stripped)
 
         if stripped.startswith("\u2713"):
             tag = "ok"

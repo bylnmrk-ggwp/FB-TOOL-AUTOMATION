@@ -28,12 +28,14 @@ def run():
         # Test log message to verify connection
         app.log_tab.write("✓ FB Tool Automation started successfully")
         app.log_tab.write("✓ Driver manager initialized and ready")
-        
+        app.log_tab.write(f"Log file: {app.log_tab.log_path}")
+
         # Start the tkinter event loop
         app.mainloop()
-        
+
         # Cleanup when app closes
         manager.stop()
+        app.log_tab.close_log_file()
         
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)

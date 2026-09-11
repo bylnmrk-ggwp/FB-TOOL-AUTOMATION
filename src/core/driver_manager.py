@@ -3689,8 +3689,13 @@ class DriverManager:
             self._keep_watching(url, deadline))
         for name, why in broken.items():
             self.log(f"  ⚠️  '{name}' opened but is NOT watching: {why}")
-        self.log(f"👁 Watch: {len(watching)}/{len(self._watch_autos)} page(s) "
-                 f"confirmed playing [{mode}, {where}]. {how_long.capitalize()}.")
+        # "at open" matters: this is one snapshot taken as the pages loaded,
+        # not live status. The keeper's heartbeat is the running number, and
+        # neither one is Facebook's published viewer count - that is Facebook's
+        # own aggregate and it will not match the page count exactly.
+        self.log(f"👁 Watch started: {len(watching)}/{len(self._watch_autos)} "
+                 f"page(s) playing at open [{mode}, {where}], {how_long}. "
+                 f"Live count follows every ~2 min.")
 
     # How long a freshly opened page gets to mount a player, and how long its
     # currentTime is sampled to prove the player is really running.
@@ -3707,10 +3712,25 @@ class DriverManager:
         """
         from src.core.facebook_automation import LOGIN_GATE_JS
         try:
-            if await auto.page.evaluate(LOGIN_GATE_JS):
-                return "Facebook is showing a login gate - session is dead"
+            gated = await auto.page.evaluate(LOGIN_GATE_JS)
         except Exception:
-            pass
+            gated = False
+        if gated:
+            # A gate during a watch is the same evidence a login check acts
+            # on, so it goes through the same classifier and the same database
+            # rule: 'disabled' for a disabled account, the reason for anything
+            # else, nothing at all for 'unreachable'. Without this the watch
+            # saw the dead session, said so once, and threw the verdict away -
+            # the profile stayed 'ok' and every later watch opened it again.
+            status = await auto._classify_account_access(auto.page)
+            recorded = db.record_login_check(profile_name, False, status)
+            if status == "disabled_or_suspended":
+                return ("ACCOUNT DISABLED by Facebook"
+                        + (" - marked disabled, dropped from active"
+                           if recorded else ""))
+            why = status.replace("_", " ")
+            return (f"login gate: {why}"
+                    + (" - dropped from active" if recorded else ""))
         try:
             await auto.page.wait_for_selector(
                 "video", timeout=self.WATCH_VERIFY_TIMEOUT_MS)
