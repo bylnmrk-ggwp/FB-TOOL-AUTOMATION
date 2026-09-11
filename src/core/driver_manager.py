@@ -3503,6 +3503,31 @@ class DriverManager:
         return true;
     }"""
 
+    # Facebook's own live viewer figure, straight off the player. It is an
+    # aggregate it recomputes on its own interval, so it never equals the
+    # number of pages open - reading it here is the only way to see both
+    # numbers at once instead of guessing which one is wrong.
+    _WATCH_VIEWERS_JS = """() => {
+        for (const el of document.querySelectorAll('[aria-label]')) {
+            const a = el.getAttribute('aria-label') || '';
+            if (!/currently watching/i.test(a)) continue;
+            const m = a.match(/([\\d.,]+\\s*[KMB]?)\\s+(?:people|person)/i);
+            if (m) return m[1].trim();
+        }
+        return null;
+    }"""
+
+    async def _facebook_viewer_count(self) -> str | None:
+        """What Facebook publicly says is watching, or None if it shows no count."""
+        for auto in list(self._watch_autos.values()):
+            try:
+                got = await auto.page.evaluate(self._WATCH_VIEWERS_JS)
+            except Exception:
+                continue
+            if got:
+                return got
+        return None
+
     async def _keep_watching(self, url: str, deadline: float | None = None):
         """Keep every watch page playing until the watch is stopped.
 
@@ -3607,8 +3632,14 @@ class DriverManager:
                     if deadline is not None:
                         mins = max(0.0, (deadline - loop.time()) / 60.0)
                         left = f", {mins:.0f} min left"
+                    fb = await self._facebook_viewer_count()
+                    # Deliberately side by side. They measure different things
+                    # and will not match: the first is these pages, the second
+                    # is Facebook's own aggregate, which lags and dedupes.
+                    shown = (f"; Facebook shows {fb} watching" if fb
+                             else "; Facebook shows no viewer count")
                     self.log(f"  👁 Watch: {playing}/{len(self._watch_autos)} "
-                             f"page(s) actually playing{left}")
+                             f"page(s) actually playing{left}{shown}")
         except asyncio.CancelledError:
             raise
 
