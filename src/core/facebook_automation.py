@@ -4625,10 +4625,49 @@ class FacebookAutomation:
             self.log(f"Could not verify share status: {e}")
             return True
 
+    async def _back_on_target_post(self, step: str) -> bool:
+        """Make sure the page is still on the post being shared.
+
+        Facebook navigates away by itself - a completed share lands on the new
+        post or bounces to the feed (observed: facebook.com/?__tn__=F-R). Every
+        share step then searched THAT page for a Share button, page-wide, and
+        happily found one belonging to a stranger's feed post: a run shared a
+        post with 102.7K likes, 1675px from the viewport centre, to an
+        account's Story instead of the target video.
+
+        Returns False only when the page is off-target and cannot be brought
+        back, which must abort the step rather than share something else.
+        """
+        target = getattr(self, "_share_post_url", "") or ""
+        if not target:
+            return True                      # nothing to compare against
+        try:
+            current = await self.page.evaluate("window.location.href") or ""
+        except Exception:
+            return True                      # mid-navigation; let the step try
+        post_id = getattr(self, "_target_post_id", None)
+        on_post = bool(post_id) and post_id in current
+        if on_post or (current and current.rstrip("/") == target.rstrip("/")):
+            return True
+        if not self._is_home_url(current) and post_id and post_id in current:
+            return True
+        self.log(f"  ↩️  Page drifted to {current[:70]} before {step} - "
+                 f"returning to the post")
+        try:
+            await self.page.goto(target, timeout=30000,
+                                 wait_until="domcontentloaded")
+            await asyncio.sleep(random.uniform(2, 4))
+            return True
+        except Exception as e:
+            self.log(f"  ⚠️  Could not return to the post: {str(e)[:90]}")
+            return False
+
     async def _share_to_timeline(self) -> bool:
         """Click Share → 'Share Now' to post to timeline.
         Verifies the share was accepted by checking for success/error indicators.
         """
+        if not await self._back_on_target_post("the Timeline share"):
+            return False
         await self._debug_dump("timeline_before_share_btn")
         # Capture URL right before sharing for reliable redirect detection
         try:
@@ -4667,6 +4706,10 @@ class FacebookAutomation:
         """Click Share → 'Your Story' to post to story.
         Verifies the share was accepted by checking for success/error indicators.
         """
+        # The Timeline share almost always moves the page, so this is the step
+        # that was sharing strangers' posts.
+        if not await self._back_on_target_post("the Story share"):
+            return False
         await self._debug_dump("story_before_share_btn")
         # Capture current URL for redirect detection (page may have changed after timeline share)
         try:
@@ -5540,12 +5583,22 @@ class FacebookAutomation:
         if self._target_post_id:
             self.log(f"   Target post/video ID: {self._target_post_id}")
         
+        # Remembered so every later step can put the page back on THIS post.
+        # Facebook navigates away on its own after a share, and each step used
+        # to just search whatever page it landed on.
+        self._share_post_url = post_url
+
         self.log("Navigating to post URL...")
         self.log(f"   URL: {post_url}")
-        
+
         for attempt in range(3):
             try:
-                await self.page.goto(post_url, timeout=30000, wait_until="load")
+                # "load" waits for every subresource, which on a live video
+                # page means the stream itself - it timed out at 30s whenever
+                # the machine was also running a watch. The DOM is all this
+                # flow needs, and the settle sleep below covers the rest.
+                await self.page.goto(post_url, timeout=30000,
+                                     wait_until="domcontentloaded")
                 await asyncio.sleep(random.uniform(2, 4))
                 break
             except Exception as e:
