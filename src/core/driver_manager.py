@@ -2885,6 +2885,34 @@ class DriverManager:
 
     # ── Concurrent batch processing ──────────────────────────
 
+    async def _login_failure(self, auto, profile_name: str) -> dict:
+        """Why did the login check fail: a dead session, or a slow page?
+
+        _is_logged_in() polls for 15s. Under load - eight contexts plus a live
+        watch on the same machine - a page that has simply not finished
+        loading returns False, and that used to be reported as "Not logged in",
+        which demoted the account AND deleted its cached session. Six accounts
+        that had been commenting and sharing minutes earlier were wiped that
+        way in one run.
+
+        record_login_check() already refuses to act on an inconclusive check;
+        this asks the same classifier so that guard can do its job.
+        """
+        try:
+            status = await auto._classify_account_access()
+        except Exception:
+            status = "unknown"
+        if status in ("unreachable", "unknown"):
+            # Deliberately worded to match none of the needs_login keywords:
+            # an inconclusive check must never demote a working account.
+            return {"profile_name": profile_name, "ok": False,
+                    "needs_login": False,
+                    "message": f"could not confirm sign-in ({status}) - "
+                               f"page did not load, profile left active"}
+        return {"profile_name": profile_name, "ok": False,
+                "needs_login": True,
+                "message": f"Not logged in ({status.replace('_', ' ')})"}
+
     async def _do_batch(self, items: list[dict]):
         """Process queue items with all profile pages opened up front.
 
@@ -3096,8 +3124,7 @@ class DriverManager:
                         await auto.go_to_facebook()
                         logged_in = await auto._is_logged_in(timeout=15)
                         if not logged_in:
-                            return {"profile_name": profile_name, "ok": False,
-                                    "message": "Not logged in"}
+                            return await self._login_failure(auto, profile_name)
                         
                         # Debug: Log what we're about to post
                         img_count = len(item.get("image_paths") or [])
@@ -3129,8 +3156,7 @@ class DriverManager:
                         await auto.go_to_facebook()
                         logged_in = await auto._is_logged_in(timeout=15)
                         if not logged_in:
-                            return {"profile_name": profile_name, "ok": False,
-                                    "message": "Not logged in"}
+                            return await self._login_failure(auto, profile_name)
                         
                         ok, msg = await auto.share_post_to_timeline(
                             item["post_url"],
@@ -3141,8 +3167,7 @@ class DriverManager:
                         await auto.go_to_facebook()
                         logged_in = await auto._is_logged_in(timeout=15)
                         if not logged_in:
-                            return {"profile_name": profile_name, "ok": False,
-                                    "message": "Not logged in"}
+                            return await self._login_failure(auto, profile_name)
 
                         ok, msg = await auto.share_post_to_feed(item["post_url"])
                     elif is_story:
@@ -3150,8 +3175,7 @@ class DriverManager:
                         await auto.go_to_facebook()
                         logged_in = await auto._is_logged_in(timeout=15)
                         if not logged_in:
-                            return {"profile_name": profile_name, "ok": False,
-                                    "message": "Not logged in"}
+                            return await self._login_failure(auto, profile_name)
 
                         ok, msg = await auto.share_post_to_story(item["post_url"])
                     else:
@@ -3159,8 +3183,7 @@ class DriverManager:
                         await auto.go_to_facebook()
                         logged_in = await auto._is_logged_in(timeout=15)
                         if not logged_in:
-                            return {"profile_name": profile_name, "ok": False,
-                                    "message": "Not logged in"}
+                            return await self._login_failure(auto, profile_name)
                         
                         ok, msg = await auto.share_post_to_group(
                             item["post_url"], target,
