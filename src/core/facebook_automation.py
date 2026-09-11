@@ -3045,8 +3045,39 @@ class FacebookAutomation:
                             const br = b.getBoundingClientRect();
                             return (ar.width * ar.height) - (br.width * br.height);
                         });
-                    const root = visibleDialogs.find(d => /'s post/i.test(d.innerText || ''))
-                        || document.querySelector('[role="article"]');
+                    // A live or video permalink has no post dialog and no
+                    // [role="article"] at all, and its [role="main"] wraps only
+                    // the player - the action bar sits outside it. So the page
+                    // itself is the container there. That is safe because this
+                    // is a permalink, not the Home feed: there is no other
+                    // post to react to by mistake, and the per-comment icons
+                    // are excluded by size below.
+                    const isVideoPage = /\\/(videos|watch|live)\\//.test(location.pathname)
+                        || /^\\/watch\\/?$/.test(location.pathname)
+                        || /\\/reel\\//.test(location.pathname);
+                    // A container only counts as the post if it actually holds
+                    // a post-sized reaction control. [role="article"] used to be
+                    // taken on faith, and on a live page the FIRST article is a
+                    // comment or a "More like this" card - a DIV with 4 buttons
+                    // and no reaction at all, so the search found nothing.
+                    const hasPostAction = el => {
+                        if (!el) return false;
+                        for (const b of el.querySelectorAll('[role="button"], button')) {
+                            const ba = (b.getAttribute('aria-label') || '').toLowerCase();
+                            const bt = (b.innerText || '').toLowerCase().trim();
+                            const br = b.getBoundingClientRect();
+                            if (br.width < 24 || br.height < 24) continue;
+                            if (ba === 'react' || ba === 'like' ||
+                                ba.startsWith('react with ') || bt === 'like') return true;
+                        }
+                        return false;
+                    };
+                    const rootCandidates = [
+                        visibleDialogs.find(d => /'s post/i.test(d.innerText || '')),
+                        ...document.querySelectorAll('[role="article"]'),
+                        isVideoPage ? document.body : null,
+                    ];
+                    const root = rootCandidates.find(el => el && hasPostAction(el));
                     if (!root) return null;
                     root.id = '_fb_target_post_root';
 
@@ -3072,9 +3103,17 @@ class FacebookAutomation:
                         const r = el.getBoundingClientRect();
                         if (el.offsetParent === null || r.width <= 0 || r.height <= 0) return false;
                         if (r.top >= commentBoundaryY) return false;
-                        // Comment reactions are exposed as a tiny square React
-                        // icon (typically 12x12). They are not the post action.
-                        if (a === 'react' && r.width < 24 && r.height < 24) return false;
+                        // Comment reactions are tiny icons repeated on EVERY
+                        // comment row: 'React' at 12x12 and, in a live video's
+                        // chat list, 'Like' at 16x16 - one pair per comment.
+                        // They are not the post action. Only 'react' used to be
+                        // excluded, so on a live page the first comment's 16x16
+                        // 'Like' scored the same 80 as the real 38x34 post
+                        // button and won on DOM order.
+                        const TINY_ICON_LABELS = ['react', 'like', 'love', 'care',
+                                                  'haha', 'wow', 'sad', 'angry'];
+                        if (TINY_ICON_LABELS.includes(a) && r.width < 24 && r.height < 24)
+                            return false;
                         if (a.includes('people') || a.includes('like this') ||
                             a.includes('reaction;') || a.includes('reactions;')) return false;
                         // A numeric/text value on aria="Like" is normally the
@@ -3104,7 +3143,16 @@ class FacebookAutomation:
                         if (el.closest('[role="article"]')) points += 300;
                         return points;
                     };
-                    candidates.sort((x, y) => score(y) - score(x));
+                    // Equal scores used to fall back to DOM order, which puts a
+                    // comment row above the post's own action bar. Prominence
+                    // breaks the tie instead: the post button is the big one.
+                    candidates.sort((x, y) => {
+                        const d = score(y) - score(x);
+                        if (d) return d;
+                        const rx = x.getBoundingClientRect();
+                        const ry = y.getBoundingClientRect();
+                        return (ry.width * ry.height) - (rx.width * rx.height);
+                    });
                     const like = candidates[0];
                     if (!like) return null;
                     like.scrollIntoView({block: 'center'});
@@ -3137,10 +3185,18 @@ class FacebookAutomation:
                 const pressed = el.getAttribute('aria-pressed') === 'true';
                 const names = ['like', 'love', 'care', 'haha', 'wow', 'sad', 'angry'];
                 for (const name of names) {
-                    if ((pressed && (a.includes(name) || t === name)) ||
-                        a === name || a.startsWith(name + ' ') ||
-                        (a.includes('remove') && a.includes(name)) ||
-                        (t === name && name !== 'like')) return name;
+                    // Unambiguous however it is labelled.
+                    if (a.includes('remove') && a.includes(name)) return name;
+                    if (pressed && (a.includes(name) || t === name)) return name;
+                    // A bare label of a NON-default reaction is the one already
+                    // selected. 'like' is excluded on purpose: an UNREACTED
+                    // button is labelled exactly "Like", so treating that as an
+                    // existing reaction reported every post as already liked and
+                    // never clicked. Only the search step may read a bare "Like",
+                    // and it reads it as the button to press.
+                    if (name !== 'like' &&
+                        (a === name || a.startsWith(name + ' ') || t === name))
+                        return name;
                 }
                 if (a.includes('unlike')) return 'like';
                 return null;
