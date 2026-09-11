@@ -44,28 +44,11 @@ class ShareTab(ttk.Frame):
         pad = {"padx": 12, "pady": 4}
 
         # ── Scrollable container ──────────────────────────
-        self._canvas = tk.Canvas(self, bg=theme.get()["bg"],
-                                 highlightthickness=0, borderwidth=0)
-        self._vbar = ttk.Scrollbar(self, orient="vertical",
-                                   command=self._canvas.yview)
-        self._canvas.configure(yscrollcommand=self._vbar.set)
-        self._vbar.pack(side="right", fill="y")
-        self._canvas.pack(side="left", fill="both", expand=True)
-
-        body = ttk.Frame(self._canvas)
-        self._canvas._body_window = self._canvas.create_window(
-            (0, 0), window=body, anchor="nw")
-        body.bind(
-            "<Configure>",
-            lambda e: self._canvas.configure(
-                scrollregion=self._canvas.bbox("all")))
-        self._canvas.bind(
-            "<Configure>",
-            lambda e: self._canvas.itemconfigure(
-                self._canvas._body_window, width=e.width))
-        # Wheel scrolling is handled by the app-wide router (see effects.py)
-        from src.ui.effects import register_wheel_target
-        register_wheel_target(self._canvas)
+        from src.ui.scroll_container import ScrollFrame
+        self._scroll = ScrollFrame(self)
+        self._scroll.pack(fill="both", expand=True)
+        self._canvas = self._scroll.canvas
+        body = self._scroll.interior
 
         # ── Share form card ───────────────────────────────
         form_card = ttk.Frame(body, style="Card.TFrame")

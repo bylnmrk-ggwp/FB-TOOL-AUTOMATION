@@ -29,6 +29,9 @@ class MemoryMonitorTab(ttk.Frame):
         self.manager = manager
         self._after_id = None
         self._paused = False
+        # The shell reads the same stats for its status-bar readout, so one
+        # psutil scan per second serves both surfaces.
+        self._on_stats_cb = None
         self._build_ui()
         self.apply_theme(theme.get())
         self._schedule_poll()
@@ -80,9 +83,13 @@ class MemoryMonitorTab(ttk.Frame):
         # ── Per-profile breakdown ───────────────────────
         list_card = ttk.Frame(self, style="Card.TFrame", padding=10)
         list_card.pack(fill="both", expand=True, padx=12, pady=(8, 4))
-        ttk.Label(list_card, text="Per-Profile Memory",
-                  style="Heading.TLabel", background=theme.get()["card"]
-                  ).pack(anchor="w")
+        # The card fill is an explicit override, so apply_theme must
+        # re-apply it: the style alone would leave a page-coloured box on
+        # the card after a theme switch.
+        self._list_heading = ttk.Label(list_card, text="Per-Profile Memory",
+                                       style="Heading.TLabel",
+                                       background=theme.get()["card"])
+        self._list_heading.pack(anchor="w")
 
         list_wrap = ttk.Frame(list_card)
         list_wrap.pack(fill="both", expand=True, pady=(6, 0))
@@ -136,6 +143,7 @@ class MemoryMonitorTab(ttk.Frame):
         # full-bleed amber slab.
         self._warn_frame.configure(bg=colors["surface"])
         self._warn_label.configure(bg=colors["surface"], fg=colors["warning"])
+        self._list_heading.configure(background=colors["card"])
         # Profile list
         self._profile_list.configure(
             bg=colors["list_bg"], fg=colors["list_fg"],
@@ -184,6 +192,10 @@ class MemoryMonitorTab(ttk.Frame):
 
     # ── Data rendering ─────────────────────────────────
 
+    def set_on_stats(self, callback):
+        """Receive every stats dict this monitor renders."""
+        self._on_stats_cb = callback
+
     def _refresh(self):
         if self.manager is None:
             self._show_unavailable("Driver manager not connected")
@@ -194,6 +206,11 @@ class MemoryMonitorTab(ttk.Frame):
             self._show_unavailable("Could not read memory stats")
             return
         self._render(stats)
+        if self._on_stats_cb:
+            try:
+                self._on_stats_cb(stats)
+            except Exception:
+                pass
 
     def _render(self, stats: dict):
         system = stats.get("system_memory", {}) or {}

@@ -45,37 +45,20 @@ class QueueTab(ttk.Frame):
         card.columnconfigure(0, weight=1)
         card.rowconfigure(0, weight=1)
 
-        # Scrollable canvas for tall content
-        canvas = tk.Canvas(card, borderwidth=0, highlightthickness=0,
-                          bg=theme.get()["canvas_bg"])
-        self._canvas = canvas
-        scrollbar = ttk.Scrollbar(card, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-
-        scrollable_frame = ttk.Frame(canvas)
-        scrollable_frame.bind("<Configure>",
-                              lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        # Scrollable surface for tall content. ScrollFrame stretches short
+        # content to the viewport, so the queue list below can grow with the
+        # window, and hides its bar when nothing scrolls.
+        from src.ui.scroll_container import ScrollFrame
+        self._scroll = ScrollFrame(card, bg_key="canvas_bg")
+        self._scroll.grid(row=0, column=0, sticky="nsew")
+        self._canvas = self._scroll.canvas
+        # The viewport is the only width that does not depend on what the
+        # dot grid lays out, so the column count has to be derived here.
+        self._canvas.bind("<Configure>", self._on_status_frame_resize, add="+")
 
         # Inner frame with padding so content doesn't touch canvas edges
-        inner = ttk.Frame(scrollable_frame)
+        inner = ttk.Frame(self._scroll.interior)
         inner.pack(fill="both", expand=True, padx=12, pady=10)
-
-        canvas_window = canvas.create_window((0, 0), window=scrollable_frame,
-                                             anchor="nw", tags="inner")
-
-        def _configure_canvas(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-            # The viewport is the only width that does not depend on what the
-            # dot grid lays out, so the column count has to be derived here.
-            self._on_status_frame_resize(event)
-        canvas.bind("<Configure>", _configure_canvas)
-
-        # Wheel scrolling is handled by the app-wide router (see effects.py)
-        from src.ui.effects import register_wheel_target
-        register_wheel_target(canvas)
 
         ttk.Label(inner, text="Share Queue",
                   style="Header.TLabel").pack(anchor="w", **pad)

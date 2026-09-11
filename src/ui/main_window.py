@@ -14,12 +14,21 @@ from src.ui.scroll_container import ScrollFrame
 
 class MainWindow(tk.Tk):
     def __init__(self, driver_manager=None):
+        # Must precede Tk(): Windows fixes a process's DPI mode at its first
+        # window. See theme.enable_dpi_awareness for what it changes.
+        theme.enable_dpi_awareness()
         super().__init__()
         self.manager = driver_manager
 
+        # Tk scales point-sized fonts to the screen DPI by itself; pixel
+        # geometry it does not, so the window is sized in 96-DPI units and
+        # multiplied by the measured ratio to keep its physical size.
+        self._dpi = self.winfo_fpixels("1i") / 96.0
+        px = self.px
+
         self.title("FB TOOL AUTOMATION")
-        self.minsize(1100, 700)
-        self.geometry("1280x860")
+        self.minsize(px(1100), px(700))
+        self.geometry(f"{px(1280)}x{px(860)}")
 
         # Resolve best available fonts for this system (Poppins → Segoe UI)
         theme.resolve_fonts(self)
@@ -33,6 +42,10 @@ class MainWindow(tk.Tk):
         self._build_ui()
         self._start_queue_polling()
 
+    def px(self, n: int) -> int:
+        """Scale a 96-DPI pixel measure to the running display."""
+        return int(round(n * self._dpi))
+
     # ── Theme ──────────────────────────────────────────────
 
     def _apply_theme(self):
@@ -44,7 +57,7 @@ class MainWindow(tk.Tk):
             pass
 
         style.configure(".", background=c["bg"], foreground=c["fg"],
-                        font=(theme.UI_FONT, 10))
+                        font=theme.font("body"))
         style.configure("TFrame", background=c["bg"])
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
 
@@ -128,93 +141,85 @@ class MainWindow(tk.Tk):
                   lightcolor=[("focus", c["accent"])],
                   darkcolor=[("focus", c["accent"])])
 
-        style.configure("TSpinbox", fieldbackground=c["input_bg"],
-                        foreground=c["input_fg"], arrowcolor=c["muted"],
-                        buttonbackground=c["input_bg"],
-                        bordercolor=c["border"], lightcolor=c["border"],
-                        darkcolor=c["border"],
-                        borderwidth=1, padding=(6, 4))
-        style.map("TSpinbox",
-                  bordercolor=[("focus", c["accent"])],
-                  lightcolor=[("focus", c["accent"])],
-                  darkcolor=[("focus", c["accent"])])
 
-        # ── Notebook tabs ────────────────────────────────
-        # Tabs read as text, not as boxes: clam's default tab layout draws a
-        # raised border on every state, so the border element is dropped from
-        # the layout and selection is carried by colour and weight alone.
-        style.configure("TNotebook", background=c["bg"], borderwidth=0,
-                        tabmargins=(8, 4, 8, 0),
-                        bordercolor=c["bg"], lightcolor=c["bg"],
-                        darkcolor=c["bg"])
-        try:
-            style.layout("TNotebook.Tab", [
-                ("Notebook.tab", {"sticky": "nswe", "children": [
-                    ("Notebook.padding", {"side": "top", "sticky": "nswe",
-                                          "children": [
-                        ("Notebook.label", {"side": "top", "sticky": ""}),
-                    ]}),
-                ]}),
-            ])
-        except tk.TclError:
-            pass
-        style.configure("TNotebook.Tab", background=c["bg"],
-                        foreground=c["muted"], padding=(14, 9), borderwidth=0,
-                        focuscolor=c["bg"], font=(theme.UI_FONT, 10),
-                        bordercolor=c["bg"], lightcolor=c["bg"],
-                        darkcolor=c["bg"])
-        style.map("TNotebook.Tab",
-                  background=[("selected", c["bg"]), ("active", c["bg"])],
-                  foreground=[("selected", c["accent"]), ("active", c["fg"])],
-                  bordercolor=[("selected", c["bg"]), ("active", c["bg"])],
-                  lightcolor=[("selected", c["bg"]), ("active", c["bg"])],
-                  darkcolor=[("selected", c["bg"]), ("active", c["bg"])],
-                  font=[("selected", (theme.UI_FONT, 10, "bold"))])
+        # ── Shell ────────────────────────────────────────
+        # Top bar, rail, drawer and status bar are flat regions separated by
+        # fill, never by borders. Section navigation is text: the active
+        # section is carried by colour and weight alone, like the tabs were.
+        style.configure("TopBar.TFrame", background=c["toolbar_bg"])
+        style.configure("Wordmark.TLabel", background=c["toolbar_bg"],
+                        foreground=c["heading"],
+                        font=theme.font("title", "bold"))
+        style.configure("Nav.TButton", background=c["toolbar_bg"],
+                        foreground=c["muted"], borderwidth=0, relief="flat",
+                        focusthickness=0, font=theme.font("body"),
+                        padding=(theme.SPACE["md"], theme.SPACE["sm"]))
+        style.map("Nav.TButton",
+                  background=[("pressed", c["header_pressed"]),
+                              ("active", c["header_hover"])],
+                  foreground=[("active", c["fg"])],
+                  cursor=[("!disabled", "hand2")])
+        style.configure("NavActive.TButton", background=c["toolbar_bg"],
+                        foreground=c["accent"], borderwidth=0, relief="flat",
+                        focusthickness=0, font=theme.font("body", "bold"),
+                        padding=(theme.SPACE["md"], theme.SPACE["sm"]))
+        style.map("NavActive.TButton",
+                  background=[("pressed", c["toolbar_bg"]),
+                              ("active", c["toolbar_bg"])],
+                  foreground=[("active", c["accent"])])
+        style.configure("Drawer.TFrame", background=c["surface"])
+        style.configure("DrawerToggle.TButton", background=c["surface"],
+                        foreground=c["muted"], borderwidth=0, relief="flat",
+                        focusthickness=0, font=theme.font("small", "bold"),
+                        padding=(theme.SPACE["md"], theme.SPACE["xs"]))
+        style.map("DrawerToggle.TButton",
+                  background=[("pressed", c["border"]),
+                              ("active", c["border"])],
+                  foreground=[("active", c["fg"])],
+                  cursor=[("!disabled", "hand2")])
+        style.configure("StatusBar.Horizontal.TProgressbar",
+                        troughcolor=c["track"], background=c["accent"],
+                        bordercolor=c["track"], lightcolor=c["accent"],
+                        darkcolor=c["accent"], borderwidth=0, thickness=6)
 
         # ── Labels ───────────────────────────────────────
         # Section headings differ from body text by weight, not by size, so a
         # screen of stacked sections keeps one type scale.
-        style.configure("Heading.TLabel", font=(theme.UI_FONT, 10, "bold"),
+        style.configure("Heading.TLabel", font=theme.font("body", "bold"),
                         foreground=c["heading"])
-        style.configure("Header.TLabel", font=(theme.UI_FONT, 10, "bold"),
+        style.configure("Header.TLabel", font=theme.font("body", "bold"),
                         foreground=c["heading"])
         style.configure("Status.TLabel", foreground=c["status"])
-        style.configure("Success.TLabel", foreground=c["success"])
-        style.configure("Error.TLabel", foreground=c["error"])
         style.configure("Muted.TLabel", foreground=c["muted"])
         style.configure("StatusDot.TLabel", font=(theme.UI_FONT, 14))
         # Labels placed on a Card.TFrame: a ttk label defaults to the page
         # background, which draws a box of the wrong colour on a card.
-        style.configure("Card.TLabel", background=c["card"])
         style.configure("CardMuted.TLabel", background=c["card"],
                         foreground=c["muted"])
         style.configure("CardValue.TLabel", background=c["card"],
                         foreground=c["heading"],
-                        font=(theme.UI_FONT, 18, "bold"))
+                        font=theme.font("display", "bold"))
 
         # ── Frames ───────────────────────────────────────
         # One boundary per section. A card is separated from the page by its
         # own fill, so it carries no border as well.
         style.configure("Card.TFrame", background=c["card"], relief="flat",
                         borderwidth=0)
-        # Header.TFrame still backs the action strip overlaid on the tab row;
-        # AppTitle/AppSubtitle went with the title band that used to carry them.
-        style.configure("Header.TFrame", background=c["bg"])
         style.configure("StatusBar.TFrame", background=c["status_bg"],
                         relief="flat", borderwidth=0)
         style.configure("StatusBar.TLabel",
-                        font=(theme.UI_FONT, 9),
+                        font=theme.font("small"),
                         background=c["status_bg"], foreground=c["status"])
 
         # ── Separator / scrollbar / progress ────────────
         style.configure("TSeparator", background=c["border"])
 
-        # ── Paned windows (2-tab consolidated layout) ────
+        # ── Paned window (rail | content) ────────────────
         style.configure("TPanedwindow", background=c["bg"])
         style.configure("Sash", sashthickness=8, gripcount=0,
                         background=c["bg"])
         style.configure("SectionTitle.TLabel",
-                        font=(theme.UI_FONT, 9, "bold"),
+                        font=theme.font("small", "bold"),
                         foreground=c["muted"])
 
         # clam's scrollbar layout includes two stepper arrows, which is where
@@ -261,11 +266,12 @@ class MainWindow(tk.Tk):
         self._apply_theme()
         self.theme_btn.config(text="Dark" if mode == "light" else "Light")
         self._retheme_tabs()
+        self._show_section(self._section)  # nav styles are theme-bound
 
     def _retheme_tabs(self):
         """Push the active palette into raw-tk widgets in every tab."""
         for tab in (self.profiles_tab, self.queue_tab, self.share_tab,
-                    self.memory_tab, self.log_tab, self._profiles_scroll):
+                    self.memory_tab, self.log_tab, self._rail):
             apply_theme = getattr(tab, "apply_theme", None)
             if callable(apply_theme):
                 try:
@@ -275,74 +281,103 @@ class MainWindow(tk.Tk):
 
     # ── UI Build ──────────────────────────────────────────────
 
+    SECTIONS = (("queue", "Queue"), ("compose", "Compose"),
+                ("monitor", "Monitor"))
+
     def _build_ui(self):
-        # ── Bottom status bar ───────────────────────────────
+        S = theme.SPACE
+        px = self.px
+
+        # ── Status bar (bottom, packed first so it always owns the strip) ──
         statusbar = ttk.Frame(self, style="StatusBar.TFrame")
         statusbar.pack(side="bottom", fill="x")
         self._sb_left = ttk.Label(statusbar, text="Ready",
                                   style="StatusBar.TLabel")
-        self._sb_left.pack(side="left", padx=16, pady=3)
+        self._sb_left.pack(side="left", padx=S["lg"], pady=S["xs"] - 1)
         self._sb_right = ttk.Label(statusbar, text="",
                                    style="StatusBar.TLabel")
-        self._sb_right.pack(side="right", padx=16, pady=3)
+        self._sb_right.pack(side="right", padx=S["lg"], pady=S["xs"] - 1)
+        # Run progress lives here, not at the bottom of a scroll surface, so
+        # it is visible from every section for the whole run. Hidden until a
+        # run starts.
+        self._sb_progress = ttk.Progressbar(
+            statusbar, style="StatusBar.Horizontal.TProgressbar",
+            orient="horizontal", mode="determinate", length=px(160))
+        self._sb_progress_text = ttk.Label(statusbar, text="",
+                                           style="StatusBar.TLabel")
+        self._progress_shown = False
+        self._ram_text = ""
 
-        # There is no title band: the OS title bar already names the app, so a
-        # second copy of the name plus a tagline was ~100px of pure chrome.
-        # The notebook starts at the top of the window instead.
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=8, pady=(4, 8))
-
-        # Session-level actions share the tab strip's row rather than owning a
-        # band of their own. They are placed over the notebook (not packed
-        # beside it) because the tab strip belongs to the notebook itself and
-        # the strip's right-hand side is otherwise dead space.
-        self._topbar = ttk.Frame(self)
-        self._topbar.place(in_=self.notebook, relx=1.0, x=-10, y=6,
-                           anchor="ne")
-
-        self.logout_btn = ttk.Button(self._topbar, text="Log Out",
-                                     command=self._on_logout,
-                                     style="Header.TButton")
-        self.logout_btn.pack(side="left")
+        # ── Top bar: wordmark · section nav · session actions ─────────────
+        topbar = ttk.Frame(self, style="TopBar.TFrame")
+        topbar.pack(side="top", fill="x")
+        ttk.Label(topbar, text="AutoShare", style="Wordmark.TLabel").pack(
+            side="left", padx=(S["lg"], S["xl"]), pady=S["sm"])
+        nav = ttk.Frame(topbar, style="TopBar.TFrame")
+        nav.pack(side="left")
+        self._nav_buttons = {}
+        for key, label in self.SECTIONS:
+            btn = ttk.Button(nav, text=label, style="Nav.TButton",
+                             command=lambda k=key: self._show_section(k))
+            btn.pack(side="left")
+            self._nav_buttons[key] = btn
 
         self.theme_btn = ttk.Button(
-            self._topbar,
-            text="Dark" if theme.current == "light" else "Light",
-            command=self._toggle_theme,
-            style="Header.TButton")
-        self.theme_btn.pack(side="left")
+            topbar, text="Dark" if theme.current == "light" else "Light",
+            command=self._toggle_theme, style="Header.TButton")
+        self.theme_btn.pack(side="right", padx=(0, S["md"]))
+        # Log Out closes every profile's browser mid-run; it does not sit
+        # flush against the theme toggle.
+        self.logout_btn = ttk.Button(topbar, text="Log Out",
+                                     command=self._on_logout,
+                                     style="Header.TButton")
+        self.logout_btn.pack(side="right", padx=(0, S["lg"]))
 
-        # ── Tab 1: Workspace — Profiles | Queue, Log strip below ──
-        self.workspace_pane = ttk.PanedWindow(self.notebook, orient="vertical")
-        self.work_hpane = ttk.PanedWindow(self.workspace_pane,
-                                          orient="horizontal")
-        self.workspace_pane.add(self.work_hpane, weight=4)
+        # ── Log drawer (above the status bar, below the body) ─────────────
+        # A drawer with a toggle that is always on screen, replacing a pane
+        # that could be dragged to zero height with no way to restore it.
+        from src.storage import config_manager as cfg
+        drawer = ttk.Frame(self, style="Drawer.TFrame")
+        drawer.pack(side="bottom", fill="x")
+        strip = ttk.Frame(drawer, style="Drawer.TFrame")
+        strip.pack(fill="x")
+        self._drawer_btn = ttk.Button(strip, style="DrawerToggle.TButton",
+                                      command=self._toggle_drawer)
+        self._drawer_btn.pack(side="left")
+        self._drawer_body = ttk.Frame(drawer, height=px(220))
+        self._drawer_body.pack_propagate(False)
+        self.log_tab = LogTab(self._drawer_body)
+        self.log_tab.pack(fill="both", expand=True)
+        self._drawer_open = None
+        self._set_drawer(cfg.get_setting("ui_log_open", "1") == "1")
 
-        # Profiles pane scrolls when the pane is shorter than its content
-        self._profiles_scroll = ScrollFrame(self.work_hpane)
-        self.profiles_tab = ProfilesTab(self._profiles_scroll.interior)
+        # ── Body: profiles rail | content ─────────────────────────────────
+        self.body = ttk.PanedWindow(self, orient="horizontal")
+        self.body.pack(fill="both", expand=True, padx=S["sm"], pady=S["xs"])
+
+        # The rail hosts ProfilesTab as-is for now; Phase B turns it into the
+        # selection model every action reads.
+        self._rail = ScrollFrame(self.body)
+        self.profiles_tab = ProfilesTab(self._rail.interior)
         self.profiles_tab.pack(fill="both", expand=True)
-        self.work_hpane.add(self._profiles_scroll, weight=45)
+        self.body.add(self._rail, weight=0)
 
-        self.queue_tab = QueueTab(self.work_hpane)
-        self.work_hpane.add(self.queue_tab, weight=55)
+        content = ttk.Frame(self.body)
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+        self.body.add(content, weight=1)
 
-        self.log_tab = LogTab(self.workspace_pane)
-        self.workspace_pane.add(self.log_tab, weight=1)
-
-        self.notebook.add(self.workspace_pane, text="  Workspace  ")
-
-        # ── Tab 2: Share Center — Share form, Memory strip below ──
-        self.share_pane = ttk.PanedWindow(self.notebook, orient="vertical")
-        self.share_tab = ShareTab(self.share_pane)
-        self.share_pane.add(self.share_tab, weight=3)
-        self.memory_tab = MemoryMonitorTab(self.share_pane,
-                                           manager=self.manager)
-        self.share_pane.add(self.memory_tab, weight=1)
-        self.notebook.add(self.share_pane, text="  Share Center  ")
-
-        # Bind AFTER both tabs exist so the event never fires mid-build
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
+        # One frame per section, stacked in the same cell and raised.
+        self.queue_tab = QueueTab(content)
+        self.share_tab = ShareTab(content)
+        self.memory_tab = MemoryMonitorTab(content, manager=self.manager)
+        self._sections = {"queue": self.queue_tab,
+                          "compose": self.share_tab,
+                          "monitor": self.memory_tab}
+        for frame in self._sections.values():
+            frame.grid(row=0, column=0, sticky="nsew")
+        self._section = None
+        self._show_section("queue")
 
         # One app-wide mousewheel router serving every scrollable pane
         effects.install_wheel_router(self)
@@ -350,61 +385,124 @@ class MainWindow(tk.Tk):
         # Auto-load saved groups from database on startup
         self.after(200, self._load_saved_groups)
 
-        # Position pane sashes once the window is mapped
-        self._sashes_done = False
-        self.after(120, self._init_sashes)
+        # Rail width: the saved value, else a share of the window. Set once
+        # the pane is laid out, since sashpos() clamps to the current size.
+        self._rail_done = False
+        self.after(120, self._init_rail)
+        self.body.bind("<ButtonRelease-1>", self._save_rail_width)
 
         # Connect tab callbacks to manager methods
         self._connect_callbacks()
+        # The shell's RAM readout rides on the monitor's own poll.
+        self.memory_tab.set_on_stats(self._on_memory_stats)
 
         # Raw-tk widgets build with light defaults — sync them with the
         # saved theme immediately (previously only done on toggle, which
         # left white listboxes/text areas when starting in dark mode).
         self._retheme_tabs()
 
-    def _init_sashes(self, attempts: int = 0):
-        """Set initial sash positions — pane weights only govern how extra
-        space is distributed on resize, not the starting split.
+    # ── Shell behaviour ───────────────────────────────────────
 
-        sashpos() clamps against the pane's CURRENT size, so this must not
-        run until the panes are actually laid out (they report ~1px before
-        then, which would collapse the top pane to nothing).
-        """
-        if self._sashes_done:
-            return
-        h_ws = self.workspace_pane.winfo_height()
-        w_hp = self.work_hpane.winfo_width()
-        if h_ws < 300 or w_hp < 500:
-            if attempts < 25:  # keep trying for ~3s, then give up gracefully
-                self.after(120, lambda: self._init_sashes(attempts + 1))
-            else:
-                self._sashes_done = True
-            return
+    def _show_section(self, key: str):
+        self._section = key
+        for k, btn in self._nav_buttons.items():
+            btn.configure(style="NavActive.TButton" if k == key
+                          else "Nav.TButton")
+        self._sections[key].tkraise()
+        # Per-section refresh, as the tab-change handler used to do.
         try:
-            # Profiles pane needs ~620px before its button grid clips
-            self.work_hpane.sashpos(0, min(620, max(380, w_hp // 2)))
-            # ~260px log strip below the Profiles | Queue pair
-            self.workspace_pane.sashpos(0, max(400, h_ws - 260))
+            if key == "queue":
+                self.queue_tab.refresh_profiles()
+            elif key == "monitor":
+                self.memory_tab._refresh_now()
         except Exception:
             pass
-        self._sashes_done = True
-        self._init_share_sash()
 
-    def _init_share_sash(self):
-        """Position the Share Center sash. The share pane is unmapped until
-        its tab is first selected (height 1), so retry from _on_tab_change."""
-        if getattr(self, "_share_sash_done", False):
+    def _set_drawer(self, open_: bool):
+        if open_ == self._drawer_open:
             return
-        h_sh = self.share_pane.winfo_height()
-        if h_sh < 300:
-            return  # tab not visible yet — _on_tab_change retries
+        self._drawer_open = open_
+        if open_:
+            self._drawer_body.pack(fill="x")
+            self._drawer_btn.configure(text="▾  Log")
+        else:
+            self._drawer_body.pack_forget()
+            self._drawer_btn.configure(text="▸  Log")
+
+    def _toggle_drawer(self):
+        self._set_drawer(not self._drawer_open)
+        from src.storage import config_manager as cfg
+        cfg.save_setting("ui_log_open", "1" if self._drawer_open else "0")
+
+    def _init_rail(self, attempts: int = 0):
+        """Place the rail sash once the body has a real width."""
+        if self._rail_done:
+            return
+        w = self.body.winfo_width()
+        if w < self.px(500):
+            if attempts < 25:  # keep trying for ~3s, then give up gracefully
+                self.after(120, lambda: self._init_rail(attempts + 1))
+            else:
+                self._rail_done = True
+            return
+        from src.storage import config_manager as cfg
         try:
-            # ~310px memory strip under the share form
-            self.share_pane.sashpos(0, max(380, h_sh - 310))
-            self._share_sash_done = True
+            saved = int(cfg.get_setting("ui_rail_width", "0"))
+        except (TypeError, ValueError):
+            saved = 0
+        # Phase A hosts the whole ProfilesTab in the rail, and its button
+        # grid clips below ~380 (96-DPI) px. The Phase B rail is a plain
+        # selection list and narrows this range.
+        lo, hi = self.px(380), self.px(620)
+        width = saved if lo <= saved <= hi else max(lo, min(hi, w * 30 // 100))
+        try:
+            self.body.sashpos(0, width)
         except Exception:
-            self._share_sash_done = True
-    
+            pass
+        self._rail_done = True
+
+    def _save_rail_width(self, _event=None):
+        if not self._rail_done:
+            return
+        try:
+            pos = self.body.sashpos(0)
+        except Exception:
+            return
+        from src.storage import config_manager as cfg
+        cfg.save_setting("ui_rail_width", str(pos))
+
+    def _set_progress(self, done: int, total: int):
+        """Drive the status-bar progress bar; hide it when no run is on."""
+        show = total > 0 and done < total
+        if show:
+            self._sb_progress.configure(maximum=total, value=done)
+            self._sb_progress_text.configure(text=f"{done}/{total}")
+            if not self._progress_shown:
+                self._sb_progress_text.pack(side="right",
+                                            padx=(0, theme.SPACE["lg"]))
+                self._sb_progress.pack(side="right",
+                                       padx=(0, theme.SPACE["sm"]))
+                self._progress_shown = True
+        elif self._progress_shown:
+            self._sb_progress.pack_forget()
+            self._sb_progress_text.pack_forget()
+            self._progress_shown = False
+
+    def _on_memory_stats(self, stats: dict):
+        system = stats.get("system_memory", {}) or {}
+        total = system.get("total_gb", 0) or 0
+        used = system.get("used_gb", 0) or 0
+        procs = stats.get("process_count", None)
+        if not stats.get("has_psutil") or total <= 0:
+            text = ""
+        else:
+            text = f"RAM {used:.1f}/{total:.1f} GB"
+            if isinstance(procs, int):
+                text += f"   •   {procs} proc"
+        if text != self._ram_text:
+            self._ram_text = text
+            self._update_status_counts()
+
     def _connect_callbacks(self):
         """Connect UI callbacks to manager methods."""
         if not self.manager:
@@ -489,6 +587,8 @@ class MainWindow(tk.Tk):
             n_active = n_profiles = 0
         text = (f"Profiles: {n_profiles}   •   Active: {n_active}"
                 f"   •   Queue: {n_queue}")
+        if self._ram_text:
+            text += f"   •   {self._ram_text}"
         if self._sb_right.cget("text") != text:
             self._sb_right.config(text=text)
         # Profiles and Queue now share a tab — refresh the queue's
@@ -703,6 +803,7 @@ class MainWindow(tk.Tk):
             total = result.get("total", 1)
             message = result.get("message", "")
             self.queue_tab.update_progress(current, total)
+            self._set_progress(current, total)
             self.queue_tab.set_status(message)
             self.log_tab.write(message)
 
@@ -869,6 +970,7 @@ class MainWindow(tk.Tk):
             total = result.get("total", 0)
             self.queue_tab.set_running(False)
             self.queue_tab.update_progress(total, total)
+            self._set_progress(total, total)
             self.queue_tab.set_status(f"Done — {total} item(s) processed")
             self.queue_tab.clear_all()
             self.log_tab.write(f"Batch complete: {total} item(s) processed")
@@ -915,16 +1017,4 @@ class MainWindow(tk.Tk):
         self._set_activity("Logging out...")
         if self.manager:
             self.manager.logout()
-
-    def _on_tab_change(self, event=None):
-        try:
-            sel = self.nametowidget(self.notebook.select())
-            if sel is self.workspace_pane:
-                self.queue_tab.refresh_profiles()
-            elif sel is self.share_pane:
-                self.memory_tab._refresh_now()
-                # First time the tab shows, its pane finally has a size
-                self.after(60, self._init_share_sash)
-        except Exception:
-            pass
 

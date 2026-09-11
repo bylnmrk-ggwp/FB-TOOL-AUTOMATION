@@ -87,30 +87,13 @@ class ImagePickerDialog:
         canvas_frame.columnconfigure(0, weight=1)
         canvas_frame.rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(canvas_frame, borderwidth=0, highlightthickness=0,
-                          bg=theme.get()["canvas_bg"])
-        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollable = ttk.Frame(canvas)
-        scrollable.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")))
-
-        canvas_window = canvas.create_window((0, 0), window=scrollable,
-                                            anchor="nw", tags="inner")
-
-        def _configure_canvas(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-        canvas.bind("<Configure>", _configure_canvas)
-
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-
-        # Wheel scrolling via the app-wide router — a local unbind_all here
-        # used to break wheel scrolling for the whole app after the dialog
-        # closed.
-        from src.ui.effects import register_wheel_target
-        register_wheel_target(canvas)
+        # ScrollFrame registers with the app-wide wheel router itself; a local
+        # unbind_all here used to break wheel scrolling for the whole app
+        # after the dialog closed.
+        from src.ui.scroll_container import ScrollFrame
+        wrap = ScrollFrame(canvas_frame, bg_key="canvas_bg")
+        wrap.grid(row=0, column=0, sticky="nsew")
+        scrollable = wrap.interior
 
         # Populate thumbnails
         cols = 3

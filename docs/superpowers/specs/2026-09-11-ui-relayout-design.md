@@ -79,7 +79,13 @@ across 9–12pt. Monospace preference becomes Cascadia Mono, then Consolas.
 
 The app is DPI-unaware. On a 1920×1080 display at 125% scaling Windows
 bitmap-stretches the whole window, so every glyph is resampled.
-`SetProcessDpiAwareness(2)` is called before `Tk()`.
+`SetProcessDpiAwareness(1)` is called before `Tk()`. Level 1 (system DPI
+aware), not level 2: measured on this display both levels give Tk the same
+120 DPI and the same 23px Segoe UI linespace, but Tk 8.6 has no per-monitor
+rescale path, so level 2 would leave the window mis-sized after a move
+between monitors of different scale. With awareness on, Tk scales point-sized
+fonts itself; window geometry in pixels is multiplied by the measured DPI
+ratio so the window keeps its physical size.
 
 Dead code removed: seven palette keys per mode with no consumer, five ttk
 styles that are configured on every theme switch but never applied, and the
@@ -103,9 +109,13 @@ new shell **unchanged**; their public APIs are untouched.
 - DPI awareness
 - new shell: top bar, rail host, content host, log drawer, status bar
 - status bar gains a progress bar and a RAM readout
-- `ScrollFrame` gains height management, horizontal scrolling and scrollbar
+- `ScrollFrame` gains fill-to-viewport height management and scrollbar
   auto-hide; the three hand-rolled copies in `queue_tab.py:49-78`,
-  `share_tab.py:47-68` and `image_picker.py:90-113` are replaced by it
+  `share_tab.py:47-68` and `image_picker.py:90-113` are replaced by it.
+  Horizontal scrolling is deferred to Phase C: every current surface is a
+  vertical stack of forms whose width is pinned to the viewport on purpose,
+  and the only content that needs a horizontal path is the queue table that
+  Phase C introduces.
 
 In Phase A the rail hosts `ProfilesTab` as-is and the three sections host
 `QueueTab`, `ShareTab` and `MemoryMonitorTab`. Splitting `ProfilesTab` into a
