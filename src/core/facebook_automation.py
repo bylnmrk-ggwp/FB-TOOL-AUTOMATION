@@ -4571,7 +4571,13 @@ class FacebookAutomation:
         that Facebook uses for success/error toasts, not the entire page body.
         Also checks if the URL actually changed from the original post URL
         (a real redirect means the share was accepted).
+
+        Sets self._share_toast_confirmed when Facebook said so in its own
+        words, which later steps trust over a dialog left on screen. Cleared
+        first, so the Timeline share's verdict can never leak into the Story
+        share that follows it.
         """
+        self._share_toast_confirmed = False
         await asyncio.sleep(1)
         try:
             result = await self.page.evaluate('''() => {
@@ -4607,6 +4613,7 @@ class FacebookAutomation:
                 await self._debug_dump("share_error_toast")
                 return False
             if result == "success":
+                self._share_toast_confirmed = True
                 self.log("Success toast detected — share went through!")
                 return True
 
@@ -4701,6 +4708,18 @@ class FacebookAutomation:
         self.log(f"Waiting {delay:.0f}s for Timeline share...")
         await asyncio.sleep(delay)
         if await self._is_modal_still_open():
+            if getattr(self, "_share_toast_confirmed", False):
+                # Facebook confirmed the share in its own toast and the post's
+                # share count went up; a dialog left on screen afterwards is
+                # cosmetic. Dismiss it so the next step starts clean.
+                self.log("Share confirmed by toast; dismissing the dialog "
+                         "Facebook left open")
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+                return True
             self.log("Share modal still open after wait — share may have failed")
             return False
         return True
@@ -4740,6 +4759,18 @@ class FacebookAutomation:
         self.log(f"Waiting {delay:.0f}s for Story share...")
         await asyncio.sleep(delay)
         if await self._is_modal_still_open():
+            if getattr(self, "_share_toast_confirmed", False):
+                # Facebook confirmed the share in its own toast and the post's
+                # share count went up; a dialog left on screen afterwards is
+                # cosmetic. Dismiss it so the next step starts clean.
+                self.log("Share confirmed by toast; dismissing the dialog "
+                         "Facebook left open")
+                try:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+                return True
             self.log("Share modal still open after wait — share may have failed")
             return False
         return True
@@ -5515,7 +5546,13 @@ class FacebookAutomation:
             modal = self.page.locator('[role="dialog"]:visible').first
             if await modal.count() > 0 and await modal.is_visible():
                 text = (await modal.inner_text() or "").lower()
-                if any(kw in text for kw in ["share now", "your story", "share", "post"]):
+                # Must look like the SHARE SHEET itself. The old list
+                # included bare "share" and "post", which match nearly every
+                # Facebook dialog - including the ones that only appear once a
+                # share has succeeded, so a completed share read as a failure.
+                if any(kw in text for kw in ("share now", "your story",
+                                             "share to feed", "send this to",
+                                             "write something about this")):
                     return True
         except Exception:
             pass
