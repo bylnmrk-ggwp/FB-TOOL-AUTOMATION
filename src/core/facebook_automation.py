@@ -4583,7 +4583,7 @@ class FacebookAutomation:
                     const err = ["went wrong", "try again", "can't", "failed",
                                 "blocked", "restricted", "not available", "error"];
                     const ok = ["shared to", "your post was", "posted to", "shared"];
-                    if (err.some(kw => t.includes(kw))) return "error";
+                    if (err.some(kw => t.includes(kw))) return "error::" + el.innerText.trim().slice(0, 200);
                     if (ok.some(kw => t.includes(kw))) return "success";
                 }
                 // Check aria-live regions (another toast pattern)
@@ -4593,14 +4593,17 @@ class FacebookAutomation:
                     const t = el.innerText.toLowerCase().substring(0, 200);
                     const err = ["went wrong", "can't", "failed", "error"];
                     const ok = ["shared to", "your post", "posted", "shared"];
-                    if (err.some(kw => t.includes(kw))) return "error";
+                    if (err.some(kw => t.includes(kw))) return "error::" + el.innerText.trim().slice(0, 200);
                     if (ok.some(kw => t.includes(kw))) return "success";
                 }
                 return "unknown";
             }''')
 
-            if result == "error":
-                self.log("Error toast detected — share was rejected by Facebook")
+            if isinstance(result, str) and result.startswith("error"):
+                said = result.split("::", 1)[1].strip() if "::" in result else ""
+                self.last_share_error = said
+                self.log("Error toast detected — share was rejected by Facebook"
+                         + (f': "{said}"' if said else " (no text captured)"))
                 await self._debug_dump("share_error_toast")
                 return False
             if result == "success":
@@ -5608,6 +5611,26 @@ class FacebookAutomation:
                     await asyncio.sleep(3)
                     continue
                 return False, f"Failed to load post URL: {err}"
+
+        # A /share/v/<code>/ link is an interstitial: it resolves to the real
+        # permalink a moment after domcontentloaded, and can read as
+        # facebook.com/ while that is in flight. The share code carries no
+        # numeric id, so until the resolved URL is known _target_post_id is
+        # None and every later "am I still on the post?" check compares against
+        # a URL the page will never have again. Settle it here, once.
+        for _ in range(15):
+            try:
+                settled = await self.page.evaluate("window.location.href") or ""
+            except Exception:
+                break
+            m = re.search(r'/(?:videos?|posts?|photos?|reels?)/(\d+)', settled)
+            if m:
+                if settled != post_url:
+                    self.log(f"   Resolved to: {settled[:90]}")
+                self._share_post_url = settled
+                self._target_post_id = m.group(1)
+                break
+            await asyncio.sleep(1)
 
         self.log("Scrolling to reveal action buttons...")
         await self._debug_dump("share_before_share")
