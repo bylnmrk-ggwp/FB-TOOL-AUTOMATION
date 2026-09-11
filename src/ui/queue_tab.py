@@ -27,13 +27,11 @@ class QueueTab(ttk.Frame):
         # Track login status per profile: profile_name → True (logged in) / False (not) / None (unknown)
         self._profile_status: dict[str, bool | None] = {}
         self._rate_limited_profiles: set[str] = set()
-        # Start from the last scan or run rather than from "unknown" for
-        # everyone: a profile with a valid cached session was logged in the
-        # last time anything looked (state_cache checks c_user/xs and TTL).
-        from src.storage import state_cache
-        for name in cfg.list_profiles():
-            if state_cache.load_state(name) is not None:
-                self._profile_status[name] = True
+        # No seeding from cached cookies: a cached session says only that
+        # cookies exist, not that the account can use its home page (a
+        # checkpointed profile keeps c_user/xs). _dot_for already greens
+        # every profile in the recorded logged-in set, which is the same
+        # source as the count and the filter.
 
         self._build_ui()
 
@@ -435,6 +433,14 @@ class QueueTab(ttk.Frame):
                                     command=self._on_watch,
                                     style="Accent.TButton")
         self.watch_btn.pack(side="right", padx=(0, 6))
+        # How long the watch runs. Blank means "until Stop", which is what the
+        # button did before this field existed.
+        ttk.Label(watch_frame, text="min").pack(side="right", padx=(4, 10))
+        self._watch_minutes_var = tk.StringVar(
+            value=str(cfg.get_setting("watch_minutes", 120)))
+        ttk.Entry(watch_frame, textvariable=self._watch_minutes_var,
+                  width=5).pack(side="right")
+        ttk.Label(watch_frame, text="for").pack(side="right", padx=(8, 4))
 
         # ── Browser render mode ───────────────────────────
         # Facebook serves a stripped page to the legacy headless engine, so
@@ -502,8 +508,23 @@ class QueueTab(ttk.Frame):
             messagebox.showerror("Invalid URL",
                                  "Watch URL must start with http:// or https://")
             return
+        raw = self._watch_minutes_var.get().strip()
+        minutes = None
+        if raw:
+            try:
+                minutes = float(raw)
+            except ValueError:
+                messagebox.showerror("Invalid duration",
+                                     "Watch duration must be a number of "
+                                     "minutes, or blank to run until Stop.")
+                return
+            if minutes <= 0:
+                messagebox.showerror("Invalid duration",
+                                     "Watch duration must be greater than 0.")
+                return
+            cfg.save_setting("watch_minutes", minutes)
         if self._on_watch_url_cb:
-            self._on_watch_url_cb(url)
+            self._on_watch_url_cb(url, minutes)
 
     def _on_stop_watch(self):
         if self._on_stop_watch_cb:

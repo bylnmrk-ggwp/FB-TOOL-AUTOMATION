@@ -63,6 +63,7 @@ class DriverManager:
         self._watch_pw = None
         self._watch_browser = None
         self._watch_autos: dict = {}
+        self._watch_keeper = None
 
         # Concurrent batch mode — each profile gets its own browser window
         self._batch_pw = None
@@ -246,9 +247,14 @@ class DriverManager:
     def run_queue(self, items: list[dict]):
         self.cmd_queue.put({"type": "run_queue", "items": items})
 
-    def watch_url(self, url: str):
-        """Open every active (logged-in) profile in a visible window on `url`."""
-        self.cmd_queue.put({"type": "watch_url", "url": url})
+    def watch_url(self, url: str, minutes: float | None = None):
+        """Open every active (logged-in) profile in a visible window on `url`.
+
+        minutes bounds the watch: it stops itself after that long. None means
+        run until the Stop button.
+        """
+        self.cmd_queue.put({"type": "watch_url", "url": url,
+                            "minutes": minutes})
 
     def stop_watch(self):
         """Close the live-watch windows."""
@@ -342,7 +348,7 @@ class DriverManager:
             elif cmd_type == "run_queue":
                 await self._do_batch(cmd["items"])
             elif cmd_type == "watch_url":
-                await self._do_watch(cmd["url"])
+                await self._do_watch(cmd["url"], cmd.get("minutes"))
             elif cmd_type == "stop_watch":
                 await self._stop_watch()
             elif cmd_type == "cleanup":
@@ -1821,6 +1827,9 @@ class DriverManager:
                         state_cache.invalidate(profile_name)
                     reason = "logged_in" if logged_in else getattr(
                         temp_auto, "last_account_status", "unknown_not_logged_in")
+                    # The verdict is what "active" means everywhere else
+                    # (status 'ok'), so record it on the linked account.
+                    db.record_login_check(profile_name, logged_in, reason)
                     removed = False
                     if reason == "disabled_or_suspended":
                         # Remove only the app's saved reference. The underlying
@@ -2959,18 +2968,8 @@ class DriverManager:
         #   headless_new (default) → hidden, real rendering  [fixes comments]
         #   visible               → real on-screen windows   [fallback]
         #   headless              → legacy headless          [lowest RAM, breaks comments]
-        browser_mode = cfg.get_setting("browser_mode", "headless_new")
-        launch_args = [
-            f"--window-size={batch_viewport['width']},{batch_viewport['height']}",
-            *MEMORY_FLAGS,
-        ]
-        if browser_mode == "headless_new":
-            launch_args.append("--headless=new")
-            launch_headless = False  # let our --headless=new flag take effect
-        elif browser_mode == "visible":
-            launch_headless = False
-        else:  # "headless" (legacy)
-            launch_headless = True
+        browser_mode, launch_headless, launch_args = \
+            self._browser_launch_mode(batch_viewport)
         self.log(f"Launching shared browser [{browser_mode}]...")
         shared_browser = await self._batch_pw.chromium.launch(
             executable_path=CHROME_PATH,
@@ -3263,8 +3262,12 @@ class DriverManager:
                             "session expired", "not logged-in"))
                     if needs_login:
                         # Self-healing: drop the cached state so the next
-                        # run re-extracts this profile fresh.
-                        state_cache.invalidate(result.get("profile_name", ""))
+                        # run re-extracts this profile fresh, and clear the
+                        # 'ok' status so the count, the filter and the sheet
+                        # stop calling this profile active.
+                        pname = result.get("profile_name", "")
+                        state_cache.invalidate(pname)
+                        db.record_login_check(pname, False, "session expired")
                     self.result_queue.put({
                         "type": "batch_item_result",
                         "ok": result.get("ok", False),
@@ -3384,17 +3387,214 @@ class DriverManager:
                 pass
         self.state = DriverState.STOPPED
 
-    async def _do_watch(self, url: str):
-        """Open one visible window per active profile on `url` and leave them open.
+    @staticmethod
+    def _browser_launch_mode(viewport: dict,
+                             autoplay: bool = False,
+                             flags: list | None = None) -> tuple[str, bool, list[str]]:
+        """(mode name, headless flag, launch args) for the configured render mode.
+
+        The single owner of the "Browser mode" setting, so every browser the
+        app opens obeys the dropdown - the queue runner and the live watch
+        alike. Facebook serves a STRIPPED page to the old headless engine, so:
+          headless_new (default) -> hidden, renders like real Chrome
+          visible                -> real on-screen windows
+          headless               -> legacy headless [lowest RAM, breaks comments]
+
+        flags defaults to MEMORY_FLAGS. The watch passes WATCH_FLAGS, which
+        drops the two caps that starve concurrent video decode.
+        """
+        from src.core.facebook_automation import MEMORY_FLAGS
+        mode = cfg.get_setting("browser_mode", "headless_new")
+        args = [f"--window-size={viewport['width']},{viewport['height']}",
+                *(MEMORY_FLAGS if flags is None else flags)]
+        if autoplay:
+            # Chromium blocks autoplay without a user gesture, so a Facebook
+            # video page loads but stays PAUSED - the page is open and no view
+            # is ever counted. Watch exists to play the video, so it asks for
+            # autoplay; a queue run does not and must not stream video.
+            args.append("--autoplay-policy=no-user-gesture-required")
+        if mode == "headless_new":
+            # Playwright must not add its own --headless: our flag selects the
+            # new engine, which is what actually hides the window.
+            args.append("--headless=new")
+            return mode, False, args
+        if mode == "visible":
+            return mode, False, args
+        return mode, True, args
+
+    # Re-checked this often while a watch is running. Long enough to cost
+    # nothing, short enough that a stall is measured in seconds.
+    WATCH_POLL_SECONDS = 15
+
+    # A page is stalled when currentTime advanced by less than this share of
+    # the poll interval. Generous: a live stream that drifts a little is fine,
+    # one that moves a fraction of a second in 15 is not watching.
+    WATCH_STALL_RATIO = 0.25
+
+    # Probe: report the player, and resume it if it is paused or ended.
+    _WATCH_RESUME_JS = """() => {
+        const v = document.querySelector('video');
+        if (!v) return {video: false};
+        let live = null;
+        try { if (v.seekable.length)
+                  live = v.seekable.end(v.seekable.length - 1); } catch (e) {}
+        const out = {video: true, paused: v.paused, ended: v.ended,
+                     t: v.currentTime, ready: v.readyState, live: live};
+        if (v.paused || v.ended) {
+            if (v.ended) { try { v.currentTime = 0; } catch (e) {} }
+            v.muted = true;            // muted playback needs no gesture
+            v.play().catch(() => {});
+            out.resumed = true;
+        }
+        return out;
+    }"""
+
+    # Recovery for a page that is "playing" but frozen: jump to the live edge
+    # and re-issue play(). A stalled live viewer that is minutes behind the
+    # broadcast is not watching the broadcast.
+    _WATCH_KICK_JS = """() => {
+        const v = document.querySelector('video');
+        if (!v) return false;
+        try {
+            if (v.seekable.length) {
+                const end = v.seekable.end(v.seekable.length - 1);
+                if (end - v.currentTime > 1) v.currentTime = Math.max(0, end - 1);
+            }
+        } catch (e) {}
+        v.muted = true;
+        v.play().catch(() => {});
+        return true;
+    }"""
+
+    async def _keep_watching(self, url: str, deadline: float | None = None):
+        """Keep every watch page playing until the watch is stopped.
+
+        A page left alone does not keep watching, and it fails in two different
+        ways. Facebook PAUSES a video when a live stream cuts over, when a VOD
+        ends, and when the player loses the stream. Separately, a page under
+        load STALLS: the media buffer runs dry, readyState drops, currentTime
+        stops moving - and `paused` stays false the whole time. Measured on a
+        9-profile live watch: 3-4 pages frozen inside 30s, all of them still
+        reporting paused=false. A check that only looks at `paused` calls those
+        pages healthy forever, which is the worst outcome: the app says it is
+        watching and nothing is.
+
+        So each round does three things: resume anything paused or ended,
+        detect a frozen page by comparing currentTime against the previous
+        round and kick it back to the live edge (reloading if a kick does not
+        take), and reload a page that has lost its player entirely (a gate or a
+        navigation away).
+
+        deadline is an event-loop timestamp; reaching it stops the whole watch
+        through the normal stop command. None runs until the Stop button.
+        """
+        loop = asyncio.get_running_loop()
+        last_t: dict[str, float] = {}
+        stalls: dict[str, int] = {}
+        rounds = 0
+        try:
+            while True:
+                await asyncio.sleep(self.WATCH_POLL_SECONDS)
+                if not self._watch_autos:
+                    return
+                if deadline is not None and loop.time() >= deadline:
+                    self.log("👁 Watch: time limit reached - stopping.")
+                    self.cmd_queue.put({"type": "stop_watch"})
+                    return
+                rounds += 1
+                resumed, reloaded, kicked, playing = [], [], [], 0
+                for name, auto in list(self._watch_autos.items()):
+                    try:
+                        r = await auto.page.evaluate(self._WATCH_RESUME_JS)
+                    except Exception:
+                        continue          # page closing or mid-navigation
+                    if not r.get("video"):
+                        last_t.pop(name, None)
+                        stalls.pop(name, None)
+                        try:
+                            await auto.page.goto(url, wait_until="domcontentloaded",
+                                                 timeout=45000)
+                            reloaded.append(name)
+                        except Exception:
+                            pass
+                        continue
+                    now_t = r.get("t") or 0.0
+                    if r.get("resumed"):
+                        resumed.append(name)
+                        stalls[name] = 0
+                        last_t[name] = now_t
+                        continue
+                    advanced = now_t - last_t.get(name, now_t)
+                    last_t[name] = now_t
+                    frozen = (name in stalls or rounds > 1) and \
+                        advanced < self.WATCH_POLL_SECONDS * self.WATCH_STALL_RATIO
+                    if not frozen:
+                        stalls[name] = 0
+                        playing += 1
+                        continue
+                    stalls[name] = stalls.get(name, 0) + 1
+                    if stalls[name] == 1:
+                        try:
+                            await auto.page.evaluate(self._WATCH_KICK_JS)
+                            kicked.append(name)
+                        except Exception:
+                            pass
+                    else:
+                        # A kick did not take: the renderer is wedged, so
+                        # rebuild the page rather than keep a dead viewer.
+                        try:
+                            await auto.page.goto(url, wait_until="domcontentloaded",
+                                                 timeout=45000)
+                            reloaded.append(name)
+                            stalls[name] = 0
+                            last_t.pop(name, None)
+                        except Exception:
+                            pass
+                if resumed:
+                    self.log(f"  👁 resumed {len(resumed)} paused page(s): "
+                             f"{', '.join(resumed[:4])}"
+                             + (" ..." if len(resumed) > 4 else ""))
+                if kicked:
+                    self.log(f"  👁 stalled, seeking to live edge: "
+                             f"{len(kicked)} page(s): {', '.join(kicked[:4])}"
+                             + (" ..." if len(kicked) > 4 else ""))
+                if reloaded:
+                    self.log(f"  👁 reloaded {len(reloaded)} page(s) that lost "
+                             f"the player or stayed frozen: "
+                             f"{', '.join(reloaded[:4])}"
+                             + (" ..." if len(reloaded) > 4 else ""))
+                # A quiet heartbeat every ~2 minutes, so a long watch is
+                # visibly alive without flooding the log.
+                if rounds % 8 == 0:
+                    left = ""
+                    if deadline is not None:
+                        mins = max(0.0, (deadline - loop.time()) / 60.0)
+                        left = f", {mins:.0f} min left"
+                    self.log(f"  👁 Watch: {playing}/{len(self._watch_autos)} "
+                             f"page(s) actually playing{left}")
+        except asyncio.CancelledError:
+            raise
+
+    async def _do_watch(self, url: str, minutes: float | None = None):
+        """Open one window per active profile on `url` and keep them playing.
 
         Reuses the batch primitives - storage-state extraction (cached where
-        possible) and init_from_storage on a single shared browser - but the
-        browser is VISIBLE, resource blocking is off so the page renders fully,
-        and nothing is closed afterwards. "Active" is the logged-in set
-        (status='ok'), the same source the UI filters on.
+        possible) and init_from_storage on a single shared browser - but
+        request interception is off entirely so media segments never queue
+        behind this process, and nothing is closed afterwards. "Active" is the
+        logged-in set (status='ok'), the same source the UI filters on.
+
+        The windows follow the "Browser mode" setting, exactly like a queue
+        run: on the default hidden mode the pages load and play with no Brave
+        window on screen. Pick "Visible windows" to watch them yourself.
+
+        minutes bounds the run; None means until the Stop button. Each page is
+        verified to be really playing before it is counted, because a page that
+        merely loaded is not a viewer.
         """
         from src.core.facebook_automation import (FacebookAutomation,
-                                                   CHROME_PATH, MEMORY_FLAGS)
+                                                   CHROME_PATH, WATCH_FLAGS,
+                                                   LOGIN_GATE_JS)
         from src.storage import state_cache
 
         await self._stop_watch()        # replace any previous watch
@@ -3410,7 +3610,10 @@ class DriverManager:
             self.log("Watch: no active (logged-in) profiles to open.")
             return
 
-        self.log(f"👁 Watch: opening {len(profiles)} active profile(s) on {url}")
+        how_long = (f"for {minutes:.0f} min" if minutes
+                    else "until you press Stop")
+        self.log(f"👁 Watch: opening {len(profiles)} active profile(s) on {url} "
+                 f"({how_long})")
 
         states: dict = {}
         for i, p in enumerate(profiles):
@@ -3440,36 +3643,113 @@ class DriverManager:
             self.log("Watch: no usable sessions - nothing opened.")
             return
 
+        mode, launch_headless, launch_args = \
+            self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
+                                      flags=WATCH_FLAGS)
         self._watch_pw = await async_playwright().start()
         self._watch_browser = await self._watch_pw.chromium.launch(
-            executable_path=CHROME_PATH, headless=False,
-            args=[f"--window-size={SMALL_VIEWPORT['width']},{SMALL_VIEWPORT['height']}",
-                  *MEMORY_FLAGS])
+            executable_path=CHROME_PATH, headless=launch_headless,
+            args=launch_args)
         self._watch_autos = {}
 
         sem = asyncio.Semaphore(5)
+
+        verdicts: dict[str, str] = {}
 
         async def _open(profile_name: str):
             async with sem:
                 auto = FacebookAutomation(log_callback=self.log, debug=self._debug)
                 await auto.init_from_storage(self._watch_browser,
                                              states[profile_name],
-                                             viewport=SMALL_VIEWPORT)
-                auto._block_resources = False     # render the page fully
+                                             viewport=SMALL_VIEWPORT,
+                                             block_resources=False)
+                self._watch_autos[profile_name] = auto
                 try:
                     await auto.page.goto(url, wait_until="domcontentloaded",
                                          timeout=45000)
-                    self.log(f"  👁 watching '{profile_name}'")
                 except Exception as e:
+                    verdicts[profile_name] = "navigation failed"
                     self.log(f"  ⚠️  '{profile_name}' navigation failed: {e}")
-                self._watch_autos[profile_name] = auto
+                    return
+                verdicts[profile_name] = await self._verify_watching(
+                    auto, profile_name)
 
         await asyncio.gather(*(_open(p) for p in active), return_exceptions=True)
-        self.log(f"👁 Watch: {len(self._watch_autos)} window(s) open. "
-                 f"They stay open until you press Stop.")
+
+        watching = [n for n, v in verdicts.items() if v == "playing"]
+        broken = {n: v for n, v in verdicts.items() if v != "playing"}
+        where = ("hidden - no Brave window on screen" if mode != "visible"
+                 else "on screen")
+        # Opening the pages is not watching them: without this, the first
+        # pause or stall ends every view while the pages sit there looking fine.
+        deadline = None
+        if minutes:
+            deadline = asyncio.get_running_loop().time() + minutes * 60
+        self._watch_keeper = asyncio.create_task(
+            self._keep_watching(url, deadline))
+        for name, why in broken.items():
+            self.log(f"  ⚠️  '{name}' opened but is NOT watching: {why}")
+        self.log(f"👁 Watch: {len(watching)}/{len(self._watch_autos)} page(s) "
+                 f"confirmed playing [{mode}, {where}]. {how_long.capitalize()}.")
+
+    # How long a freshly opened page gets to mount a player, and how long its
+    # currentTime is sampled to prove the player is really running.
+    WATCH_VERIFY_TIMEOUT_MS = 25000
+    WATCH_VERIFY_SAMPLE_SECONDS = 3
+
+    async def _verify_watching(self, auto, profile_name: str) -> str:
+        """'playing', or the reason this page is not a viewer.
+
+        page.goto() returning proves a document loaded and nothing more: a
+        login wall, an age gate and a dead player all return 200. A view only
+        exists if a <video> is on the page and its currentTime is moving, so
+        that is what this measures.
+        """
+        from src.core.facebook_automation import LOGIN_GATE_JS
+        try:
+            if await auto.page.evaluate(LOGIN_GATE_JS):
+                return "Facebook is showing a login gate - session is dead"
+        except Exception:
+            pass
+        try:
+            await auto.page.wait_for_selector(
+                "video", timeout=self.WATCH_VERIFY_TIMEOUT_MS)
+        except Exception:
+            return "no video player on the page"
+        sample = "() => { const v = document.querySelector('video'); " \
+                 "return v ? v.currentTime : null; }"
+        try:
+            first = await auto.page.evaluate(sample)
+            await asyncio.sleep(self.WATCH_VERIFY_SAMPLE_SECONDS)
+            second = await auto.page.evaluate(sample)
+        except Exception as e:
+            return f"player probe failed: {e}"
+        if first is None or second is None:
+            return "player disappeared"
+        if second - first < 0.5:
+            # One nudge: autoplay can still be held back on a page that only
+            # just finished loading.
+            try:
+                await auto.page.evaluate(self._WATCH_KICK_JS)
+                await asyncio.sleep(self.WATCH_VERIFY_SAMPLE_SECONDS)
+                third = await auto.page.evaluate(sample)
+            except Exception:
+                third = second
+            if (third or 0) - second < 0.5:
+                return "video is frozen (loaded but not advancing)"
+        self.log(f"  👁 watching '{profile_name}'")
+        return "playing"
 
     async def _stop_watch(self):
         """Close every live-watch window and its browser, if any."""
+        keeper = getattr(self, "_watch_keeper", None)
+        if keeper is not None:
+            keeper.cancel()
+            try:
+                await keeper
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._watch_keeper = None
         autos = getattr(self, "_watch_autos", {})
         if autos:
             self.log(f"👁 Watch: closing {len(autos)} window(s)...")

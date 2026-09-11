@@ -6,6 +6,7 @@ import random
 import tempfile
 import time
 import traceback
+import urllib.parse
 from pathlib import Path
 from typing import Callable
 
@@ -255,6 +256,39 @@ SMALL_VIEWPORT = {"width": 1024, "height": 768}
 TINY_VIEWPORT = {"width": 640, "height": 480}
 MICRO_VIEWPORT = {"width": 480, "height": 360}
 
+# One owner for "is a Facebook login gate on this page".
+#
+# Three things mean the account cannot use the page, and each catches what the
+# others miss:
+#   1. the 'See more on Facebook' overlay, which covers a post without ever
+#      changing the URL;
+#   2. a visible email / password field, i.e. a plain login form;
+#   3. the "Continue as <name> / Use another profile" account chooser. When
+#      Facebook invalidates a session server-side the profile KEEPS its cookies
+#      (c_user and xs included) and lands here at facebook.com/ with no password
+#      field at all - so a test that only looks for a login form calls it logged
+#      in, and the app counts a dead account as active.
+LOGIN_GATE_JS = """() => {
+    const vis = e => { const r = e.getBoundingClientRect();
+                       return r.width > 0 && r.height > 0; };
+    for (const d of document.querySelectorAll('[role="dialog"]')) {
+        if (!vis(d)) continue;
+        if ((d.innerText || '').toLowerCase().includes('see more on facebook')) return true;
+    }
+    for (const i of document.querySelectorAll('input')) {
+        if (!vis(i)) continue;
+        const name = (i.name || '').toLowerCase();
+        const type = (i.type || '').toLowerCase();
+        if (name === 'email' || name === 'pass' ||
+            type === 'email' || type === 'password') return true;
+    }
+    const body = (document.body ? document.body.innerText : '').toLowerCase();
+    if (body.includes('use another profile')) return true;
+    if (body.includes('log into another account')) return true;
+    return false;
+}"""
+
+
 MEMORY_FLAGS = [
     "--disable-gpu",
     "--disable-gpu-compositing",
@@ -282,6 +316,17 @@ MEMORY_FLAGS = [
     "--disable-component-extensions-with-background-pages",
     "--disable-features=Translate,ChromeWhatsNewUI,InterestFeedContentSuggestions",
 ]
+
+# Watching decodes one live video per profile, all at the same time, and two
+# MEMORY_FLAGS entries make that impossible:
+#   --renderer-process-limit=1        puts every watch page in ONE renderer
+#   --js-flags=--max-old-space-size=256   caps that single renderer's JS heap
+# Measured on a 9-profile live watch with those flags on: every page starts
+# playing, then 3-4 freeze within 30s at readyState 2 with currentTime stuck
+# and paused still false - i.e. they LOOK healthy and watch nothing. Dropping
+# the two caps gives each context its own renderer and its own heap.
+WATCH_FLAGS = [f for f in MEMORY_FLAGS
+               if not f.startswith(("--renderer-process-limit=", "--js-flags="))]
 
 # Lighter memory flags for dual-browser mode (less aggressive)
 # Interactive login needs a permissive browser, not a memory-tuned one.
@@ -340,8 +385,9 @@ class FacebookAutomation:
         Returns None if extraction fails.
 
         If return_logged_in=True, returns (state, logged_in) instead of state;
-        logged_in is the DOM-based check (detects the 'See more on Facebook'
-        overlay) and is False when extraction fails.  The plain state dict does
+        logged_in is True only when the profile lands on the Facebook HOME
+        page with no login UI (see _is_home_url) and is False when extraction
+        fails.  The plain state dict does
         NOT indicate login status — only the DOM check does.
 
         If skip_navigation=True, the facebook.com navigation, settle sleep and
@@ -411,34 +457,19 @@ class FacebookAutomation:
                         self.log(f"  ⚠️  Facebook unreachable — continuing with stored cookies")
             await asyncio.sleep(2)
 
-            # Wait up to 10s to reach a non-login Facebook page. The URL alone
-            # can lie — a 'See more on Facebook' overlay can appear over a post
-            # while the URL stays on facebook.com — so ALSO check the DOM for
-            # visible login fields before declaring logged_in=True.
+            # Wait up to 10s to land on the Facebook HOME page. Logged in
+            # means the account can use its home page: a session Facebook
+            # gates (checkpoint, confirmemail.php, two-factor, login) is sent
+            # away from "/" and does not count. The URL alone can still lie —
+            # a 'See more on Facebook' overlay can appear while the URL stays
+            # on "/" — so ALSO check the DOM for visible login fields before
+            # declaring logged_in=True.
             logged_in = False
             for _ in range(10):
                 try:
                     url = page.url.lower()
-                    if "facebook.com" in url and "login" not in url:
-                        has_login_ui = await page.evaluate("""() => {
-                            const dialogs = [...document.querySelectorAll('[role="dialog"]')];
-                            for (const d of dialogs) {
-                                const r = d.getBoundingClientRect();
-                                if (r.width <= 0 || r.height <= 0) continue;
-                                if ((d.innerText || '').toLowerCase().includes('see more on facebook')) return true;
-                            }
-                            const inputs = [...document.querySelectorAll('input')];
-                            for (const i of inputs) {
-                                const r = i.getBoundingClientRect();
-                                if (r.width <= 0 || r.height <= 0) continue;
-                                const name = (i.name || '').toLowerCase();
-                                const type = (i.type || '').toLowerCase();
-                                if (name === 'email' || name === 'pass' || type === 'email' || type === 'password') {
-                                    return true;
-                                }
-                            }
-                            return false;
-                        }""")
+                    if self._is_home_url(url):
+                        has_login_ui = await page.evaluate(LOGIN_GATE_JS)
                         if not has_login_ui:
                             logged_in = True
                             break
@@ -480,13 +511,21 @@ class FacebookAutomation:
             return state, logged_in
         return state
 
-    async def init_from_storage(self, browser, storage_state: dict, viewport: dict | None = None):
+    async def init_from_storage(self, browser, storage_state: dict,
+                                viewport: dict | None = None,
+                                block_resources: bool = True):
         """Initialize automation with a context in a given browser using saved storage state.
 
         Creates an isolated incognito context with the profile's cookies
         and a small viewport, then sets it as the current context/page.
         Stores the browser reference so it can be closed later.
         Enables resource blocking to cut RAM usage by ~50-70%.
+
+        Pass block_resources=False for a page that streams video. It skips
+        page.route() entirely rather than registering a pass-through handler:
+        an installed route sends EVERY request - including each media segment
+        of a live stream, for every open page - through this Python process,
+        which is exactly the traffic a watch cannot afford to queue behind.
         """
         vp = viewport or SMALL_VIEWPORT
         self.context = await browser.new_context(
@@ -495,7 +534,10 @@ class FacebookAutomation:
             no_viewport=False,
         )
         self.page = await self.context.new_page()
-        await self._enable_resource_blocking(self.page)
+        if block_resources:
+            await self._enable_resource_blocking(self.page)
+        else:
+            self._block_resources = False
         self._pw = None
         self._browser = browser
 
@@ -2687,6 +2729,10 @@ class FacebookAutomation:
                 self.log(f"Retrying navigation... ({e})")
                 await asyncio.sleep(3)
 
+        # A signed-out-but-remembered profile lands on the account chooser,
+        # which has no email field at all. Step through it first.
+        await self._dismiss_account_chooser()
+
         # Fill email with retry
         email_input = None
         for attempt in range(2):
@@ -2706,6 +2752,7 @@ class FacebookAutomation:
                     await self.page.goto("https://www.facebook.com/login.php",
                                          timeout=30000, wait_until="load")
                     await asyncio.sleep(random.uniform(2, 3))
+                    await self._dismiss_account_chooser()
             except Exception as e:
                 if attempt == 1:
                     await self._dump_page_buttons("login_email")
@@ -4073,38 +4120,78 @@ class FacebookAutomation:
 
     # ── Login check ────────────────────────────────────────
 
-    async def _login_overlay_present(self) -> bool:
-        """Detect Facebook's 'See more on Facebook' login overlay.
+    async def _dismiss_account_chooser(self) -> bool:
+        """Click past the "Continue as <name> / Use another profile" screen.
 
-        Facebook sometimes shows a login dialog OVER a post page without
-        changing the URL. This checks for the overlay's known dialog text
-        and for any visible email/password fields on the page.
+        Facebook shows this when a remembered profile's session has been
+        invalidated server-side. The page carries the remembered name and a
+        Continue button but NO email field, so a login run found no form and
+        gave up with "Email input not found". "Use another profile" opens the
+        ordinary email + password form this method's caller expects.
         """
         try:
-            return bool(await self.page.evaluate("""() => {
-                // 1) A visible dialog with 'See more on Facebook' text
-                const dialogs = [...document.querySelectorAll('[role="dialog"]')];
-                for (const d of dialogs) {
-                    const r = d.getBoundingClientRect();
-                    if (r.width <= 0 || r.height <= 0) continue;
-                    const t = (d.innerText || '').toLowerCase();
-                    if (t.includes('see more on facebook')) return true;
-                }
-                // 2) Any visible email/password inputs (login form on the page)
-                const inputs = [...document.querySelectorAll('input')];
-                for (const i of inputs) {
-                    const r = i.getBoundingClientRect();
-                    if (r.width <= 0 || r.height <= 0) continue;
-                    const name = (i.name || '').toLowerCase();
-                    const type = (i.type || '').toLowerCase();
-                    if (name === 'email' || name === 'pass' || type === 'email' || type === 'password') {
-                        return true;
-                    }
-                }
-                return false;
-            }"""))
+            link = self.page.get_by_text("Use another profile", exact=True).first
+            if await link.count() == 0:
+                return False
+            await link.click(timeout=8000)
+            await asyncio.sleep(3)
+            self.log("Account chooser dismissed - opened the login form")
+            return True
         except Exception:
             return False
+
+    async def _login_overlay_present(self) -> bool:
+        """True when a Facebook login gate is on the page.
+
+        See LOGIN_GATE_JS: the 'See more on Facebook' overlay, a visible
+        login form, or the account chooser a server-invalidated session
+        lands on.
+        """
+        try:
+            return bool(await self.page.evaluate(LOGIN_GATE_JS))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_home_url(url: str) -> bool:
+        """True when `url` is the Facebook home page itself.
+
+        Facebook sends a session that cannot use the account somewhere else
+        (login, checkpoint, confirmemail.php, two-factor, recover), so landing
+        on "/" after opening facebook.com is the one signal that the account
+        can actually be used. The query string is ignored: "/?sk=welcome" and
+        "/?_rdr" are still home.
+        """
+        try:
+            parts = urllib.parse.urlsplit((url or "").lower())
+        except Exception:
+            return False
+        host = parts.netloc.rsplit("@", 1)[-1].split(":", 1)[0]
+        if host != "facebook.com" and not host.endswith(".facebook.com"):
+            return False
+        return parts.path.rstrip("/") in ("", "/home.php")
+
+    # Path prefixes Facebook sends a session it will not let use the account:
+    # a login form, a checkpoint, a two-factor prompt, an email confirmation
+    # or an account-recovery flow.
+    GATE_PATHS = ("/login", "/checkpoint", "/twofactor",
+                  "/two_step_verification", "/approvals", "/confirmemail",
+                  "/recover")
+
+    @classmethod
+    def _is_gated_url(cls, url: str) -> bool:
+        """True when `url` is one of Facebook's account gates.
+
+        The PATH decides, never a substring of the whole URL: an ordinary post
+        in a group called "carrecovery" or a page named "DataRecovery" would
+        otherwise read as a recovery gate, and the same for a "?next=...login"
+        query on a perfectly normal page.
+        """
+        try:
+            parts = urllib.parse.urlsplit((url or "").lower())
+        except Exception:
+            return False
+        return parts.path.startswith(cls.GATE_PATHS)
 
     async def _is_logged_in(self, timeout: int = 10) -> bool:
         deadline = time.monotonic() + timeout
@@ -4119,9 +4206,7 @@ class FacebookAutomation:
                 await asyncio.sleep(0.5)
                 continue
 
-            login_indicators = ["login", "checkpoint", "twofactor",
-                                "two_step_verification", "approvals"]
-            on_login_page = any(kw in page_url for kw in login_indicators)
+            on_login_page = self._is_gated_url(page_url)
 
             email_count = await self.page.locator('input[name="email"]').count()
             pass_count = await self.page.locator('input[name="pass"]').count()
@@ -4144,6 +4229,13 @@ class FacebookAutomation:
             return "unknown"
         try:
             url = target.url.lower()
+        except Exception:
+            return "unknown"
+        # Never navigated (about:blank) or navigated off Facebook: this says
+        # nothing about the account, so it must not be recorded as one.
+        if "facebook.com" not in url:
+            return "unreachable"
+        try:
             body = (await target.locator("body").inner_text(timeout=3000)).lower()
         except Exception:
             return "unknown"
@@ -4159,14 +4251,23 @@ class FacebookAutomation:
         )
         if any(term in body for term in disabled_terms):
             return "disabled_or_suspended"
+        if "confirmemail" in url:
+            return "email_confirmation_required"
         if any(term in url for term in ("checkpoint", "twofactor", "approvals")) \
                 or any(term in body for term in checkpoint_terms):
             return "checkpoint_or_verification_required"
         if "login" in url or await target.locator(
                 'input[name="email"], input[name="pass"]').count():
             return "logged_out_or_session_expired"
-        if await self._login_overlay_present():
-            return "logged_out_or_session_expired"
+        # Evaluate the gate on the page being classified, not self.page: the
+        # login scan passes its own persistent-context page, so checking
+        # self.page here silently found nothing and every expired session was
+        # reported as "unknown not logged in".
+        try:
+            if await target.evaluate(LOGIN_GATE_JS):
+                return "logged_out_or_session_expired"
+        except Exception:
+            pass
         return "unknown_not_logged_in"
 
     # ── Element finding with fallbacks ────────────────────
