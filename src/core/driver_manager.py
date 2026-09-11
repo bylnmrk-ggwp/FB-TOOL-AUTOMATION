@@ -313,51 +313,63 @@ class DriverManager:
 
             cmd_type = cmd.get("type")
 
-            if cmd_type == "login":
-                await self._do_login(cmd)
-            elif cmd_type == "start_profile":
-                await self._do_start_profile(cmd)
-            elif cmd_type == "share":
-                await self._do_share(cmd)
-            elif cmd_type == "share_to_timeline":
-                await self._do_share_timeline(cmd)
-            elif cmd_type == "share_to_groups":
-                await self._do_share_to_groups(cmd)
-            elif cmd_type == "share_to_groups_bulk":
-                await self._do_share_to_groups_bulk(cmd)
-            elif cmd_type == "join_group":
-                await self._do_join_group(cmd)
-            elif cmd_type == "join_group_bulk":
-                await self._do_join_group_bulk(cmd)
-            elif cmd_type == "fetch_my_groups":
-                await self._do_fetch_my_groups(cmd)
-            elif cmd_type == "fetch_my_groups_bulk":
-                await self._do_fetch_my_groups_bulk(cmd)
-            elif cmd_type == "post_to_timeline":
-                await self._do_post_timeline(cmd)
-            elif cmd_type == "login_with_credentials":
-                await self._do_login_with_credentials(cmd)
-            elif cmd_type == "auto_setup_profile":
-                await self._do_auto_setup(cmd)
-            elif cmd_type == "auto_setup_all":
-                await self._do_auto_setup_all(cmd)
-            elif cmd_type == "accept_all_pending":
-                await self._do_accept_all_pending(cmd)
-            elif cmd_type == "check_login_status":
-                await self._do_check_login_status(cmd)
-            elif cmd_type == "run_queue":
-                await self._do_batch(cmd["items"])
-            elif cmd_type == "watch_url":
-                await self._do_watch(cmd["url"], cmd.get("minutes"))
-            elif cmd_type == "stop_watch":
-                await self._stop_watch()
-            elif cmd_type == "cleanup":
-                await self._do_cleanup()
-            elif cmd_type == "logout":
-                await self._do_logout()
-            elif cmd_type == "quit":
-                await self._do_quit()
-                break
+            # One failing command must not end the worker. Before this, any
+            # exception escaped to _run(), which logged it and let the event
+            # loop close - the thread died and every later command was
+            # silently ignored while the app still looked healthy. A Brave
+            # auto-update mid-session was enough to trigger it.
+            try:
+                if cmd_type == "login":
+                    await self._do_login(cmd)
+                elif cmd_type == "start_profile":
+                    await self._do_start_profile(cmd)
+                elif cmd_type == "share":
+                    await self._do_share(cmd)
+                elif cmd_type == "share_to_timeline":
+                    await self._do_share_timeline(cmd)
+                elif cmd_type == "share_to_groups":
+                    await self._do_share_to_groups(cmd)
+                elif cmd_type == "share_to_groups_bulk":
+                    await self._do_share_to_groups_bulk(cmd)
+                elif cmd_type == "join_group":
+                    await self._do_join_group(cmd)
+                elif cmd_type == "join_group_bulk":
+                    await self._do_join_group_bulk(cmd)
+                elif cmd_type == "fetch_my_groups":
+                    await self._do_fetch_my_groups(cmd)
+                elif cmd_type == "fetch_my_groups_bulk":
+                    await self._do_fetch_my_groups_bulk(cmd)
+                elif cmd_type == "post_to_timeline":
+                    await self._do_post_timeline(cmd)
+                elif cmd_type == "login_with_credentials":
+                    await self._do_login_with_credentials(cmd)
+                elif cmd_type == "auto_setup_profile":
+                    await self._do_auto_setup(cmd)
+                elif cmd_type == "auto_setup_all":
+                    await self._do_auto_setup_all(cmd)
+                elif cmd_type == "accept_all_pending":
+                    await self._do_accept_all_pending(cmd)
+                elif cmd_type == "check_login_status":
+                    await self._do_check_login_status(cmd)
+                elif cmd_type == "run_queue":
+                    await self._do_batch(cmd["items"])
+                elif cmd_type == "watch_url":
+                    await self._do_watch(cmd["url"], cmd.get("minutes"))
+                elif cmd_type == "stop_watch":
+                    await self._stop_watch()
+                elif cmd_type == "cleanup":
+                    await self._do_cleanup()
+                elif cmd_type == "logout":
+                    await self._do_logout()
+                elif cmd_type == "quit":
+                    await self._do_quit()
+                    break
+            except Exception as e:
+                import traceback
+                self.log(f"Command '{cmd_type}' failed: {e}")
+                self.log(traceback.format_exc(limit=4))
+                self.result_queue.put({"type": cmd_type, "success": False,
+                                       "message": str(e)})
 
     # ── Command implementations ────────────────────────────
 
@@ -2971,11 +2983,8 @@ class DriverManager:
         browser_mode, launch_headless, launch_args = \
             self._browser_launch_mode(batch_viewport)
         self.log(f"Launching shared browser [{browser_mode}]...")
-        shared_browser = await self._batch_pw.chromium.launch(
-            executable_path=CHROME_PATH,
-            headless=launch_headless,
-            args=launch_args,
-        )
+        shared_browser = await self._launch_browser(
+            self._batch_pw, launch_headless, launch_args)
 
         # ── Phase 3: Open ALL profile pages at once ────────
         # Contexts on the shared browser are plain incognito contexts —
@@ -3422,6 +3431,34 @@ class DriverManager:
             return mode, False, args
         return mode, True, args
 
+    async def _launch_browser(self, pw, headless: bool, args: list,
+                              attempts: int = 3):
+        """Launch the shared browser, retrying a browser that dies at startup.
+
+        Brave updates itself in the background. A launch that lands in that
+        window starts the new binary and it exits immediately, which Playwright
+        reports as "Target page, context or browser has been closed" with
+        exitCode=0 in the log. Nothing is wrong with the flags and the next
+        attempt a few seconds later succeeds, so a transient failure must not
+        cost the whole batch.
+        """
+        from src.core.facebook_automation import CHROME_PATH
+        last = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return await pw.chromium.launch(executable_path=CHROME_PATH,
+                                                headless=headless, args=args)
+            except Exception as e:
+                last = e
+                if attempt == attempts:
+                    break
+                wait = 3 * attempt
+                self.log(f"  ⚠️  Browser launch failed (attempt {attempt}/"
+                         f"{attempts}): {str(e).splitlines()[0][:120]}")
+                self.log(f"  Retrying in {wait}s - Brave may be mid-update...")
+                await asyncio.sleep(wait)
+        raise last
+
     # Re-checked this often while a watch is running. Long enough to cost
     # nothing, short enough that a stall is measured in seconds.
     WATCH_POLL_SECONDS = 15
@@ -3647,9 +3684,8 @@ class DriverManager:
             self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
                                       flags=WATCH_FLAGS)
         self._watch_pw = await async_playwright().start()
-        self._watch_browser = await self._watch_pw.chromium.launch(
-            executable_path=CHROME_PATH, headless=launch_headless,
-            args=launch_args)
+        self._watch_browser = await self._launch_browser(
+            self._watch_pw, launch_headless, launch_args)
         self._watch_autos = {}
 
         sem = asyncio.Semaphore(5)
