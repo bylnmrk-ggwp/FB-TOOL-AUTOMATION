@@ -245,18 +245,20 @@ async def run(args) -> int:
                 if a.get("linked_profile")]
     if not args.relogin:
         accounts = [a for a in accounts if a.get("status") != "ok"]
-    if args.untried:
-        # Only accounts with no verdict yet (blank reason) or a transient one
-        # ("... - retry"). Deterministic failures - needs 2FA, wrong password,
-        # bad username - are skipped: re-running cannot change them.
-        def _untried(a):
+    if args.untried or args.plain_only:
+        # --untried: accounts with no verdict yet (blank reason) or a transient
+        # one ("... - retry"). Deterministic failures - needs 2FA, wrong
+        # password, bad username - are skipped: re-running cannot change them.
+        # --plain-only: stricter - blank reason only, i.e. the sheet shows
+        # exactly NOT LOGGED IN with no "/ reason" suffix at all.
+        def _wanted(a):
             r = (a.get("status_reason") or "").strip()
-            return r == "" or r.endswith("- retry")
-        skipped = [a for a in accounts if not _untried(a)]
-        accounts = [a for a in accounts if _untried(a)]
+            return r == "" or (args.untried and r.endswith("- retry"))
+        skipped = [a for a in accounts if not _wanted(a)]
+        accounts = [a for a in accounts if _wanted(a)]
         if skipped:
-            print(f"Skipping {len(skipped)} account(s) with a known failure "
-                  f"(2FA / wrong password / bad username) - --untried")
+            what = "any recorded reason" if args.plain_only else                    "a known failure (2FA / wrong password / bad username)"
+            print(f"Skipping {len(skipped)} account(s) with {what}")
 
     creds = la.read_credentials_from_sheet()
     todo = [a for a in accounts if a["username"].lower() in creds]
@@ -344,6 +346,10 @@ def main(argv) -> int:
                     help="only accounts with no verdict yet (plain NOT LOGGED IN) "
                          "or a transient '- retry' one; skip known 2FA / wrong "
                          "password / bad username")
+    ap.add_argument("--plain-only", action="store_true",
+                    help="only accounts whose STATUS is exactly NOT LOGGED IN "
+                         "(no '/ reason' suffix at all, transient retries "
+                         "included in the skip)")
     ap.add_argument("--include-disabled", action="store_true")
     ap.add_argument("--no-live-sheet", action="store_true")
     ap.add_argument("--twofa-timeout", type=float, default=45.0,
