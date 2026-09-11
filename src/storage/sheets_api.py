@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_SHEET_ID = os.environ.get(
     "SHEETS_SHEET_ID", "1oKKPnfTCn7LXqO9kboS3Jx2Aw8aWYeVh9PordjNxFeM")
@@ -22,14 +22,30 @@ DEFAULT_KEY = Path(os.environ.get(
     "SHEETS_SERVICE_ACCOUNT", str(ROOT / ".secrets" / "sheets-service-account.json")))
 
 
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def credentials(key_path: Path | str = DEFAULT_KEY):
+    """The service-account Credentials object, not yet refreshed.
+
+    A long-running caller keeps this and refreshes it only when it expires
+    (about hourly), so a poll costs one request, not two.
+    """
+    from google.oauth2.service_account import Credentials
+    return Credentials.from_service_account_file(str(key_path), scopes=SCOPES)
+
+
+def refresh(creds) -> str:
+    """Refresh creds if needed; return a usable access token."""
+    import google.auth.transport.requests as gtr
+    if not creds.valid:
+        creds.refresh(gtr.Request())
+    return creds.token
+
+
 def token(key_path: Path | str = DEFAULT_KEY) -> str:
     """A fresh OAuth access token for the service account."""
-    from google.oauth2.service_account import Credentials
-    import google.auth.transport.requests as gtr
-    creds = Credentials.from_service_account_file(
-        str(key_path), scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    creds.refresh(gtr.Request())
-    return creds.token
+    return refresh(credentials(key_path))
 
 
 def call(tok: str, sheet_id: str, path: str, method: str = "GET",

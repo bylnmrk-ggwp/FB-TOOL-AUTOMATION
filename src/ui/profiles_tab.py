@@ -316,7 +316,7 @@ class ProfilesTab(ttk.Frame):
                 a for a in accounts
                 if needle in (a.get("facebook_name") or "").lower()
                 or needle in (a.get("username") or "").lower()
-                or needle in (a.get("email") or "").lower()
+                or needle in (a.get("gmail") or "").lower()
                 or needle in (a.get("linked_profile") or "").lower()
             ]
         self._roster_visible = accounts

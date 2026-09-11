@@ -115,7 +115,7 @@ def read_credentials_from_sheet() -> dict:
     are held in memory for the run only.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # ensure scripts/ importable
-    import sheets_api as api
+    from src.storage import sheets_api as api
     tok = api.token()
     rows = api.get_values(tok, api.DEFAULT_SHEET_ID, f"{api.DEFAULT_TAB}!A1:Z")
     cols = api.header_columns(rows, "USERNAME", "PASSWORD")
@@ -198,14 +198,18 @@ class Live:
             return
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
-            import sheets_api as api
+            from src.storage import sheets_api as api
             import sync_sheet_status as sync
             self.api, self.sync = api, sync
             self.sheet_id = api.DEFAULT_SHEET_ID
             self.tab = api.DEFAULT_TAB
             self.tok = api.token()
             self.gid = sync.resolve_gid(self.tok, self.sheet_id, self.tab)
-            self.rowmap = sync.build_row_index(self.tok, self.sheet_id, self.tab)
+            # Columns come from the header row, never a fixed letter.
+            cols = sync.resolve_columns(self.tok, self.sheet_id, self.tab)
+            self.status_col = cols["status"]
+            self.rowmap = sync.build_row_index(self.tok, self.sheet_id,
+                                               self.tab, cols["username"])
             self.rows = len(self.rowmap)
             self.on = self.gid is not None and self.rows > 0
         except Exception as e:
@@ -220,7 +224,7 @@ class Live:
         for attempt in (1, 2):
             try:
                 self.sync.write_status(self.tok, self.sheet_id, self.gid,
-                                       self.tab, row, text)
+                                       self.tab, row, text, self.status_col)
                 return
             except Exception:
                 if attempt == 1:

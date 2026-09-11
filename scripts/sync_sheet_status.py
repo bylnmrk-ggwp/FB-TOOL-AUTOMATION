@@ -1,16 +1,19 @@
 """Mirror each account's login status into the Google Sheet as a red/green pill.
 
 Reads the roster sheet's USERNAME column, matches each row to the local
-account database, and writes one STATUS column (G) plus a cell background:
+account database, and writes the STATUS column plus a cell background:
 
     DISABLED        red    - Facebook disabled the account (db status)
     NOT LOGGED IN   red    - imported, no confirmed session yet
     LOGGED IN       green  - a valid cached session, or db status 'ok'
     (blank)         none   - the sheet row is not in the local database
 
-Only column G is ever written. Columns A-F (including PASSWORD) are read to
-match rows and never modified. Credentials never leave this machine except
-the username, which is only used to look the row up.
+USERNAME and STATUS are located by their header labels on every run, never
+by a fixed column letter: a fixed index once pointed STATUS writes at the
+NUMBER column after the sheet gained a column. If no STATUS header exists,
+one is added in the first empty column. No other column is ever written.
+Credentials never leave this machine except the username, which is only
+used to look the row up.
 
 Auth: a Google service-account key, path from SHEETS_SERVICE_ACCOUNT (env) or
 .secrets/sheets-service-account.json. The sheet must be shared to the service
@@ -32,17 +35,42 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/ for sheets_api
 
-import sheets_api as api
+from src.storage import sheets_api as api
 from src.storage import database as db
 from src.storage import state_cache
 
 DEFAULT_SHEET_ID = api.DEFAULT_SHEET_ID
 DEFAULT_TAB = api.DEFAULT_TAB
 DEFAULT_KEY = api.DEFAULT_KEY
-USERNAME_COL = "C"          # the column holding the Facebook login id
-STATUS_COL_INDEX = 6        # 0-based: column G
+
+
+def col_letter(idx: int) -> str:
+    """0-based column index -> A1 letters (0 -> A, 26 -> AA)."""
+    out = ""
+    idx += 1
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        out = chr(ord("A") + rem) + out
+    return out
+
+
+def resolve_columns(tok: str, sheet_id: str, tab: str) -> dict[str, int]:
+    """0-based indexes of the USERNAME and STATUS columns, from the header row.
+
+    USERNAME must exist. A missing STATUS header is created in the first
+    column past the header, so the first run on a fresh sheet adds it.
+    """
+    header = api.get_values(tok, sheet_id, f"{tab}!1:1")
+    cols = api.header_columns(header, "USERNAME", "STATUS")
+    if "USERNAME" not in cols:
+        raise SystemExit(f"Sheet needs a USERNAME header; found "
+                         f"{header[0] if header else '(empty)'}")
+    if "STATUS" not in cols:
+        cols["STATUS"] = len(header[0]) if header else 1
+        c = col_letter(cols["STATUS"])
+        api.update_values(tok, sheet_id, f"{tab}!{c}1:{c}1", [["STATUS"]])
+    return {"username": cols["USERNAME"], "status": cols["STATUS"]}
 
 # Cell backgrounds. Red and green are the pill fills; white text reads on both.
 RED = {"red": 0.80, "green": 0.16, "blue": 0.16}
@@ -101,9 +129,12 @@ def resolve_gid(tok: str, sheet_id: str, tab: str) -> int | None:
 
 
 def build_row_index(tok: str, sheet_id: str, tab: str,
-                    username_col: str = USERNAME_COL) -> dict[str, int]:
-    """Map each USERNAME (lower-cased) to its 1-based sheet row."""
-    rng = f"{tab}!{username_col}2:{username_col}"
+                    username_col: int) -> dict[str, int]:
+    """Map each USERNAME (lower-cased) to its 1-based sheet row.
+
+    username_col is the 0-based index from resolve_columns()."""
+    c = col_letter(username_col)
+    rng = f"{tab}!{c}2:{c}"
     rows = api.get_values(tok, sheet_id, rng)
     out = {}
     for i, row in enumerate(rows):
@@ -114,15 +145,17 @@ def build_row_index(tok: str, sheet_id: str, tab: str,
 
 
 def write_status(tok: str, sheet_id: str, gid: int, tab: str,
-                 row: int, text: str) -> None:
-    """Write one STATUS cell's value and colour it by category."""
-    col = chr(ord("A") + STATUS_COL_INDEX)      # 'G'
+                 row: int, text: str, status_col: int) -> None:
+    """Write one STATUS cell's value and colour it by category.
+
+    status_col is the 0-based index from resolve_columns()."""
+    col = col_letter(status_col)
     api.update_values(tok, sheet_id, f"{tab}!{col}{row}:{col}{row}", [[text]])
     bg, tf = _fill(text)
     api.batch_update(tok, sheet_id, [{"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": row - 1, "endRowIndex": row,
-                  "startColumnIndex": STATUS_COL_INDEX,
-                  "endColumnIndex": STATUS_COL_INDEX + 1},
+                  "startColumnIndex": status_col,
+                  "endColumnIndex": status_col + 1},
         "cell": {"userEnteredFormat": {
             "backgroundColor": bg, "horizontalAlignment": "CENTER",
             "textFormat": tf}},
@@ -155,8 +188,15 @@ def main(argv) -> int:
         print(f"Tab not found: {args.tab}")
         return 1
 
+    cols = resolve_columns(token, args.sheet_id, args.tab)
+    status_col = cols["status"]
+    sc = col_letter(status_col)
+    print(f"USERNAME in column {col_letter(cols['username'])}, "
+          f"STATUS in column {sc}")
+
     # Read the username column; its length fixes the data-row range.
-    rng = urllib.parse.quote(f"{args.tab}!{USERNAME_COL}2:{USERNAME_COL}")
+    uc = col_letter(cols["username"])
+    rng = urllib.parse.quote(f"{args.tab}!{uc}2:{uc}")
     got = api.call(token, args.sheet_id, f"/values/{rng}").get("values", [])
     usernames = [(row[0].strip() if row else "") for row in got]
     n = len(usernames)
@@ -178,11 +218,8 @@ def main(argv) -> int:
 
     # 1. Write the STATUS column values (header + one cell per data row).
     values = [["STATUS"]] + [[s] for s in statuses]
-    body = {"range": f"{args.tab}!G1:G{n + 1}",
-            "majorDimension": "ROWS", "values": values}
-    api.call(token, args.sheet_id,
-         f"/values/{urllib.parse.quote(f'{args.tab}!G1:G{n + 1}')}"
-         "?valueInputOption=RAW", method="PUT", body=body)
+    api.update_values(token, args.sheet_id, f"{args.tab}!{sc}1:{sc}{n + 1}",
+                      values)
 
     # 2. Colour each STATUS cell. Contiguous rows of the same status collapse
     #    into one repeatCell request so the batch stays small.
@@ -193,8 +230,8 @@ def main(argv) -> int:
         requests.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": row_start,
                       "endRowIndex": row_end,
-                      "startColumnIndex": STATUS_COL_INDEX,
-                      "endColumnIndex": STATUS_COL_INDEX + 1},
+                      "startColumnIndex": status_col,
+                      "endColumnIndex": status_col + 1},
             "cell": {"userEnteredFormat": {
                 "backgroundColor": bg,
                 "horizontalAlignment": "CENTER",
@@ -210,8 +247,8 @@ def main(argv) -> int:
     # Header cell: bold, no fill.
     requests.insert(0, {"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1,
-                  "startColumnIndex": STATUS_COL_INDEX,
-                  "endColumnIndex": STATUS_COL_INDEX + 1},
+                  "startColumnIndex": status_col,
+                  "endColumnIndex": status_col + 1},
         "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True},
             "horizontalAlignment": "CENTER"}},

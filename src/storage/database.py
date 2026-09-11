@@ -71,12 +71,22 @@ def init_db():
             UNIQUE(profile_a, profile_b)
         );
 
+        -- Column names follow the roster sheet's headers (FACEBOOK NAME,
+        -- USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER) so a sync maps
+        -- header to column by name. linked_profile, status and status_reason
+        -- are owned by this machine and never written by a sheet sync.
+        --
+        -- password and gmail_password hold plaintext credentials at the
+        -- operator's explicit request (2026-09-11). They are excluded from
+        -- list_accounts() so no view, log or label carries them by accident.
         CREATE TABLE IF NOT EXISTS accounts (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             sheet_no        INTEGER,
             facebook_name   TEXT    NOT NULL DEFAULT '',
             username        TEXT    NOT NULL,
-            email           TEXT    NOT NULL DEFAULT '',
+            password        TEXT    NOT NULL DEFAULT '',
+            gmail           TEXT    NOT NULL DEFAULT '',
+            gmail_password  TEXT    NOT NULL DEFAULT '',
             number          TEXT    NOT NULL DEFAULT '',
             linked_profile  TEXT    NOT NULL DEFAULT '',
             status          TEXT    NOT NULL DEFAULT '',
@@ -112,13 +122,25 @@ def init_db():
 
 
 def _migrate(conn):
-    """Add columns that CREATE TABLE IF NOT EXISTS cannot add retroactively."""
+    """Bring an existing accounts table up to the current schema.
+
+    CREATE TABLE IF NOT EXISTS cannot add or rename columns retroactively.
+    Every step is idempotent and additive; rollback of the rename is
+    ALTER TABLE accounts RENAME COLUMN gmail TO email, and a consistent
+    backup is taken before the first run of each new step (see the
+    migration notes in the commit that added it).
+    """
     have = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
-    if have and "status" not in have:
-        conn.execute("ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT ''")
-    if have and "status_reason" not in have:
-        conn.execute("ALTER TABLE accounts ADD COLUMN status_reason "
-                     "TEXT NOT NULL DEFAULT ''")
+    if not have:
+        return  # fresh database: CREATE TABLE above is the whole schema
+    # 2026-09-11: the roster sheet's header is GMAIL; the column follows it.
+    if "email" in have and "gmail" not in have:
+        conn.execute("ALTER TABLE accounts RENAME COLUMN email TO gmail")
+        have = (have - {"email"}) | {"gmail"}
+    for col in ("status", "status_reason", "password", "gmail_password"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} "
+                         "TEXT NOT NULL DEFAULT ''")
 
 
 # ── Join History ──────────────────────────────────────────
@@ -341,27 +363,33 @@ def get_used_image_paths() -> set[str]:
 
 
 def upsert_account(sheet_no, facebook_name: str, username: str,
-                   email: str = "", number: str = "") -> str:
+                   gmail: str = "", number: str = "",
+                   password: str = "", gmail_password: str = "") -> str:
     """Insert or refresh one account, keyed by username.
 
-    Returns "inserted" or "updated" so a caller can report real counts.
-    An existing linked_profile is preserved across re-imports.
+    Writes exactly the sheet-owned columns. linked_profile, status and
+    status_reason are preserved across re-imports. Returns "inserted" or
+    "updated" so a caller can report real counts.
     """
     conn = _get_conn()
     if conn.execute("SELECT 1 FROM accounts WHERE username = ?",
                     (username,)).fetchone():
         conn.execute(
-            """UPDATE accounts SET sheet_no = ?, facebook_name = ?, email = ?,
+            """UPDATE accounts SET sheet_no = ?, facebook_name = ?,
+                                   password = ?, gmail = ?, gmail_password = ?,
                                    number = ?,
                                    imported_at = datetime('now','localtime')
                WHERE username = ?""",
-            (sheet_no, facebook_name, email, number, username))
+            (sheet_no, facebook_name, password, gmail, gmail_password,
+             number, username))
         conn.commit()
         return "updated"
     conn.execute(
-        """INSERT INTO accounts (sheet_no, facebook_name, username, email, number)
-           VALUES (?, ?, ?, ?, ?)""",
-        (sheet_no, facebook_name, username, email, number))
+        """INSERT INTO accounts (sheet_no, facebook_name, username, password,
+                                 gmail, gmail_password, number)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (sheet_no, facebook_name, username, password, gmail, gmail_password,
+         number))
     conn.commit()
     return "inserted"
 
@@ -375,7 +403,9 @@ def list_accounts(linked_only: bool = False,
     Facebook has disabled, which is what a login or share run wants.
     """
     conn = _get_conn()
-    sql = ("SELECT sheet_no, facebook_name, username, email, number, "
+    # password / gmail_password are deliberately not selected: every roster
+    # view, label and log line is built from these dicts.
+    sql = ("SELECT sheet_no, facebook_name, username, gmail, number, "
            "linked_profile, status, status_reason FROM accounts")
     where, params = [], []
     if linked_only:

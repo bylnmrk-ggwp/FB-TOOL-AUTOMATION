@@ -540,7 +540,48 @@ class MainWindow(tk.Tk):
 
     def _start_queue_polling(self):
         self._poll_id = None
+        self._sheet_watcher = None
         self._poll_queue()
+
+    def start_sheet_sync(self):
+        """Keep the account roster current with the Google Sheet.
+
+        Started by app.run(), not here, so verify.py and screenshot builds
+        never touch the network. The watcher thread only fetches and parses;
+        every database write happens in _poll_queue on this thread.
+        """
+        if self._sheet_watcher is not None:
+            return
+        from src.storage.roster_sheet import SheetWatcher
+        self._sheet_watcher = SheetWatcher()
+        self._sheet_watcher.start()
+        self.log_tab.write("Roster sync: watching the Google Sheet "
+                           f"(every {self._sheet_watcher.interval:.0f}s)")
+
+    def _drain_sheet_events(self):
+        watcher = self._sheet_watcher
+        if watcher is None:
+            return
+        from src.storage import roster_sheet
+        while True:
+            try:
+                kind, payload = watcher.events.get_nowait()
+            except Exception:
+                return
+            if kind == "rows":
+                try:
+                    inserted, updated = roster_sheet.apply(payload)
+                except Exception as e:
+                    self.log_tab.write(f"Roster sync failed to apply: {e}")
+                    continue
+                self.log_tab.write(f"Roster synced from sheet: {inserted} new, "
+                                   f"{updated} refreshed ({len(payload)} rows)")
+                try:
+                    self.profiles_tab.refresh_accounts()
+                except Exception:
+                    pass
+            elif kind == "error":
+                self.log_tab.write(f"Roster sync: {payload}")
 
     def destroy(self):
         """Cancel the pending poll before tearing down.
@@ -556,6 +597,9 @@ class MainWindow(tk.Tk):
             except Exception:
                 pass
             self._poll_id = None
+        watcher = getattr(self, "_sheet_watcher", None)
+        if watcher is not None:
+            watcher.stop()
         super().destroy()
 
     def _poll_queue(self):
@@ -569,6 +613,7 @@ class MainWindow(tk.Tk):
             self._handle_result(result)
             result = self.manager.poll_result()
 
+        self._drain_sheet_events()
         self._update_status_counts()
         self._poll_id = self.after(100, self._poll_queue)
 
