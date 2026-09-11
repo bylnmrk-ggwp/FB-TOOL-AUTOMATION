@@ -3460,8 +3460,16 @@ class DriverManager:
         raise last
 
     # Re-checked this often while a watch is running. Long enough to cost
-    # nothing, short enough that a stall is measured in seconds.
-    WATCH_POLL_SECONDS = 15
+    # nothing, short enough that a stall is measured in seconds. Randomised
+    # rather than fixed: a poll landing on the same 15.0s tick for two hours
+    # is a machine signature, and nothing here needs a precise cadence.
+    WATCH_POLL_MIN_SECONDS = 10
+    WATCH_POLL_MAX_SECONDS = 20
+
+    # How often the heartbeat line is printed. Also randomised, so "every
+    # ~2 min" is an average rather than a metronome.
+    WATCH_BEAT_MIN_SECONDS = 90
+    WATCH_BEAT_MAX_SECONDS = 180
 
     # A page is stalled when currentTime advanced by less than this share of
     # the poll interval. Generous: a live stream that drifts a little is fine,
@@ -3554,9 +3562,13 @@ class DriverManager:
         last_t: dict[str, float] = {}
         stalls: dict[str, int] = {}
         rounds = 0
+        next_beat = loop.time() + random.uniform(self.WATCH_BEAT_MIN_SECONDS,
+                                                 self.WATCH_BEAT_MAX_SECONDS)
         try:
             while True:
-                await asyncio.sleep(self.WATCH_POLL_SECONDS)
+                slept = random.uniform(self.WATCH_POLL_MIN_SECONDS,
+                                       self.WATCH_POLL_MAX_SECONDS)
+                await asyncio.sleep(slept)
                 if not self._watch_autos:
                     return
                 if deadline is not None and loop.time() >= deadline:
@@ -3589,7 +3601,7 @@ class DriverManager:
                     advanced = now_t - last_t.get(name, now_t)
                     last_t[name] = now_t
                     frozen = (name in stalls or rounds > 1) and \
-                        advanced < self.WATCH_POLL_SECONDS * self.WATCH_STALL_RATIO
+                        advanced < slept * self.WATCH_STALL_RATIO
                     if not frozen:
                         stalls[name] = 0
                         playing += 1
@@ -3625,9 +3637,12 @@ class DriverManager:
                              f"the player or stayed frozen: "
                              f"{', '.join(reloaded[:4])}"
                              + (" ..." if len(reloaded) > 4 else ""))
-                # A quiet heartbeat every ~2 minutes, so a long watch is
-                # visibly alive without flooding the log.
-                if rounds % 8 == 0:
+                # A quiet heartbeat, so a long watch is visibly alive
+                # without flooding the log. Fires on a randomised 1.5-3 min
+                # gap rather than a fixed count of rounds.
+                if loop.time() >= next_beat:
+                    next_beat = loop.time() + random.uniform(
+                        self.WATCH_BEAT_MIN_SECONDS, self.WATCH_BEAT_MAX_SECONDS)
                     left = ""
                     if deadline is not None:
                         mins = max(0.0, (deadline - loop.time()) / 60.0)
@@ -3762,7 +3777,7 @@ class DriverManager:
         # own aggregate and it will not match the page count exactly.
         self.log(f"👁 Watch started: {len(watching)}/{len(self._watch_autos)} "
                  f"page(s) playing at open [{mode}, {where}], {how_long}. "
-                 f"Live count follows every ~2 min.")
+                 f"Live count follows every 1.5-3 min.")
 
     # How long a freshly opened page gets to mount a player, and how long its
     # currentTime is sampled to prove the player is really running.
