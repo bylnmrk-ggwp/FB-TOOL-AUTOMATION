@@ -3830,6 +3830,15 @@ class FacebookAutomation:
             # to a random comment/editor in the Home feed.
             target_kind = await self.page.evaluate("""() => {
                 const isReel = /\\/reel\\//.test(location.href);
+                // A live or video permalink is neither a dialog nor an
+                // article: it renders Overview / Live chat / Your replies
+                // under [role="main"], with no [role="article"] anywhere and
+                // its only dialog a 329x47 "Close reactions" strip. Without
+                // this branch it matched nothing and was reported as the Home
+                // feed, so a live link could never even reach the composer
+                // search - or the diagnosis that says comments are off.
+                const isVideo = /\\/(videos|watch|live)\\//.test(location.pathname)
+                    || /^\\/watch\\/?$/.test(location.pathname);
                 const dialogs = [...document.querySelectorAll('[role="dialog"]')]
                     .filter(d => {
                         const r = d.getBoundingClientRect();
@@ -3844,10 +3853,22 @@ class FacebookAutomation:
                         return (ar.width * ar.height) - (br.width * br.height);
                     });
                 let root = dialogs[0] || document.querySelector('[role="article"]');
-                if (!root && isReel) {
+                if (!root && (isReel || isVideo)) {
                     const video = document.querySelector('video');
                     const videoHost = video && video.closest('[role="dialog"]');
-                    root = videoHost || document.querySelector('[aria-label*="Reel" i]')
+                    // A bare <a aria-label="Reels"> in the nav is not the
+                    // post: on a live page that anchor is the first match and
+                    // is empty, so require a box big enough to hold a player
+                    // before trusting the label, and only on a reel URL.
+                    const reelHost = isReel
+                        ? [...document.querySelectorAll('[aria-label*="Reel" i]')]
+                              .find(e => {
+                                  const r = e.getBoundingClientRect();
+                                  return r.width > 200 && r.height > 200;
+                              })
+                        : null;
+                    root = videoHost || reelHost
+                        || document.querySelector('[role="main"]')
                         || document.body;
                 }
                 if (!root) return '';
@@ -3856,8 +3877,21 @@ class FacebookAutomation:
                     : (document.querySelector('[role="article"]') ? 'article' : 'page');
             }""")
             if not target_kind:
-                self.last_comment_error = "target post did not open"
-                self.log("Target post did not open (Facebook returned Home/feed)")
+                # Only the home page is the home page. This used to report
+                # "Facebook returned Home/feed" for any layout it did not
+                # recognise, so a run that landed on exactly the right post
+                # was blamed on a redirect that never happened.
+                try:
+                    landed = self.page.url
+                except Exception:
+                    landed = ""
+                if self._is_home_url(landed):
+                    self.last_comment_error = "target post did not open"
+                    self.log("Target post did not open (Facebook returned Home/feed)")
+                else:
+                    self.last_comment_error = "post layout not recognised"
+                    self.log(f"Post opened but no commentable root was found "
+                             f"on {landed}")
                 await self._debug_screenshot("comment_target_not_open")
                 return False
             # A modal (dialog) sits OVER the home feed, so we must never search
