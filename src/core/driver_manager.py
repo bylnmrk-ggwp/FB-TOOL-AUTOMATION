@@ -2885,6 +2885,106 @@ class DriverManager:
 
     # ── Concurrent batch processing ──────────────────────────
 
+    # Only a session Facebook simply expired is worth retrying on our own.
+    # 2FA, a wrong password, a bad username and a disabled account are all
+    # decisions a re-login cannot change, and hammering them is how an account
+    # gets locked rather than recovered.
+    RELOGIN_REASONS = ("logged out or session expired", "session expired",
+                       "no home page")
+    # Per profile, so a profile Facebook keeps expiring cannot become a loop.
+    RELOGIN_COOLDOWN_SECONDS = 1800
+
+    def _relogin_allowed(self, profile_name: str) -> bool:
+        if not cfg.get_setting("auto_relogin", True):
+            return False
+        account = db.account_for_profile(profile_name) or {}
+        if account.get("status") == "disabled":
+            return False
+        reason = (account.get("status_reason") or "").strip().lower()
+        if reason and reason not in self.RELOGIN_REASONS:
+            return False
+        last = getattr(self, "_relogin_last", {}).get(profile_name, 0.0)
+        return (time.monotonic() - last) >= self.RELOGIN_COOLDOWN_SECONDS
+
+    async def _relogin_profile(self, profile_name: str) -> bool:
+        """Log a profile back in after Facebook expired its session.
+
+        Sequential and inside the profile's REAL Brave user-data-dir. It has to
+        be: Brave binds cookie encryption to the user-data-dir, so a login
+        performed in a copy and written back leaves a profile whose c_user/xs
+        cannot be decrypted - dead, while still looking logged in. That is why
+        scripts/login_parallel.py must not be used for this.
+        """
+        from src.core.facebook_automation import FacebookAutomation, LOGIN_FLAGS
+        from src.storage import state_cache
+
+        creds = db.credentials_for_profile(profile_name)
+        if not creds:
+            self.log(f"  ↻ '{profile_name}': no password on the roster row - "
+                     f"cannot re-login automatically")
+            return False
+        username, password = creds
+        brave_path = cfg.get_profile_path(profile_name)
+        if not brave_path:
+            self.log(f"  ↻ '{profile_name}': no Brave profile path")
+            return False
+
+        if not hasattr(self, "_relogin_last"):
+            self._relogin_last = {}
+        self._relogin_last[profile_name] = time.monotonic()
+
+        self.log(f"  ↻ Session expired - logging '{profile_name}' back in...")
+        auto = FacebookAutomation(log_callback=lambda m: None)
+        try:
+            await auto.start_browser(brave_path, headless=True,
+                                     flags=LOGIN_FLAGS)
+            await auto.go_to_facebook()
+            ok, msg = True, "already logged in"
+            if not await self._session_is_live(auto):
+                ok, msg = await auto.login_with_credentials(username, password)
+                if ok and not await self._session_is_live(auto):
+                    ok, msg = False, ("signed in but never reached the home "
+                                      "page - Facebook is gating this account")
+            if ok:
+                db.record_login_check(profile_name, True, "logged_in")
+                state_cache.invalidate(profile_name)   # force a fresh extract
+                self.log(f"  ✓ '{profile_name}' logged back in ({msg})")
+                await self._push_sheet_status(profile_name)
+                return True
+            status = await auto._classify_account_access()
+            db.record_login_check(profile_name, False, status)
+            self.log(f"  ✗ '{profile_name}' could not be logged back in: {msg}")
+            await self._push_sheet_status(profile_name)
+            return False
+        except Exception as e:
+            self.log(f"  ✗ '{profile_name}' re-login error: {str(e)[:120]}")
+            return False
+        finally:
+            try:
+                await auto.quit()
+            except Exception:
+                pass
+
+    @staticmethod
+    async def _session_is_live(auto) -> bool:
+        """Both session cookies present AND the browser is on the home page.
+
+        Facebook issues c_user and xs before a checkpoint, so cookies alone
+        call a gated account logged in.
+        """
+        try:
+            cookies = await auto.context.cookies()
+        except Exception:
+            return False
+        names = {c.get("name") for c in cookies
+                 if "facebook" in (c.get("domain") or "")}
+        if not {"c_user", "xs"} <= names:
+            return False
+        try:
+            return auto._is_home_url(auto.page.url)
+        except Exception:
+            return False
+
     async def _login_failure(self, auto, profile_name: str) -> dict:
         """Why did the login check fail: a dead session, or a slow page?
 
@@ -3236,6 +3336,9 @@ class DriverManager:
 
             # Items run ONE AT A TIME with a randomized delay between them
             # — deliberate anti-spam pacing (tune via CONFIGURE_DELAYS.bat).
+            relogin_queue = getattr(self, "_relogin_queue", None)
+            if relogin_queue is None:
+                relogin_queue = self._relogin_queue = set()
             self.log(f"\n🔄 Processing {len(batch_items)} item(s) with anti-spam delays...")
 
             batch_results = []
@@ -3300,6 +3403,10 @@ class DriverManager:
                         pname = result.get("profile_name", "")
                         state_cache.invalidate(pname)
                         db.record_login_check(pname, False, "session expired")
+                        # Queued, not run here: this browser is mid-batch and a
+                        # re-login opens the profile's real user-data-dir.
+                        if self._relogin_allowed(pname):
+                            relogin_queue.add(pname)
                     self.result_queue.put({
                         "type": "batch_item_result",
                         "ok": result.get("ok", False),
@@ -3359,6 +3466,19 @@ class DriverManager:
         self.result_queue.put({
             "type": "batch_result", "ok": True, "total": total,
         })
+        # Now that the shared browser is closed, nothing holds Brave's
+        # singleton lock, so expired sessions can be restored in place.
+        pending = getattr(self, "_relogin_queue", None) or set()
+        if pending:
+            names = sorted(pending)
+            pending.clear()
+            self.log(f"↻ Auto re-login: {len(names)} profile(s) whose session "
+                     f"Facebook expired")
+            restored = 0
+            for name in names:
+                if await self._relogin_profile(name):
+                    restored += 1
+            self.log(f"↻ Auto re-login: {restored}/{len(names)} restored")
         self.log(f"Batch complete: {success_count}/{total} successful")
 
     async def _cleanup_batch(self):

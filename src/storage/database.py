@@ -487,6 +487,26 @@ def record_login_check(profile_name: str, logged_in: bool,
                               (reason or "").replace("_", " "))
 
 
+def credentials_for_profile(profile_name: str) -> tuple[str, str] | None:
+    """(username, password) for the account linked to a Brave profile.
+
+    Deliberately its own function rather than a column on list_accounts():
+    those dicts build every roster view, label and log line, so the password
+    must not travel with them. Only a login may ask for this, and it asks for
+    exactly one account. Returns None when the account or password is missing.
+    """
+    if not profile_name:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT username, password FROM accounts "
+        "WHERE linked_profile = ? AND password != '' ORDER BY sheet_no LIMIT 1",
+        (profile_name,)).fetchone()
+    if not row:
+        return None
+    return row[0], row[1]
+
+
 def logged_in_profiles() -> set[str]:
     """Names of Brave profiles whose linked account is logged in (status 'ok').
 
