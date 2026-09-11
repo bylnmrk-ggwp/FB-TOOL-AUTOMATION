@@ -4099,7 +4099,15 @@ class FacebookAutomation:
 
                 if not comment_box:
                     if diag.get("viewer_cannot_comment"):
-                        reason = "commenting is turned off on this post"
+                        # Per VIEWER, not per post: the same live video returns
+                        # can_viewer_comment=true for one profile and false for
+                        # another at the same moment, because the author limited
+                        # who may comment. So this is never a reason to skip the
+                        # post for the rest of the queue.
+                        reason = ("this account may not comment here "
+                                  "(can_viewer_comment=false - the author "
+                                  "limited who can comment; other accounts "
+                                  "may still be allowed)")
                     elif diag.get("disabled_notice"):
                         reason = ("Facebook served a 'comments off' notice but "
                                   "says this account can comment — transient "
