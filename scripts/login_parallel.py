@@ -158,7 +158,8 @@ async def _attempt(pw, wid: int, account: dict, password: str,
             return False, la.NEEDS_2FA
 
         if ok and not await la.has_session(auto):
-            ok, msg = False, ("reported success but no session cookies "
+            ok, msg = False, (la.NO_HOME_PAGE if la.auto_on_gate(auto) else
+                              "reported success but no session cookies "
                               "(c_user/xs missing)")
         if not ok:
             # Normalise Facebook's raw copy the same way the sequential run

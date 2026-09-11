@@ -464,10 +464,18 @@ class ProfilesTab(ttk.Frame):
     def refresh_profiles(self):
         if hasattr(self, "_clear_profile_hover"):
             self._clear_profile_hover()
+        # A refresh now also follows a login scan, which can run while the
+        # operator has a profile picked, so put the selection back.
+        keep = self.selected_profile
         self.profile_listbox.delete(0, "end")
-        for name in self._visible_profiles():
+        names = self._visible_profiles()
+        for name in names:
             display = f"\u26a0 {name} — RATE LIMITED" if name in self._rate_limited else name
             self.profile_listbox.insert("end", display)
+        if keep in names:
+            idx = names.index(keep)
+            self.profile_listbox.selection_set(idx)
+            self.profile_listbox.see(idx)
         self._update_buttons()
 
     def mark_rate_limited(self, profile_name: str):

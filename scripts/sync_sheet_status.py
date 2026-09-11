@@ -5,7 +5,8 @@ account database, and writes the STATUS column plus a cell background:
 
     DISABLED        red    - Facebook disabled the account (db status)
     NOT LOGGED IN   red    - imported, no confirmed session yet
-    LOGGED IN       green  - a valid cached session, or db status 'ok'
+    LOGGED IN       green  - db status 'ok' (a login run or login check saw
+                             the profile reach its Facebook home page)
     (blank)         none   - the sheet row is not in the local database
 
 USERNAME and STATUS are located by their header labels on every run, never
@@ -38,7 +39,6 @@ sys.path.insert(0, str(ROOT))
 
 from src.storage import sheets_api as api
 from src.storage import database as db
-from src.storage import state_cache
 
 DEFAULT_SHEET_ID = api.DEFAULT_SHEET_ID
 DEFAULT_TAB = api.DEFAULT_TAB
@@ -96,10 +96,10 @@ def status_for(account: dict | None) -> str:
         return ""
     if (account.get("status") or "") == "disabled":
         return DISABLED
-    linked = account.get("linked_profile") or ""
-    logged_in = (account.get("status") == "ok"
-                 or (linked and state_cache.load_state(linked) is not None))
-    if logged_in:
+    # Only a recorded verdict counts: status 'ok' is set by a login run or a
+    # login check that saw the profile reach its home page. Cached cookies
+    # alone say nothing about a checkpoint or email-confirmation gate.
+    if account.get("status") == "ok":
         return LOGGED_IN
     reason = (account.get("status_reason") or "").strip()
     return f"{NOT_LOGGED_IN} / {reason.upper()}" if reason else NOT_LOGGED_IN

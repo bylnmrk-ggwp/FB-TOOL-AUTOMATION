@@ -154,6 +154,10 @@ def short_reason(msg: str) -> str:
         return ""                       # the DISABLED status already says it
     if msg == NEEDS_2FA:
         return "needs 2FA"
+    if msg == NEEDS_EMAIL_CONFIRM:
+        return "needs email confirmation"
+    if msg == NO_HOME_PAGE:
+        return "no home page"
     if msg == BAD_PASSWORD:
         return "wrong password"
     if msg == BAD_IDENTIFIER:
@@ -178,6 +182,8 @@ def short_reason(msg: str) -> str:
 # 2FA prompt means the credentials were accepted and only a code is missing.
 DISABLED = "ACCOUNT DISABLED by Facebook - no login possible"
 NEEDS_2FA = "credentials accepted, needs a 2FA code"
+NEEDS_EMAIL_CONFIRM = "credentials accepted, Facebook wants the email confirmed first"
+NO_HOME_PAGE = "signed in but Facebook never let the account reach its home page"
 BAD_PASSWORD = "wrong password in the spreadsheet"
 BAD_IDENTIFIER = "username is not a valid Facebook login"
 
@@ -288,6 +294,8 @@ def classify(url: str, msg: str) -> str | None:
         return DISABLED
     if "two_step_verification" in u or "twofactor" in u:
         return NEEDS_2FA
+    if "confirmemail" in u:
+        return NEEDS_EMAIL_CONFIRM
     # Facebook's copy varies ("...is invalid", "...you've entered is
     # incorrect", "...isn't connected to an account"), so key on the subject
     # word plus any rejection word rather than one exact sentence.
@@ -302,15 +310,32 @@ def classify(url: str, msg: str) -> str | None:
     return None
 
 
-async def has_session(auto) -> bool:
-    """True only if Facebook actually issued a logged-in session.
+def auto_on_gate(auto) -> bool:
+    """True when the browser is parked on a Facebook gate, not the home page.
 
-    _is_logged_in() infers login from the absence of a login form or overlay,
-    which can pass transiently on a page that never authenticated: a real
+    Tells "the login produced no session at all" apart from "the login
+    worked but Facebook is holding the account at a checkpoint / email
+    confirmation", which are different problems for whoever reads the sheet.
+    """
+    try:
+        return auto._is_gated_url(auto.page.url)
+    except Exception:
+        return False
+
+
+async def has_session(auto) -> bool:
+    """True only if this account can actually use Facebook right now.
+
+    Two things have to hold, and each catches what the other misses:
+
+    c_user (the account id) and xs (the session token) must exist - a real
     test run reported "Login successful" while the profile ended up holding
     only datr/fr/sb/wd, i.e. device identifiers and no session at all.
-    c_user (the account id) and xs (the session token) are the two cookies
-    that constitute a session, so check for those instead of guessing.
+
+    And the browser must be sitting on the Facebook HOME page - Facebook
+    issues both cookies before a checkpoint or an email-confirmation gate,
+    so cookies alone marked gated accounts 'ok' and the sheet said LOGGED
+    IN for accounts that could not load their own feed.
     """
     try:
         cookies = await auto.context.cookies()
@@ -318,7 +343,12 @@ async def has_session(auto) -> bool:
         return False
     names = {c.get("name") for c in cookies
              if "facebook" in (c.get("domain") or "")}
-    return all(n in names for n in SESSION_COOKIES)
+    if not all(n in names for n in SESSION_COOKIES):
+        return False
+    try:
+        return auto._is_home_url(auto.page.url)
+    except Exception:
+        return False
 
 
 def _mark_ok(account: dict):
@@ -367,7 +397,8 @@ async def login_one(account: dict, password: str, log,
 
         # Trust cookies over the DOM heuristic, whichever way they disagree.
         if ok and not await has_session(auto):
-            ok, msg = False, ("reported success but no session cookies "
+            ok, msg = False, (NO_HOME_PAGE if auto_on_gate(auto) else
+                              "reported success but no session cookies "
                               "(c_user/xs missing) - not logged in")
 
         if ok:

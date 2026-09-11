@@ -446,6 +446,47 @@ def link_account(username: str, profile_name: str) -> bool:
     return cur.rowcount > 0
 
 
+def account_for_profile(profile_name: str) -> dict | None:
+    """The roster account linked to a Brave profile, or None if none is."""
+    if not profile_name:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT sheet_no, facebook_name, username, gmail, number, "
+        "linked_profile, status, status_reason FROM accounts "
+        "WHERE linked_profile = ? ORDER BY sheet_no LIMIT 1",
+        (profile_name,)).fetchone()
+    return dict(row) if row else None
+
+
+def record_login_check(profile_name: str, logged_in: bool,
+                       reason: str = "") -> bool:
+    """Persist a live login check on the account linked to `profile_name`.
+
+    Logged in means the profile reached its Facebook home page, so the
+    account becomes 'ok' and counts as active. Any other verdict clears
+    'ok' and keeps the reason, the same rule the login scripts apply; a
+    disabled verdict is recorded as 'disabled'.
+
+    An inconclusive check writes nothing: 'unreachable' means the browser
+    never got to Facebook (network blip, stalled profile), which says
+    nothing about the account and must not demote a logged-in one.
+
+    Returns False when nothing was written.
+    """
+    if not logged_in and reason == "unreachable":
+        return False
+    acct = account_for_profile(profile_name)
+    if not acct:
+        return False
+    if logged_in:
+        return set_account_status(acct["username"], "ok")
+    if reason == "disabled_or_suspended":
+        return set_account_status(acct["username"], "disabled")
+    return set_account_status(acct["username"], "",
+                              (reason or "").replace("_", " "))
+
+
 def logged_in_profiles() -> set[str]:
     """Names of Brave profiles whose linked account is logged in (status 'ok').
 

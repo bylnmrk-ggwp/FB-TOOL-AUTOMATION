@@ -1,9 +1,12 @@
 """
 Live login-status scan for all saved Brave profiles.
 
-Reuses the overlay-aware extract_storage_state() so the 'See more on
-Facebook' login dialog is detected as logged-out (the URL alone can lie).
-Reports which profiles are still logged in and which need re-login.
+Reuses extract_storage_state(), whose verdict is "the profile reached its
+Facebook home page with no login UI": a checkpoint, an email-confirmation
+gate or a 'See more on Facebook' overlay all count as not logged in.
+Reports which profiles are still logged in and which need re-login, records
+the verdict on each linked roster account (status 'ok' or the reason) and
+reconciles the Google Sheet STATUS column with the database.
 
 Usage:
     python check_login_status.py
@@ -15,12 +18,14 @@ import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # scripts/
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
 from src.storage import config_manager as cfg
+from src.storage import database as db
 
 
 async def main(only: list[str] | None = None) -> int:
@@ -52,12 +57,17 @@ async def main(only: list[str] | None = None) -> int:
             if state is None:
                 print(f"[{idx}/{len(profiles)}] ❌ '{name}' — could not extract session")
                 results.append((name, False, "extract failed"))
-            elif logged_in:
-                print(f"[{idx}/{len(profiles)}] ✅ '{name}' — LOGGED IN")
-                results.append((name, True, ""))
             else:
-                print(f"[{idx}/{len(profiles)}] ❌ '{name}' — NOT LOGGED IN (needs re-login)")
-                results.append((name, False, "login overlay / session expired"))
+                reason = "logged_in" if logged_in else getattr(
+                    auto, "last_account_status", "unknown_not_logged_in")
+                db.record_login_check(name, logged_in, reason)
+                if logged_in:
+                    print(f"[{idx}/{len(profiles)}] ✅ '{name}' — LOGGED IN")
+                    results.append((name, True, ""))
+                else:
+                    why = reason.replace("_", " ")
+                    print(f"[{idx}/{len(profiles)}] ❌ '{name}' — NOT LOGGED IN ({why})")
+                    results.append((name, False, why))
         except Exception as e:
             print(f"[{idx}/{len(profiles)}] ❌ '{name}' — error: {e}")
             results.append((name, False, str(e)))
@@ -74,6 +84,15 @@ async def main(only: list[str] | None = None) -> int:
 
     logged_in_count = sum(1 for _, ok, _ in results if ok)
     needs = [(n, r) for n, ok, r in results if not ok]
+
+    # Best-effort: the sheet mirrors the statuses this scan just recorded.
+    try:
+        import sync_sheet_status as sync
+        rc = sync.main([])
+        print("Sheet reconciled with the database." if rc == 0
+              else "(sheet not reconciled - see the line above)")
+    except (SystemExit, Exception) as e:
+        print(f"(sheet reconcile skipped: {e})")
 
     print("=" * 70)
     print(f"SUMMARY — {logged_in_count}/{len(profiles)} logged in")

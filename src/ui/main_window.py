@@ -889,9 +889,11 @@ class MainWindow(tk.Tk):
             else:
                 results = result.get("results", [])
                 removed_profiles = result.get("removed_profiles", [])
+                # The scan rewrote account statuses: the "logged in only"
+                # filter and the active count must re-read them.
+                self.profiles_tab.refresh_profiles()
+                self.queue_tab.refresh_profiles()
                 if removed_profiles:
-                    self.profiles_tab.refresh_profiles()
-                    self.queue_tab.refresh_profiles()
                     self.log_tab.write(
                         f"Auto-removed {len(removed_profiles)} disabled profile(s): "
                         + ", ".join(removed_profiles))
