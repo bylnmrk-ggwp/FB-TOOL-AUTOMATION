@@ -3702,6 +3702,29 @@ class DriverManager:
     WATCH_VERIFY_TIMEOUT_MS = 25000
     WATCH_VERIFY_SAMPLE_SECONDS = 3
 
+    async def _push_sheet_status(self, profile_name: str):
+        """Mirror one profile's recorded account status to the roster sheet.
+
+        The database has just been written, so this only carries that verdict
+        across - the sheet cannot end up saying something the database does
+        not hold. Blocking network I/O, so it runs off the event loop, and it
+        is best-effort throughout: an unreachable or unconfigured sheet must
+        never stall or fail a watch.
+        """
+        from src.storage import sheet_status
+        account = db.account_for_profile(profile_name)
+        username = (account or {}).get("username") or ""
+        if not username:
+            return
+        try:
+            text = await asyncio.to_thread(
+                sheet_status.push_account_status, username)
+        except Exception as e:
+            self.log(f"  ⚠️  sheet not updated for '{profile_name}': {e}")
+            return
+        if text:
+            self.log(f"  ✓ sheet updated: {username} → {text}")
+
     async def _verify_watching(self, auto, profile_name: str) -> str:
         """'playing', or the reason this page is not a viewer.
 
@@ -3724,6 +3747,8 @@ class DriverManager:
             # the profile stayed 'ok' and every later watch opened it again.
             status = await auto._classify_account_access(auto.page)
             recorded = db.record_login_check(profile_name, False, status)
+            if recorded:
+                await self._push_sheet_status(profile_name)
             if status == "disabled_or_suspended":
                 return ("ACCOUNT DISABLED by Facebook"
                         + (" - marked disabled, dropped from active"

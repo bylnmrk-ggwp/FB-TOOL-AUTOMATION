@@ -45,121 +45,16 @@ DEFAULT_TAB = api.DEFAULT_TAB
 DEFAULT_KEY = api.DEFAULT_KEY
 
 
-def col_letter(idx: int) -> str:
-    """0-based column index -> A1 letters (0 -> A, 26 -> AA)."""
-    out = ""
-    idx += 1
-    while idx:
-        idx, rem = divmod(idx - 1, 26)
-        out = chr(ord("A") + rem) + out
-    return out
-
-
-def resolve_columns(tok: str, sheet_id: str, tab: str) -> dict[str, int]:
-    """0-based indexes of the USERNAME and STATUS columns, from the header row.
-
-    USERNAME must exist. A missing STATUS header is created in the first
-    column past the header, so the first run on a fresh sheet adds it.
-    """
-    header = api.get_values(tok, sheet_id, f"{tab}!1:1")
-    cols = api.header_columns(header, "USERNAME", "STATUS")
-    if "USERNAME" not in cols:
-        raise SystemExit(f"Sheet needs a USERNAME header; found "
-                         f"{header[0] if header else '(empty)'}")
-    if "STATUS" not in cols:
-        cols["STATUS"] = len(header[0]) if header else 1
-        c = col_letter(cols["STATUS"])
-        api.update_values(tok, sheet_id, f"{tab}!{c}1:{c}1", [["STATUS"]])
-    return {"username": cols["USERNAME"], "status": cols["STATUS"]}
-
-# Cell backgrounds. Red and green are the pill fills; white text reads on both.
-RED = {"red": 0.80, "green": 0.16, "blue": 0.16}
-GREEN = {"red": 0.11, "green": 0.53, "blue": 0.28}
-AMBER = {"red": 0.90, "green": 0.62, "blue": 0.15}    # in-progress
-WHITE_TEXT = {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True}
-NO_FILL = {"red": 1, "green": 1, "blue": 1}
-DARK_TEXT = {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "bold": False}
-
-DISABLED = "DISABLED"
-NOT_LOGGED_IN = "NOT LOGGED IN"
-LOGGED_IN = "LOGGED IN"
-IN_PROGRESS = "LOGGING IN"          # a live run sets this while it works a row
-
-
-def status_for(account: dict | None) -> str:
-    """The pill text for one sheet row, or '' when it is not in the database.
-
-    A not-logged-in row carries its reason after a slash when one is known,
-    e.g. "NOT LOGGED IN / WRONG PASSWORD", so the sheet says why.
-    """
-    if account is None:
-        return ""
-    if (account.get("status") or "") == "disabled":
-        return DISABLED
-    # Only a recorded verdict counts: status 'ok' is set by a login run or a
-    # login check that saw the profile reach its home page. Cached cookies
-    # alone say nothing about a checkpoint or email-confirmation gate.
-    if account.get("status") == "ok":
-        return LOGGED_IN
-    reason = (account.get("status_reason") or "").strip()
-    return f"{NOT_LOGGED_IN} / {reason.upper()}" if reason else NOT_LOGGED_IN
-
-
-def _fill(status: str) -> tuple[dict, dict]:
-    """(backgroundColor, textFormat) for a status, by category.
-
-    status may carry a "/ reason" suffix, so match on the prefix, not equality.
-    """
-    if status == DISABLED or status.startswith(NOT_LOGGED_IN):
-        return RED, WHITE_TEXT
-    if status == LOGGED_IN:
-        return GREEN, WHITE_TEXT
-    if status.startswith(IN_PROGRESS):
-        return AMBER, WHITE_TEXT
-    return NO_FILL, DARK_TEXT
-
-
-# ── Live single-row updates (used by login_accounts.py while it runs) ──────
-
-def resolve_gid(tok: str, sheet_id: str, tab: str) -> int | None:
-    """The numeric sheetId of a tab, needed for formatting requests."""
-    meta = api.call(tok, sheet_id, "?fields=sheets(properties(title,sheetId))")
-    return next((s["properties"]["sheetId"] for s in meta["sheets"]
-                 if s["properties"]["title"] == tab), None)
-
-
-def build_row_index(tok: str, sheet_id: str, tab: str,
-                    username_col: int) -> dict[str, int]:
-    """Map each USERNAME (lower-cased) to its 1-based sheet row.
-
-    username_col is the 0-based index from resolve_columns()."""
-    c = col_letter(username_col)
-    rng = f"{tab}!{c}2:{c}"
-    rows = api.get_values(tok, sheet_id, rng)
-    out = {}
-    for i, row in enumerate(rows):
-        u = (row[0].strip() if row else "")
-        if u:
-            out[u.lower()] = i + 2      # data starts at row 2
-    return out
-
-
-def write_status(tok: str, sheet_id: str, gid: int, tab: str,
-                 row: int, text: str, status_col: int) -> None:
-    """Write one STATUS cell's value and colour it by category.
-
-    status_col is the 0-based index from resolve_columns()."""
-    col = col_letter(status_col)
-    api.update_values(tok, sheet_id, f"{tab}!{col}{row}:{col}{row}", [[text]])
-    bg, tf = _fill(text)
-    api.batch_update(tok, sheet_id, [{"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": row - 1, "endRowIndex": row,
-                  "startColumnIndex": status_col,
-                  "endColumnIndex": status_col + 1},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": bg, "horizontalAlignment": "CENTER",
-            "textFormat": tf}},
-        "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}])
+# The pill text, colours and single-row writes live in src/storage, because
+# the app writes them too (a watch that finds a disabled account pushes the
+# verdict straight to the sheet). Re-exported here under the names this
+# script and the login scripts already use.
+from src.storage.sheet_status import (          # noqa: E402
+    col_letter, resolve_columns, status_for, fill as _fill,
+    resolve_gid, build_row_index, write_status, push_account_status,
+    RED, GREEN, AMBER, WHITE_TEXT, NO_FILL, DARK_TEXT,
+    DISABLED, NOT_LOGGED_IN, LOGGED_IN, IN_PROGRESS,
+)
 
 
 def main(argv) -> int:
