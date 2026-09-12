@@ -3,6 +3,7 @@ import gc
 import json
 import os
 import random
+import re
 import tempfile
 import time
 import traceback
@@ -4716,7 +4717,73 @@ class FacebookAutomation:
                         "try again later", "temporarily unavailable",
                         "couldn't load", "could not load")
 
+    # What Facebook's API says when the account itself is the problem. The
+    # toast never shows any of this - it reads "Something went wrong. Please
+    # try again.", which is why a restricted account was retried three times.
+    # Captured live from a refused share: {"message":"Your account is
+    # restricted"} with {"code":1404078}.
+    _SHARE_RESTRICTION_TEXT = ("account is restricted", "temporarily blocked",
+                               "temporarily restricted", "you can't share",
+                               "cannot share", "action blocked",
+                               "we limit how often", "abusive", "spam")
+    _SHARE_RESTRICTION_CODES = ("1404078", "1404102", "1404006", "368")
+
+    async def _watch_share_api_errors(self):
+        """Record what Facebook's GraphQL replies say while a share is tried.
+
+        Returns the detach callable. The toast is deliberately vague, so the
+        only way to tell "the server hiccuped" from "this account may not
+        share" is to read the API's own words.
+        """
+        self._share_api_errors = []
+
+        async def _on_response(resp):
+            try:
+                if "/api/graphql" not in resp.url:
+                    return
+                body = await resp.text()
+            except Exception:
+                return
+            low = body.lower()
+            if not any(t in low for t in self._SHARE_RESTRICTION_TEXT) \
+                    and not any(f'"{c}"' in body or f":{c}" in body
+                                for c in self._SHARE_RESTRICTION_CODES):
+                return
+            for m in re.finditer(r'"(?:message|error_user_msg|error_user_title|'
+                                 r'summary)"\s*:\s*"([^"]{4,200})"', body):
+                self._share_api_errors.append(m.group(1))
+            for c in self._SHARE_RESTRICTION_CODES:
+                if f":{c}" in body:
+                    self._share_api_errors.append(f"code {c}")
+
+        try:
+            self.page.on("response", _on_response)
+        except Exception:
+            return lambda: None
+
+        def _detach():
+            try:
+                self.page.remove_listener("response", _on_response)
+            except Exception:
+                pass
+        return _detach
+
+    def _share_restriction_seen(self) -> str:
+        """Facebook's own reason, when it says the ACCOUNT cannot share."""
+        for said in getattr(self, "_share_api_errors", []) or []:
+            low = said.lower()
+            if any(t in low for t in self._SHARE_RESTRICTION_TEXT) \
+                    or said.startswith("code "):
+                return said
+        return ""
+
     def _share_error_is_transient(self) -> bool:
+        # An account restriction outranks the toast. "Something went wrong.
+        # Please try again." is what Facebook shows for BOTH a real hiccup and
+        # a restricted account, and retrying the second only spends the
+        # account's remaining goodwill.
+        if self._share_restriction_seen():
+            return False
         said = (getattr(self, "last_share_error", "") or "").lower()
         return any(kw in said for kw in self._SHARE_TRANSIENT)
 
@@ -4838,6 +4905,13 @@ class FacebookAutomation:
         different call, and only fall back to the quick route if this post
         does not offer a composer at all.
         """
+        detach = await self._watch_share_api_errors()
+        try:
+            return await self._share_attempts(options, what)
+        finally:
+            detach()
+
+    async def _share_attempts(self, options: tuple, what: str) -> bool:
         for attempt in range(1, self.SHARE_RETRY_ATTEMPTS + 1):
             if not await self._back_on_target_post(f"the {what} share"):
                 return False
@@ -4851,6 +4925,14 @@ class FacebookAutomation:
             if await self._share_once(options, what):
                 return True
             if not self._share_error_is_transient():
+                blocked = self._share_restriction_seen()
+                if blocked:
+                    # Say what Facebook actually said. The toast claims a
+                    # generic hiccup; the API named the account.
+                    self.last_share_error = (
+                        f"Facebook is restricting this account from sharing "
+                        f"(API said: {blocked})")
+                    self.log(f"  {what} share refused - {self.last_share_error}")
                 return False            # a real refusal - retrying is pointless
             if attempt == self.SHARE_RETRY_ATTEMPTS:
                 self.log(f"  {what} share still refused after "
