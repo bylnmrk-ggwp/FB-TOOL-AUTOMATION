@@ -288,6 +288,11 @@ export const actions = {
 
   stopAll() { return command('/api/stop', {}) },
 
+  // Create and link a Brave profile for every roster row that has none.
+  // Long and filesystem-bound on the PC: the answer is 202 and the progress
+  // arrives as log lines, so the page watches server.provision_active.
+  provisionProfiles() { return command('/api/accounts/provision', {}) },
+
   // --- Queue -----------------------------------------------------------
   // The list lives on the PC, so nothing here edits st.queue: every route
   // below is followed by a state event that carries the new list, and a

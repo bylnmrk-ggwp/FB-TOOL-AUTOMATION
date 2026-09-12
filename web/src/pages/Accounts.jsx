@@ -74,6 +74,20 @@ export default function Accounts() {
   const busy = !!(server?.login_run_active || server?.scan_active || server?.run)
   const off = (cond) => busy || !cond
   const say = (text, ok = false) => setStatus({ text, ok })
+
+  // Roster rows with no Brave profile: they cannot be logged in until one
+  // exists, which is what Provision creates.
+  const unprovisioned = accounts.filter(a => a.username && !a.linked_profile).length
+  const provisioning = !!server?.provision_active
+  const provision = async () => {
+    if (!window.confirm(
+      `Create a Brave profile for ${unprovisioned} account${unprovisioned === 1 ? '' : 's'} on the PC?
+
+`
+      + 'Every Brave window must be closed first, or the new profiles are discarded.')) return
+    say('Creating Brave profiles on the PC…', true)
+    if (await actions.provisionProfiles()) say('Provisioning started — watch the Log page', true)
+  }
   const fire = async (promise, doing) => {
     say(doing, true)
     const ok = await promise
@@ -194,6 +208,12 @@ export default function Accounts() {
         <button type="button" className="btn" disabled={off(profiles.length > 0)} onClick={autoSetup}>Auto setup</button>
         <button type="button" className="btn" disabled={off(profiles.length > 0)} onClick={acceptPending}>Accept friend requests</button>
         <button type="button" className="btn" disabled={off(one)} onClick={launch} title="Opens a Brave window on the PC">Launch</button>
+        {unprovisioned > 0 && (
+          <button type="button" className="btn accent" disabled={busy || provisioning} onClick={provision}
+                  title="Creates and links a Brave profile for every account that has none">
+            {provisioning ? 'Creating profiles…' : `Provision ${unprovisioned} profile${unprovisioned === 1 ? '' : 's'}`}
+          </button>
+        )}
         <button type="button" className="btn" disabled={off(hasUsername && !acct.linked_profile)} onClick={openLink}>Link{'…'}</button>
         <button type="button" className="btn" disabled={off(hasUsername && !!acct.linked_profile)} onClick={unlink}>Unlink</button>
       </div>

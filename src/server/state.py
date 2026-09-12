@@ -40,6 +40,10 @@ class AppState:
     pending_input: dict | None = None   # the open needs_input prompt, or None
     login_run_active: bool = False
     scan_active: bool = False
+    # Creating Brave profiles for unlinked roster rows. Not a DriverManager
+    # command - it is scripts/provision_profiles.py run in a thread - so it
+    # needs its own flag rather than riding on `run`.
+    provision_active: bool = False
     sheet_last_ok: float = 0.0          # SheetWatcher.last_ok; 0.0 before the first poll
     system: dict = field(default_factory=dict)   # from manager.get_memory_stats()
     bridge_alive: bool = True

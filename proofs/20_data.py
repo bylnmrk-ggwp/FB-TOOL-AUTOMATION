@@ -37,7 +37,8 @@ _PROFILE = "verify-s1-profile"       # linked, but not a saved Brave profile
 _ROW_KEYS = {"sheet_no", "facebook_name", "username", "gmail", "linked_profile",
              "status", "status_reason", "sheet_status", "logged_in", "restricted"}
 _STATE_KEYS = {"run", "last_run_summary", "queue", "pending_input",
-               "login_run_active", "scan_active", "sheet_last_ok", "system",
+               "login_run_active", "scan_active", "provision_active",
+               "sheet_last_ok", "system",
                "bridge_alive", "version"}
 
 # -- data.py ---------------------------------------------------------------
