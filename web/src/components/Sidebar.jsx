@@ -45,11 +45,16 @@ export default function Sidebar({ pages, active, onSelect, collapsed, onToggle, 
   return (
     <aside className={'sidebar' + (collapsed ? ' collapsed' : '')} aria-label="Sections">
       <div className="logo">
-        {['light', 'dark'].map(mode => imgFailed[mode] ? null : (
-          <img key={mode} src={`${base}logo_${mode}.png`} alt="MCARSPH" hidden={theme !== mode}
-               draggable={false} onError={() => setImgFailed(f => ({ ...f, [mode]: true }))} />
-        ))}
-        {imgFailed[theme] && <div className="wordmark"><span>MCARS</span><span className="brand">PH.</span></div>}
+        {/* Collapsed shows the square monogram, not the full lockup: cropping
+            the wide logo into a 40 px rail sliced the wheel mid-shape and read
+            as a broken image. */}
+        {collapsed
+          ? <img className="mark" src={`${base}logo_mark.png`} alt="MCARSPH" draggable={false} />
+          : ['light', 'dark'].map(mode => imgFailed[mode] ? null : (
+            <img key={mode} src={`${base}logo_${mode}.png`} alt="MCARSPH" hidden={theme !== mode}
+                 draggable={false} onError={() => setImgFailed(f => ({ ...f, [mode]: true }))} />
+          ))}
+        {!collapsed && imgFailed[theme] && <div className="wordmark"><span>MCARS</span><span className="brand">PH.</span></div>}
       </div>
 
       <nav className="nav">

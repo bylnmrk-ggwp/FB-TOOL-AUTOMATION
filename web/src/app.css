@@ -75,11 +75,13 @@ h1, h2, h3, p, ul { margin: 0; }
   transition: width var(--m-sidebar) var(--ease-out), height var(--m-sidebar) var(--ease-out);
 }
 .logo img[hidden] { display: none; }
-.sidebar.collapsed .logo img {
-  width: 40px;
-  height: 40px;
-  object-fit: cover;         /* the rail keeps the wheel emblem at the right edge */
-  object-position: 100% 50%;
+.sidebar.collapsed .logo { justify-content: center; }
+.sidebar.collapsed .logo img.mark {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;       /* a square monogram, so nothing is cropped */
+  object-position: center;
+  border-radius: 8px;
 }
 .wordmark {
   font-size: var(--t-display);
@@ -459,20 +461,89 @@ label.check input { accent-color: var(--accent); margin: 0; }
   justify-content: center;
   padding: var(--s-xl);
   background: var(--bg);
+  /* A single brand-tinted wash behind the card so the page is not a flat
+     slab. Very low alpha: it must read as depth, never as colour. */
+  background-image: radial-gradient(120% 90% at 50% -20%,
+                    color-mix(in srgb, var(--brand) 12%, transparent), transparent 60%);
 }
 .login-card {
+  position: relative;
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
   display: flex;
   flex-direction: column;
   gap: var(--s-md);
-  padding: var(--s-xl);
+  padding: var(--s-xxl) var(--s-xl) var(--s-lg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.10), 0 2px 6px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
 }
-.login-logo { display: block; width: 220px; max-width: 100%; height: auto; align-self: flex-start; }
-.login-card .input { height: 36px; }
-.login-card .btn.accent { height: 36px; justify-content: center; }
-.login-error { color: var(--error); font-size: var(--t-small); }
-.login-theme { align-self: flex-end; }
+/* The brand stripe ties the card to the logo without colouring the chrome. */
+.login-bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--brand);
+}
+.login-head { display: flex; flex-direction: column; align-items: center; gap: var(--s-xs); text-align: center; }
+.login-logo { display: block; width: 200px; max-width: 100%; height: auto; }
+.login-title { margin: var(--s-sm) 0 0; font-size: var(--t-display); font-weight: 700; color: var(--heading); letter-spacing: -0.01em; }
+.login-sub { margin: 0; font-size: var(--t-small); color: var(--muted); }
+.login-field { margin-top: var(--s-sm); }
+.login-input-wrap { position: relative; display: block; }
+.login-card .input { height: 40px; width: 100%; padding-right: 60px; }
+.login-reveal {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-small);
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.login-reveal:hover:not(:disabled) { color: var(--fg); background: var(--btn-hover); }
+.login-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--s-sm);
+  padding: var(--s-sm) var(--s-md);
+  border-radius: 8px;
+  font-size: var(--t-small);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+}
+.login-submit { height: 40px; justify-content: center; font-weight: 600; }
+.login-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-sm);
+  margin-top: var(--s-xs);
+  padding-top: var(--s-md);
+  border-top: 1px solid var(--border);
+}
+.login-theme {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-small);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.login-theme:hover { color: var(--fg); background: var(--btn-hover); }
 
 /* Placeholder page ------------------------------------------------------- */
 .placeholder { padding: var(--s-xl) var(--s-lg); }
