@@ -1,0 +1,174 @@
+/* Palette, spacing, type and motion tokens.
+   Every hex value and duration is copied verbatim from src/ui/theme.py
+   (THEMES["light"] / THEMES["dark"], SPACE, TYPE, MOTION) so the mockup
+   matches the Tkinter app. Type sizes are theme.py points at 96 DPI. */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #fafafa;
+  --card: #ffffff;
+  --surface: #f4f4f5;
+  --border: #e7e7ea;
+  --status-bg: #f4f4f5;
+
+  /* Text */
+  --fg: #18181b;
+  --heading: #09090b;
+  --muted: #71717a;
+  --status: #52525b;
+  --placeholder: #a1a1aa;
+
+  /* The single accent. Nothing else in the UI is this colour. */
+  --accent: #4f46e5;
+  --accent-hover: #5b52ea;
+  --accent-pressed: #4338ca;
+  --accent-disabled: #c7d2fe;
+
+  /* Semantic */
+  --success: #15803d;
+  --error: #b91c1c;
+  --warning: #a16207;
+
+  /* Header */
+  --header-bg: #fafafa;
+  --header-hover: #f4f4f5;
+  --header-pressed: #e7e7ea;
+
+  /* Inputs */
+  --input-bg: #ffffff;
+  --input-fg: #18181b;
+
+  /* Secondary buttons */
+  --secondary: #fafafa;
+  --secondary-fg: #3f3f46;
+  --secondary-active: #f4f4f5;
+  --secondary-border: #d4d4d8;
+  --btn-hover: #f0f0f1;
+  --btn-pressed: #e4e4e7;
+  --disabled-bg: #fafafa;
+  --disabled-fg: #a1a1aa;
+
+  /* Lists */
+  --list-bg: #ffffff;
+  --list-fg: #18181b;
+  --list-select-bg: #eef2ff;
+  --list-select-fg: #312e81;
+  --list-hover-bg: #f4f4f5;
+  --list-hover-fg: #18181b;
+
+  --track: #e7e7ea;
+  --dot-unknown: #d4d4d8;
+  --scroll-thumb: #d4d4d8;
+  --scroll-thumb-hover: #a1a1aa;
+
+  /* Sidebar (web-admin shell) and brand */
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #3f3f46;
+  --sidebar-muted: #71717a;
+  --sidebar-active-bg: #f4f4f5;
+  --sidebar-active-fg: #09090b;
+  --sidebar-hover-bg: #f4f4f5;
+  --sidebar-border: #e7e7ea;
+  --brand: #d1202a;
+  --chip-bg: #eef2ff;
+  --chip-fg: #312e81;
+
+  /* SPACE */
+  --s-xs: 4px;
+  --s-sm: 8px;
+  --s-md: 12px;
+  --s-lg: 16px;
+  --s-xl: 24px;
+  --s-xxl: 32px;
+
+  /* TYPE (pt -> px at 96 DPI) */
+  --t-micro: 10.67px;   /* 8pt  */
+  --t-small: 12px;      /* 9pt  */
+  --t-body: 13.33px;    /* 10pt */
+  --t-title: 16px;      /* 12pt */
+  --t-display: 24px;    /* 18pt */
+
+  /* MOTION (ms) */
+  --m-page: 160ms;
+  --m-sidebar: 180ms;
+  --m-press: 150ms;
+  --m-theme: 220ms;
+  --m-theme-out: 80ms;
+  --m-theme-in: 140ms;
+  --m-count: 300ms;
+  --m-progress: 200ms;
+  --ease-out: cubic-bezier(0.33, 1, 0.68, 1); /* ease_out_cubic */
+
+  /* Shell geometry */
+  --sidebar-w: 220px;
+  --sidebar-c: 56px;
+
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0f0f11;
+  --card: #17171a;
+  --surface: #1c1c20;
+  --border: #27272a;
+  --status-bg: #17171a;
+
+  --fg: #e4e4e7;
+  --heading: #fafafa;
+  --muted: #8b8b93;
+  --status: #a1a1aa;
+  --placeholder: #71717a;
+
+  --accent: #6d75f5;
+  --accent-hover: #7c83f7;
+  --accent-pressed: #5a62e0;
+  --accent-disabled: #2e2f5c;
+
+  --success: #3fb873;
+  --error: #f0645a;
+  --warning: #d4a13a;
+
+  --header-bg: #0f0f11;
+  --header-hover: #1c1c20;
+  --header-pressed: #27272a;
+
+  --input-bg: #17171a;
+  --input-fg: #e4e4e7;
+
+  --secondary: #0f0f11;
+  --secondary-fg: #d4d4d8;
+  --secondary-active: #1c1c20;
+  --secondary-border: #3f3f46;
+  --btn-hover: #1f1f24;
+  --btn-pressed: #27272a;
+  --disabled-bg: #0f0f11;
+  --disabled-fg: #52525b;
+
+  --list-bg: #17171a;
+  --list-fg: #e4e4e7;
+  --list-select-bg: #26264a;
+  --list-select-fg: #e4e4e7;
+  --list-hover-bg: #1f1f24;
+  --list-hover-fg: #e4e4e7;
+
+  --track: #27272a;
+  --dot-unknown: #3f3f46;
+  --scroll-thumb: #3f3f46;
+  --scroll-thumb-hover: #52525b;
+
+  --sidebar-bg: #131316;
+  --sidebar-fg: #a1a1aa;
+  --sidebar-muted: #71717a;
+  --sidebar-active-bg: #1f1f24;
+  --sidebar-active-fg: #fafafa;
+  --sidebar-hover-bg: #1a1a1e;
+  --sidebar-border: #27272a;
+  --brand: #e2323c;
+  --chip-bg: #26264a;
+  --chip-fg: #e4e4e7;
+}

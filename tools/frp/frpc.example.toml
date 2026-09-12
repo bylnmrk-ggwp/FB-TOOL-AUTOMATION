@@ -1,0 +1,38 @@
+# frpc.example.toml - the PC end of the tunnel to the VPS.
+#
+# Copy this file to frpc.toml (gitignored: it holds the tunnel token) next to
+# frpc.exe and fill in the two values marked CHANGE. Everything else mirrors
+# /etc/frp/frps.toml on the VPS as written in docs/runbooks/vps.md; keep the
+# two files in step. SERVER.bat starts frpc with this file whenever both
+# tools\frp\frpc.exe and tools\frp\frpc.toml exist.
+
+serverAddr = "203.0.113.10"       # CHANGE: the VPS public IP (or its DNS name)
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "CHANGE-ME"          # CHANGE: the auth.token value from /etc/frp/frps.toml
+
+# frps runs with transport.tls.force = true, so a plaintext client is refused.
+transport.tls.enable = true
+
+# Keep retrying when the VPS is unreachable at start-up instead of exiting, so
+# SERVER.bat survives a PC reboot that finishes before the network is up.
+loginFailExit = false
+
+# One proxy: the local uvicorn port becomes 127.0.0.1:8000 on the VPS, where
+# only Caddy can reach it (frps binds proxies to loopback). frps also limits
+# remotePort to 8000 via allowPorts, so a second proxy needs a change there.
+[[proxies]]
+name = "autoshare-web"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8000
+remotePort = 8000
+
+# While server.py is down, withdraw the tunnel so Caddy answers 502 at once
+# instead of holding the phone's request open against a dead local port.
+healthCheck.type = "http"
+healthCheck.path = "/api/health"
+healthCheck.intervalSeconds = 10
+healthCheck.timeoutSeconds = 3
+healthCheck.maxFailed = 3
