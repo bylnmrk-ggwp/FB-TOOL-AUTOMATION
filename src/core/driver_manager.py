@@ -2898,6 +2898,14 @@ class DriverManager:
     # 2FA, a wrong password, a bad username and a disabled account are all
     # decisions a re-login cannot change, and hammering them is how an account
     # gets locked rather than recovered.
+    # How long a profile's shares pause after a refusal. Facebook lifts these
+    # by itself, so both are pauses, not verdicts. A refusal that NAMES the
+    # account earns the long one; a share that simply never went through earns
+    # the short one - enough to stop a run hammering it, not enough to write
+    # the profile off over one bad minute.
+    SHARE_RESTRICTION_HOURS = 12
+    SHARE_FAILURE_PAUSE_HOURS = 2
+
     RELOGIN_REASONS = ("logged out or session expired", "session expired",
                        "no home page")
     # Per profile, so a profile Facebook keeps expiring cannot become a loop.
@@ -3210,6 +3218,24 @@ class DriverManager:
 
                 self.log(f"  [{index + 1}/{total}] {profile_name} → {target}")
 
+                # Two reasons never to attempt a share. Neither applies to a
+                # comment or a reaction, which stay allowed either way.
+                if is_timeline or is_share or is_story:
+                    post_url = item.get("post_url", "")
+                    if post_url and db.has_shared(profile_name, post_url, target):
+                        msg = "already shared this link - skipped"
+                        self.log(f"  [{index + 1}/{total}] ⏭️  {profile_name}: {msg}")
+                        return {"profile_name": profile_name, "ok": True,
+                                "message": msg, "skipped": True}
+                    held = db.share_restriction(profile_name)
+                    if held:
+                        reason, seen_at = held
+                        msg = (f"shares paused for this account after a "
+                               f"refusal at {seen_at} ({reason[:70]})")
+                        self.log(f"  [{index + 1}/{total}] ⏭️  {profile_name}: {msg}")
+                        return {"profile_name": profile_name, "ok": False,
+                                "message": msg, "skipped": True}
+
                 try:
                     if is_react:
                         # For reactions: Go DIRECTLY to the post URL
@@ -3313,6 +3339,23 @@ class DriverManager:
                                 "shared" if ok else "failed",
                                 msg,
                             )
+                            # Remember a share refusal that is about the
+                            # ACCOUNT, so later runs skip it instead of
+                            # re-attempting; a share that works proves the
+                            # restriction is over.
+                            if ok:
+                                db.clear_share_restriction(profile_name)
+                            elif "restricting this account" in (msg or ""):
+                                db.record_share_restriction(
+                                    profile_name, msg,
+                                    self.SHARE_RESTRICTION_HOURS)
+                            else:
+                                # Every retry route was already spent getting
+                                # here, so trying again immediately is forcing
+                                # it. Pause briefly instead.
+                                db.record_share_restriction(
+                                    profile_name, msg or "share did not go through",
+                                    self.SHARE_FAILURE_PAUSE_HOURS)
                     except Exception as db_err:
                         self.log(f"  ⚠️  Failed to save result for '{profile_name}': {db_err}")
 

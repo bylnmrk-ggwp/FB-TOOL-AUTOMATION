@@ -5973,7 +5973,8 @@ class FacebookAutomation:
         if not ok:
             return False, msg
         if not await self._share_to_timeline():
-            return False, "Timeline share failed"
+            return False, (getattr(self, "last_share_error", "")
+                           or "Timeline share failed")
         return True, "Shared to Timeline"
 
     async def share_post_to_story(self, post_url: str) -> tuple[bool, str]:
@@ -5982,7 +5983,8 @@ class FacebookAutomation:
         if not ok:
             return False, msg
         if not await self._share_to_story():
-            return False, "Story share failed"
+            return False, (getattr(self, "last_share_error", "")
+                           or "Story share failed")
         return True, "Shared to Story"
 
     async def share_post_to_timeline(self, post_url: str,
@@ -5998,7 +6000,12 @@ class FacebookAutomation:
 
         timeline_result = await self._share_to_timeline()
         if not timeline_result:
-            return False, "Timeline share failed"
+            # Carry the real reason out. "Timeline share failed" told the
+            # caller nothing, so a refusal naming the ACCOUNT looked identical
+            # to a missing button - and the run could not record the
+            # restriction it had just been told about.
+            return False, (getattr(self, "last_share_error", "")
+                           or "Timeline share failed")
         step += 1
 
         if not await self._share_to_story():

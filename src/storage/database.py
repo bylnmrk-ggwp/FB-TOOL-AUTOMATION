@@ -43,6 +43,20 @@ def init_db():
             UNIQUE(profile, post_url, target)
         );
 
+        -- Facebook restricting an account from SHARING is its own state, not
+        -- a login problem: such an account still comments, reacts and watches
+        -- fine, so it must not be demoted on the roster. Recorded here so a
+        -- later run can skip its share items instead of re-attempting a
+        -- refusal, which is what makes a restriction last longer.
+        CREATE TABLE IF NOT EXISTS share_restrictions (
+            profile     TEXT    PRIMARY KEY,
+            reason      TEXT    DEFAULT '',
+            -- Stored per row: Facebook naming the account earns a long pause,
+            -- while a share that merely never went through earns a short one.
+            pause_hours REAL    NOT NULL DEFAULT 12,
+            noticed_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE TABLE IF NOT EXISTS activity_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             action      TEXT    NOT NULL,
@@ -137,6 +151,11 @@ def _migrate(conn):
     if "email" in have and "gmail" not in have:
         conn.execute("ALTER TABLE accounts RENAME COLUMN email TO gmail")
         have = (have - {"email"}) | {"gmail"}
+    have_sr = {r[1] for r in conn.execute(
+        "PRAGMA table_info(share_restrictions)").fetchall()}
+    if have_sr and "pause_hours" not in have_sr:
+        conn.execute("ALTER TABLE share_restrictions ADD COLUMN "
+                     "pause_hours REAL NOT NULL DEFAULT 12")
     for col in ("status", "status_reason", "password", "gmail_password"):
         if col not in have:
             conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} "
@@ -184,6 +203,42 @@ def record_share(profile: str, post_url: str, target: str, status: str, message:
            VALUES (?, ?, ?, ?, ?)""",
         (profile, post_url, target, status, message),
     )
+    conn.commit()
+
+
+def record_share_restriction(profile: str, reason: str = "",
+                             pause_hours: float = 12):
+    """Pause this profile's shares after Facebook refused one."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO share_restrictions (profile, reason, pause_hours, noticed_at) "
+        "VALUES (?, ?, ?, datetime('now','localtime')) "
+        "ON CONFLICT(profile) DO UPDATE SET reason=excluded.reason, "
+        "pause_hours=excluded.pause_hours, noticed_at=excluded.noticed_at",
+        (profile, reason, float(pause_hours)))
+    conn.commit()
+
+
+def share_restriction(profile: str) -> tuple[str, str] | None:
+    """(reason, noticed_at) while this profile's share pause is still running.
+
+    Time-boxed on purpose: Facebook's share restrictions lift by themselves,
+    so a profile must be allowed to try again once its window passes rather
+    than being written off permanently. Each row carries its own window.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT reason, noticed_at FROM share_restrictions "
+        "WHERE profile = ? AND datetime(noticed_at, '+' || pause_hours || ' hours') "
+        "> datetime('now','localtime')",
+        (profile,)).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def clear_share_restriction(profile: str):
+    """Forget a restriction - a share that succeeds proves it is over."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM share_restrictions WHERE profile = ?", (profile,))
     conn.commit()
 
 
