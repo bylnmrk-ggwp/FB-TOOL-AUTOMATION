@@ -72,6 +72,18 @@ except Exception:
     traceback.print_exc()
     failures.append("tkinter smoke test")
 
+step("proofs/*.py")
+import runpy
+_PROOFS = sorted((ROOT / "proofs").glob("*.py"))
+for _proof in _PROOFS:
+    try:
+        runpy.run_path(str(_proof), init_globals={"failures": failures,
+                                                 "step": step, "ROOT": ROOT})
+    except Exception as _e:
+        traceback.print_exc()
+        failures.append(f"{_proof.name}: {_e}")
+print(f"{len(_PROOFS)} proof file(s) run")
+
 print("\n================ RESULT ================")
 if failures:
     for f in failures:
