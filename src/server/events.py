@@ -106,6 +106,9 @@ class EventBridge(threading.Thread):
         self._poll_s = max(poll_ms, 1) / 1000.0
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
+        # The shared batch list, handed over by create_app. None until then,
+        # and in a proof that builds a bridge on its own.
+        self.queue = None
         # Fan-out: the loop the WebSocket handlers live on, and their queues.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subs: set = set()
@@ -126,6 +129,11 @@ class EventBridge(threading.Thread):
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
         self._loop = loop
+
+    def attach_queue(self, store) -> None:
+        """The QueueStore create_app owns. The bridge only ever empties it,
+        at the end of a batch; every other change comes from a route."""
+        self.queue = store
 
     def subscribe(self) -> asyncio.Queue:
         """A queue this bridge will feed. Call on the attached loop."""
@@ -466,6 +474,12 @@ class EventBridge(threading.Thread):
         self.state.last_run_summary = summary
         cfg.save_setting(LAST_RUN_SUMMARY_KEY, summary)
         self._batch_ok = 0
+        # queue_tab.clear_all(), as the window called it on this branch. On
+        # one desktop the emptied list was simply the next thing the
+        # operator saw; here it also stops a second device from pressing Run
+        # on items that have already been through the browser.
+        if self.queue is not None and self.queue.clear():
+            self.broadcast({"type": "queue_changed"})
 
     def _on_fetch_groups_result(self, r: dict, ok: bool) -> None:
         self.state.run = None

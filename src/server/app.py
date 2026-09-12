@@ -30,17 +30,22 @@ from fastapi.staticfiles import StaticFiles
 from src.server import auth, data
 from src.server.events import EventBridge
 from src.server.logbuf import LogRing
+from src.server.queue_store import QueueStore
 from src.server.routes import accounts as accounts_routes
+from src.server.routes import compose as compose_routes
+from src.server.routes import groups as groups_routes
+from src.server.routes import queue as queue_routes
 from src.server.routes import system as system_routes
 from src.server.state import AppState
 from src.storage import config_manager as cfg
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# The DriverManager helpers phase 1 reaches through a route or the bridge.
+# The DriverManager helpers the server reaches through a route or the bridge.
 # proofs/24_parity.py diffs this against what MainWindow._connect_callbacks
 # wires, so a helper the desktop reaches and the phone cannot is visible.
 USES: tuple[str, ...] = (
+    # Phase 1: the session, the dashboard and the Accounts page.
     "login_accounts",
     "check_login_status",
     "auto_setup_profile",
@@ -50,6 +55,17 @@ USES: tuple[str, ...] = (
     "stop_watch",
     "cleanup",
     "send_user_response",
+    # Phase 2: Compose, My Groups and the shared Queue.
+    "share",
+    "share_to_timeline",
+    "share_to_groups",
+    "share_to_groups_bulk",
+    "join_group",
+    "fetch_my_groups",
+    "fetch_my_groups_bulk",
+    "post_to_timeline",
+    "run_queue",
+    "watch_url",
 )
 
 # /api paths that need no session. Everything else under /api, and /ws, does.
@@ -89,6 +105,51 @@ def _error_response(exc: HTTPException) -> JSONResponse:
     return JSONResponse(body, status_code=exc.status_code, headers=exc.headers)
 
 
+class _SharedQueue(QueueStore):
+    """The one QueueStore, mirroring itself into AppState.queue.
+
+    The store stays the source of truth - it holds the lock and mints the
+    ids - but every device learns the list moved from the state event, so
+    the mirror has to move with the store. Mirroring here rather than in
+    each caller is the point: a route (or the bridge's clear at the end of
+    a batch) that forgot to copy the list would leave every other device
+    showing items that are gone, and there is no way to notice that from
+    the device that made the change.
+    """
+
+    def __init__(self, state: AppState):
+        super().__init__()
+        self._state = state
+        self._mirror()
+
+    def _mirror(self) -> None:
+        """The single place AppState.queue is assigned. items() already
+        returns copies, and the field is replaced whole rather than mutated,
+        so a route thread writing it cannot be caught half-done by the event
+        loop reading it."""
+        self._state.queue = self.items()
+
+    def add(self, item: dict) -> dict:
+        stored = super().add(item)
+        self._mirror()
+        return stored
+
+    def remove(self, index: int) -> bool:
+        removed = super().remove(index)
+        if removed:
+            self._mirror()
+        return removed
+
+    def clear(self) -> int:
+        count = super().clear()
+        self._mirror()
+        return count
+
+    def replace(self, items: list[dict]) -> None:
+        super().replace(items)
+        self._mirror()
+
+
 def create_app(manager, watcher=None, *, state: AppState | None = None,
                logring: LogRing | None = None, bridge: EventBridge | None = None,
                dev: bool = False, web_dist: Path = ROOT / "web" / "dist") -> FastAPI:
@@ -124,6 +185,11 @@ def create_app(manager, watcher=None, *, state: AppState | None = None,
     # Routes that check-then-set an exclusivity flag hold this, so two
     # devices cannot both pass the check (sync routes run on a threadpool).
     st.cmd_lock = threading.Lock()
+    # One queue per server, not per device: the phone that added three
+    # items and the laptop that presses Run see the same list. The bridge
+    # gets it too, so a finished batch can empty it the way QueueTab did.
+    st.queue = _SharedQueue(state)
+    bridge.attach_queue(st.queue)
 
     # ── Errors: one shape ─────────────────────────────────
 
@@ -159,8 +225,13 @@ def create_app(manager, watcher=None, *, state: AppState | None = None,
 
     # ── Routes ────────────────────────────────────────────
 
+    # Every one of these is under /api, so the middleware above guards it
+    # the moment it is included; only PUBLIC_PATHS opts out.
     app.include_router(system_routes.router)
     app.include_router(accounts_routes.router)
+    app.include_router(compose_routes.router)
+    app.include_router(groups_routes.router)
+    app.include_router(queue_routes.router)
 
     # ── WebSocket: server -> client only ──────────────────
 

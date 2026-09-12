@@ -31,6 +31,12 @@ class RunState:
 class AppState:
     run: RunState | None = None
     last_run_summary: str = ""          # restored from config when left blank
+    # The batch queue, mirrored from the QueueStore app.py owns. It rides
+    # along on every state event because a phone that has just woken would
+    # otherwise need a second request to find out what it is looking at,
+    # and because a device must see the list move when another device adds
+    # to it, not only when it next opens the Queue page.
+    queue: list[dict] = field(default_factory=list)
     pending_input: dict | None = None   # the open needs_input prompt, or None
     login_run_active: bool = False
     scan_active: bool = False

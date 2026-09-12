@@ -131,7 +131,11 @@ try:
     # ── module surface the plan names ─────────────────────────────────
     _expected_uses = ("login_accounts", "check_login_status", "auto_setup_profile",
                       "auto_setup_all_profiles", "accept_all_pending_requests",
-                      "start_profile", "stop_watch", "cleanup", "send_user_response")
+                      "start_profile", "stop_watch", "cleanup", "send_user_response",
+                      "share", "share_to_timeline", "share_to_groups",
+                      "share_to_groups_bulk", "join_group", "fetch_my_groups",
+                      "fetch_my_groups_bulk", "post_to_timeline", "run_queue",
+                      "watch_url")
     if tuple(_appmod.USES) != _expected_uses:
         _fail(f"USES={_appmod.USES}")
     for _name in _appmod.USES:

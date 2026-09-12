@@ -38,6 +38,9 @@ export const initialState = {
   counts: null,               // {total, logged_in, pending, pending_unlinked, disabled, profiles, active}
   accounts: [],               // rows from GET /api/accounts (data.accounts_rows keys) + client-only `live` (true/false/undefined from login_scan_progress / login_accounts_progress)
   selected: new Set(),        // usernames (or 'profile:<name>' for unlinked profiles)
+  queue: [],                  // AppState.queue: the one batch list, shared by every device, {id, profile_name, action_type, ...}
+  groups: [],                 // {name, url, profiles} from GET /api/groups - what the PC last fetched from Facebook
+  groupsLoading: false,       // a GET /api/groups in flight, for the My Groups card
   log: [],                    // {stamp, text, level}, max MAX_LOG
   toasts: [],                 // {id, level, text}
   page: initialPage(),        // client-only: the section on screen
@@ -95,14 +98,34 @@ function pushToast(level, text) { setState(withToast(state, level, text)) }
 
 // --- reducer ----------------------------------------------------------------
 
+// Whether two queue snapshots are the same list. Ids are minted once and
+// never reused, and a stored item's fields never change after it is added,
+// so the id sequence identifies the list without walking the fields.
+function sameQueue(a, b) {
+  return a === b || (a.length === b.length && a.every((it, i) => it.id === b[i].id))
+}
+
 // Pure. Handles the event types the plan lists; everything else (the worker
 // results forwarded verbatim) leaves the store alone because the bridge
 // follows each of them with a `state` event that carries the consequences.
 export function reduce(st, event) {
   switch (event.type) {
     case 'state': {
-      const { type, counts, ...server } = event
-      return { ...st, server, counts: counts ?? st.counts }
+      // `queue` is lifted out of `server` rather than read from both: the
+      // batch list has one home in the store, and the server event is the
+      // only thing that fills it (a route's `queue_changed` is followed by
+      // this event, which is why nothing reduces that one).
+      const { type, counts, queue, ...server } = event
+      // It rides along on every state event, progress ticks included, so an
+      // unchanged list must come back as the same array or the Queue page
+      // re-renders several times a second.
+      const items = Array.isArray(queue) ? queue : st.queue
+      return {
+        ...st,
+        server,
+        counts: counts ?? st.counts,
+        queue: sameQueue(items, st.queue) ? st.queue : items,
+      }
     }
     case 'log': {
       const line = { stamp: event.stamp, text: event.text, level: event.level }
@@ -264,6 +287,137 @@ export const actions = {
   },
 
   stopAll() { return command('/api/stop', {}) },
+
+  // --- Queue -----------------------------------------------------------
+  // The list lives on the PC, so nothing here edits st.queue: every route
+  // below is followed by a state event that carries the new list, and a
+  // local edit would only disagree with the phone that added the item.
+
+  // One form, one item per profile - the same fan-out QueueTab did when it
+  // added a row for every displayed profile.
+  queueAdd({ profile_names, action_type, post_url, group_name, comment_text, reaction, text } = {}) {
+    return command('/api/queue/add', {
+      profile_names: profile_names ?? [],
+      action_type: action_type ?? 'group',
+      post_url: post_url ?? null,
+      group_name: group_name ?? null,
+      comment_text: comment_text ?? null,
+      reaction: reaction ?? null,
+      text: text ?? null,
+    })
+  },
+  // By id, not by index: another device's remove shifts every row under it.
+  queueRemove(id) { return command('/api/queue/remove', { id }) },
+  queueClear() { return command('/api/queue/clear', {}) },
+  queueRun() { return command('/api/queue/run', {}) },
+  // Opens a visible Brave window per profile on the PC, which may be a room
+  // away - the page says so before the tap.
+  queueWatch({ url, minutes, profile_names } = {}) {
+    return command('/api/queue/watch', {
+      url: url ?? '',
+      minutes: minutes ?? null,
+      profile_names: profile_names ?? null,
+    })
+  },
+  queueStopWatch() { return command('/api/queue/stop-watch', {}) },
+
+  // --- Groups ----------------------------------------------------------
+
+  // The saved list as the PC last fetched it. A read, not a command: a
+  // failure is the connection, which the banner already reports, so it
+  // raises no toast of its own.
+  async refreshGroups() {
+    setState({ groupsLoading: true })
+    try {
+      setState({ groups: (await api.get('/api/groups')).groups ?? [] })
+    } catch { /* 401 shows the login page; anything else the ws banner says */ }
+    finally { setState({ groupsLoading: false }) }
+  },
+
+  // Exactly one name takes the single-profile fetch and anything else the
+  // bulk sweep, but the route decides that - the page has one button either
+  // way, as the Tk tab's two were.
+  fetchGroups(profileNames) {
+    return command('/api/groups/fetch', { profile_names: profileNames ?? null })
+  },
+
+  // --- Compose ---------------------------------------------------------
+
+  composeShare({ post_url, group_name, comment_text, reaction } = {}) {
+    return command('/api/compose/share', {
+      post_url: post_url ?? '',
+      group_name: group_name ?? '',
+      comment_text: comment_text ?? null,
+      reaction: reaction ?? null,
+    })
+  },
+
+  composeShareTimeline({ post_url, comment_text, reaction } = {}) {
+    return command('/api/compose/share-timeline', {
+      post_url: post_url ?? '',
+      comment_text: comment_text ?? null,
+      reaction: reaction ?? null,
+    })
+  },
+
+  // groups: [{name}] - the worker searches Facebook for each name.
+  composeShareGroups({ post_url, groups, comment_text, reaction } = {}) {
+    return command('/api/compose/share-groups', {
+      post_url: post_url ?? '',
+      groups: groups ?? [],
+      comment_text: comment_text ?? null,
+      reaction: reaction ?? null,
+    })
+  },
+
+  // groups: [{name, url, profiles}] - rows straight out of st.groups, since
+  // the bulk share opens every profile that is a member of each one.
+  composeShareBulk({ post_url, groups, comment_text, reaction, profile_names } = {}) {
+    return command('/api/compose/share-bulk', {
+      post_url: post_url ?? '',
+      groups: groups ?? [],
+      comment_text: comment_text ?? null,
+      reaction: reaction ?? null,
+      profile_names: profile_names ?? null,
+    })
+  },
+
+  composeJoin({ urls, profile_names } = {}) {
+    return command('/api/compose/join', {
+      urls: urls ?? [],
+      profile_names: profile_names ?? null,
+    })
+  },
+
+  composePostTimeline({ text, image_paths } = {}) {
+    return command('/api/compose/post-timeline', {
+      text: text ?? '',
+      image_paths: image_paths ?? null,
+    })
+  },
+
+  // Multipart, so it cannot go through api.js. Content-Type is left unset
+  // on purpose: the browser writes the multipart boundary into it, and a
+  // hand-set header loses that. Throws instead of raising a toast, because
+  // only the form knows which of the picked files was refused.
+  async uploadImage(file) {
+    const form = new FormData()
+    form.append('file', file)
+    let res
+    try {
+      res = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', body: form })
+    } catch {
+      throw { status: 0, error: 'PC unreachable' }
+    }
+    const text = await res.text()
+    let data = null
+    try { data = text ? JSON.parse(text) : null } catch { data = null }
+    if (!res.ok) {
+      if (res.status === 401) actions.setAuth('out')
+      throw { status: res.status, error: (data && data.error) || res.statusText || `HTTP ${res.status}` }
+    }
+    return data
+  },
 
   dismissToast(id) {
     if (state.toasts.some(t => t.id === id)) setState({ toasts: state.toasts.filter(t => t.id !== id) })

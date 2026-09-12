@@ -77,6 +77,14 @@ function handle(event) {
     case 'login_accounts_result':
       actions.refreshAccounts()
       break
+    // A groups fetch rewrites profile_groups on the PC; the event itself
+    // carries no rows, so the list is re-read rather than patched.
+    case 'fetch_groups_result':
+    case 'fetch_groups_bulk_result':
+      actions.refreshGroups()
+      break
+    // `queue_changed` needs nothing here: every queue route pushes a state
+    // event straight after it, and that event carries the whole list.
     default:
       break
   }
