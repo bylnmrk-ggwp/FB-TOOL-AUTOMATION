@@ -18,6 +18,7 @@ import queue as _q  # noqa: E402
 from src.core.driver_manager import DriverManager as _DM  # noqa: E402
 from src.storage import database as _db  # noqa: E402
 import src.storage.sheet_status as _ss  # noqa: E402
+from src.storage import config_manager as _cfg  # noqa: E402
 
 _m = _DM()
 _m.log = lambda _msg: None      # the handler logs non-ASCII; keep stdout clean
@@ -26,7 +27,9 @@ _m._fast_tests = True           # no 2-4 s pause between accounts
 # The public helper puts exactly one dict on cmd_queue.
 _m.login_accounts(["a@example.com"])
 _cmd = _m.cmd_queue.get_nowait()
-if _cmd != {"type": "login_accounts", "usernames": ["a@example.com"]}:
+if (_cmd.get("type") != "login_accounts"
+        or _cmd.get("usernames") != ["a@example.com"]
+        or "batch_size" not in _cmd or "pause_minutes" not in _cmd):
     failures.append(f"login_accounts enqueued {_cmd}")  # noqa: F821
 
 
@@ -64,6 +67,11 @@ _ss.SheetWriter = lambda *a, **k: _NoWriter()
 _run = {"type": "login_accounts",
         "usernames": ["verify_ok@example.com", "verify_np@example.com",
                       "ghost@example.com"]}
+# The login run now skips a linked profile the config does not know, so the
+# fake profile needs a path for this proof to exercise the login path at all.
+_real_get_path = _cfg.get_profile_path
+_cfg.get_profile_path = lambda name: "C:/verify/" + name if name == "P-ok" else None
+
 try:
     _db.upsert_account(1, "OK", "verify_ok@example.com", password="x")
     _db.link_account("verify_ok@example.com", "P-ok")

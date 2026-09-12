@@ -258,11 +258,15 @@ class DriverManager:
             "profile_names": profile_names,
         })
 
-    def login_accounts(self, usernames: list[str]):
+    def login_accounts(self, usernames: list[str],
+                       batch_size: int | None = None,
+                       pause_minutes: float | None = None):
         """Log the given roster accounts in, one at a time, and publish each
         verdict to the sheet. Emits login_accounts_progress / _result."""
         self.cmd_queue.put({"type": "login_accounts",
-                            "usernames": list(usernames)})
+                            "usernames": list(usernames),
+                            "batch_size": batch_size,
+                            "pause_minutes": pause_minutes})
 
     def login_with_credentials(self, email: str, password: str):
         self.cmd_queue.put({"type": "login_with_credentials", "email": email, "password": password})
@@ -1944,6 +1948,11 @@ class DriverManager:
         except Exception:
             return False
 
+    async def _batch_pause(self, seconds: float) -> None:
+        """The rest between login batches. Its own method so a proof can watch
+        it without waiting minutes."""
+        await asyncio.sleep(0 if getattr(self, "_fast_tests", False) else seconds)
+
     async def _do_login_accounts(self, cmd: dict):
         """Log roster accounts in from the GUI.
 
@@ -1980,7 +1989,11 @@ class DriverManager:
         writer = await asyncio.to_thread(sheet_status.SheetWriter)
         if not writer.on:
             self.log(f"  ⚠️  live sheet updates off: {writer.error}")
-        self.log(f"Logging in {total} account(s)...")
+        batch_size = int(cmd.get("batch_size", self.LOGIN_BATCH_SIZE) or 0)
+        pause_minutes = float(cmd.get("pause_minutes", self.LOGIN_BATCH_PAUSE_MIN) or 0)
+        self.log(f"Logging in {total} account(s)..."
+                 + (f" in batches of {batch_size}, {pause_minutes:g} min apart"
+                    if batch_size and total > batch_size else ""))
         logged_in, failed, skipped = [], [], []
 
         # Flagged as a run for as long as it lasts: the session sweep skips a
@@ -2002,6 +2015,12 @@ class DriverManager:
                 elif not profile:
                     reason = "no Brave profile - run scripts/provision_profiles.py"
                     skipped.append((username, reason))
+                elif not cfg.get_profile_path(profile):
+                    # The roster points at a profile this machine never saved
+                    # (a hand-entered link, or one removed from Brave). Opening
+                    # nothing is a skip, not a failed login attempt.
+                    reason = f"Brave profile '{profile}' is not registered on this PC"
+                    skipped.append((username, reason))
                 else:
                     if writer.on:
                         await asyncio.to_thread(writer.mark_in_progress, username)
@@ -2020,6 +2039,14 @@ class DriverManager:
                 if idx < total:
                     await asyncio.sleep(0 if getattr(self, "_fast_tests", False)
                                         else random.uniform(2.0, 4.0))
+                # A long unbroken run of fresh logins from one machine is the
+                # pattern most likely to draw a checkpoint on every account,
+                # so the run rests between batches. Sequential either way:
+                # Brave's singleton owns the shared User Data directory.
+                if batch_size and idx < total and idx % batch_size == 0:
+                    self.log(f"  Batch of {batch_size} done - pausing "
+                             f"{pause_minutes:g} min ({idx}/{total} attempted)")
+                    await self._batch_pause(pause_minutes * 60.0)
         finally:
             self._batch_running = False
 
@@ -3039,6 +3066,12 @@ class DriverManager:
                        "no home page")
     # Per profile, so a profile Facebook keeps expiring cannot become a loop.
     RELOGIN_COOLDOWN_SECONDS = 1800
+
+    # A login run walks the roster in batches with a rest between them. Five
+    # at a time is what the operator asked for; the pause is the anti-spam
+    # lever, since the logins themselves cannot overlap (Brave's singleton).
+    LOGIN_BATCH_SIZE = 5
+    LOGIN_BATCH_PAUSE_MIN = 2.0
 
     def _relogin_allowed(self, profile_name: str) -> bool:
         if not cfg.get_setting("auto_relogin", True):
