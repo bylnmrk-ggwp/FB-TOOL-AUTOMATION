@@ -1,16 +1,15 @@
-"""Launcher. Default: the Tkinter desktop window on this PC.
+"""Launcher. Default: the web UI (the sidebar admin shell) in your browser.
 
-    python main.py            open the desktop (Tkinter) window
-    python main.py --web      build web/dist if needed, start the server,
+    python main.py            build web/dist if needed, start the server,
                               open http://127.0.0.1:8000 in the browser
-    python main.py --web --port N    serve the web UI on a different port
-    python main.py --web --no-open   start the server but do not open a browser
-    python main.py --tk       force the desktop window (same as the default)
+    python main.py --port N   serve on a different port
+    python main.py --no-open  start the server but do not open a browser
+    python main.py --tk       the old Tkinter window instead (fallback)
 
 The web UI and the Tk window drive the SAME DriverManager, SQLite database
 and Brave profiles on this PC; the web build just lets a phone or another
-computer reach them through the tunnel (docs/runbooks/vps.md). The desktop
-window is the default until the web UI has full feature parity.
+computer reach them through the tunnel (docs/runbooks/vps.md). The Tk window
+stays as a no-Node fallback until the web UI has full feature parity.
 """
 import argparse
 import os
@@ -89,18 +88,15 @@ def _open_browser_when_up(url: str, health: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Launch the FB Tool UI.")
-    parser.add_argument("--web", action="store_true",
-                        help="run the web UI in the browser instead of the desktop window")
     parser.add_argument("--tk", action="store_true",
-                        help="force the desktop (Tkinter) window (this is the default)")
+                        help="run the old Tkinter window instead of the web UI")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-open", action="store_true",
                         help="do not open a browser (web mode)")
     args = parser.parse_args(argv)
 
-    # Desktop is the default; the web UI is opt-in with --web.
-    if not args.web:
+    if args.tk:
         from src.app import run
         run()
         return 0
