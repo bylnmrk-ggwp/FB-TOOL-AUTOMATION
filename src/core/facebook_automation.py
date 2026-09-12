@@ -511,6 +511,36 @@ class FacebookAutomation:
             return state, logged_in
         return state
 
+    # The composer's Post button, in every language Facebook serves it.
+    # One owner: the group/composer flow and the share-composer retry
+    # both press this button.
+    COMPOSER_POST_SELECTORS = [
+    # English
+    '[role="dialog"] [aria-label="Post"]',
+    '[role="dialog"] div[role="button"]:has-text-is("Post")',
+    '[role="dialog"] div[role="button"]:text-is("Post")',
+    # Filipino/Tagalog
+    '[role="dialog"] div[role="button"]:has-text-is("I-post")',
+    '[role="dialog"] div[role="button"]:text-is("I-post")',
+    '[role="dialog"] div[role="button"]:has-text-is("Mag-post")',
+    '[role="dialog"] div[role="button"]:text-is("Mag-post")',
+    # Spanish
+    '[role="dialog"] div[role="button"]:has-text-is("Publicar")',
+    '[role="dialog"] div[role="button"]:text-is("Publicar")',
+    # French
+    '[role="dialog"] div[role="button"]:has-text-is("Publier")',
+    '[role="dialog"] div[role="button"]:text-is("Publier")',
+    # Portuguese
+    '[role="dialog"] div[role="button"]:has-text-is("Postar")',
+    '[role="dialog"] div[role="button"]:text-is("Postar")',
+    # German
+    '[role="dialog"] div[role="button"]:has-text-is("Posten")',
+    '[role="dialog"] div[role="button"]:text-is("Posten")',
+    # Italian
+    '[role="dialog"] div[role="button"]:has-text-is("Pubblica")',
+    '[role="dialog"] div[role="button"]:text-is("Pubblica")',
+    ]
+
     async def init_from_storage(self, browser, storage_state: dict,
                                 viewport: dict | None = None,
                                 block_resources: bool = True,
@@ -4750,11 +4780,74 @@ class FacebookAutomation:
             return False
         return True
 
+    # The share sheet offers two routes to a timeline post: "Share Now", which
+    # posts in one click, and an option that opens the full composer, where a
+    # Post button commits it. They are different server calls, so a refusal of
+    # one is not a refusal of the other - which is the whole point of trying
+    # the second when the first is turned down.
+    COMPOSER_SHARE_OPTIONS = ("Share to Feed", "Share to News Feed",
+                              "Write Post", "Share to feed")
+
+    async def _share_via_composer(self, what: str) -> bool:
+        """Share through the full composer instead of one-click Share Now."""
+        self.last_share_error = ""
+        self.log(f"Sharing to {what} through the composer...")
+        if not await self._click_share_button():
+            return False
+        await asyncio.sleep(random.uniform(1, 2))
+
+        opened = False
+        for opt in self.COMPOSER_SHARE_OPTIONS:
+            if await self._pick_option_in_modal(opt):
+                opened = True
+                break
+        if not opened:
+            self.log("  Composer option not offered on this post")
+            return False
+
+        await asyncio.sleep(random.uniform(2, 3))
+        post_btn = await self._find(css=self.COMPOSER_POST_SELECTORS,
+                                    timeout=20, visible_only=True)
+        if not post_btn:
+            self.log("  Composer opened but its Post button never appeared")
+            return False
+        try:
+            await post_btn.scroll_into_view_if_needed()
+            await asyncio.sleep(random.uniform(0.4, 0.9))
+            await post_btn.click(timeout=8000)
+        except Exception as e:
+            self.log(f"  Could not click the composer's Post button: {str(e)[:90]}")
+            return False
+        if not await self._verify_post_shared():
+            return False
+        await asyncio.sleep(random.uniform(4, 8))
+        if await self._is_modal_still_open() and not getattr(
+                self, "_share_toast_confirmed", False):
+            self.log("  Composer still open after posting — treating as failed")
+            return False
+        await self._clear_share_dialog()
+        return True
+
     async def _share_with_retry(self, options: tuple, what: str) -> bool:
-        """Share, retrying only Facebook's own "try again" style refusals."""
+        """Share, retrying only Facebook's own "try again" style refusals.
+
+        A retry does not repeat the same click. Facebook refused "Share Now"
+        three times in a row on one post while accepting it from another
+        profile seconds earlier, so repeating it is not a strategy - the
+        second and third attempts go through the composer, which is a
+        different call, and only fall back to the quick route if this post
+        does not offer a composer at all.
+        """
         for attempt in range(1, self.SHARE_RETRY_ATTEMPTS + 1):
             if not await self._back_on_target_post(f"the {what} share"):
                 return False
+            if attempt > 1 and what == "Timeline":
+                if await self._share_via_composer(what):
+                    return True
+                if not self._share_error_is_transient():
+                    return False
+                if not await self._back_on_target_post(f"the {what} share"):
+                    return False
             if await self._share_once(options, what):
                 return True
             if not self._share_error_is_transient():
@@ -6259,32 +6352,7 @@ class FacebookAutomation:
         # Support: English, Filipino/Tagalog, Spanish, French, Portuguese, etc.
         # Increased timeout to 20 seconds for slower Facebook loading (especially after Next button)
         post_btn = await self._find(
-            css=[
-                # English
-                '[role="dialog"] [aria-label="Post"]',
-                '[role="dialog"] div[role="button"]:has-text-is("Post")',
-                '[role="dialog"] div[role="button"]:text-is("Post")',
-                # Filipino/Tagalog
-                '[role="dialog"] div[role="button"]:has-text-is("I-post")',
-                '[role="dialog"] div[role="button"]:text-is("I-post")',
-                '[role="dialog"] div[role="button"]:has-text-is("Mag-post")',
-                '[role="dialog"] div[role="button"]:text-is("Mag-post")',
-                # Spanish
-                '[role="dialog"] div[role="button"]:has-text-is("Publicar")',
-                '[role="dialog"] div[role="button"]:text-is("Publicar")',
-                # French
-                '[role="dialog"] div[role="button"]:has-text-is("Publier")',
-                '[role="dialog"] div[role="button"]:text-is("Publier")',
-                # Portuguese
-                '[role="dialog"] div[role="button"]:has-text-is("Postar")',
-                '[role="dialog"] div[role="button"]:text-is("Postar")',
-                # German
-                '[role="dialog"] div[role="button"]:has-text-is("Posten")',
-                '[role="dialog"] div[role="button"]:text-is("Posten")',
-                # Italian
-                '[role="dialog"] div[role="button"]:has-text-is("Pubblica")',
-                '[role="dialog"] div[role="button"]:text-is("Pubblica")',
-            ],
+            css=self.COMPOSER_POST_SELECTORS,
             timeout=20,  # Increased from 15 to 20 seconds
             visible_only=True,
         )
