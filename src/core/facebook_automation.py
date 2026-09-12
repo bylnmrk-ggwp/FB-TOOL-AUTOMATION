@@ -4855,21 +4855,57 @@ class FacebookAutomation:
     COMPOSER_SHARE_OPTIONS = ("Share to Feed", "Share to News Feed",
                               "Write Post", "Share to feed")
 
-    async def _share_via_composer(self, what: str) -> bool:
-        """Share through the full composer instead of one-click Share Now."""
-        self.last_share_error = ""
-        self.log(f"Sharing to {what} through the composer...")
+    async def _composer_option_offered(self) -> str | None:
+        """The composer option this share sheet offers, if it offers one.
+
+        One DOM pass, no waiting. Asking _pick_option_in_modal for four labels
+        in turn cost ~20s per retry on a post that has none of them, and a
+        video's sheet has none: it is itself the composer, with "Share now" as
+        its submit.
+        """
+        try:
+            return await self.page.evaluate("""(labels) => {
+                const vis = e => { const r = e.getBoundingClientRect();
+                                   return r.width > 0 && r.height > 0; };
+                for (const d of document.querySelectorAll('[role="dialog"]')) {
+                    if (!vis(d)) continue;
+                    for (const el of d.querySelectorAll(
+                            '[role="menuitem"], [role="button"]')) {
+                        if (!vis(el)) continue;
+                        const t = (el.innerText || '').trim().toLowerCase();
+                        const a = (el.getAttribute('aria-label') || '').toLowerCase();
+                        for (const want of labels) {
+                            const w = want.toLowerCase();
+                            if (t === w || a === w) return want;
+                        }
+                    }
+                }
+                return null;
+            }""", list(self.COMPOSER_SHARE_OPTIONS))
+        except Exception:
+            return None
+
+    async def _share_via_composer(self, what: str):
+        """Share through the full composer.
+
+        True shared, False the composer was there and failed, None this post
+        offers no composer route - the caller then uses the quick route rather
+        than treating a missing option as a refusal.
+        """
         if not await self._click_share_button():
             return False
         await asyncio.sleep(random.uniform(1, 2))
 
-        opened = False
-        for opt in self.COMPOSER_SHARE_OPTIONS:
-            if await self._pick_option_in_modal(opt):
-                opened = True
-                break
-        if not opened:
-            self.log("  Composer option not offered on this post")
+        option = await self._composer_option_offered()
+        if option is None:
+            self.log("  No composer route on this post - its share sheet is "
+                     "the composer")
+            await self._clear_share_dialog()
+            return None
+
+        self.last_share_error = ""
+        self.log(f"Sharing to {what} through the composer ('{option}')...")
+        if not await self._pick_option_in_modal(option):
             return False
 
         await asyncio.sleep(random.uniform(2, 3))
@@ -4916,12 +4952,18 @@ class FacebookAutomation:
             if not await self._back_on_target_post(f"the {what} share"):
                 return False
             if attempt > 1 and what == "Timeline":
-                if await self._share_via_composer(what):
+                # None means this post's share sheet has no composer route at
+                # all, which is the normal case: the sheet IS the composer,
+                # with "Share now" as its submit. Only an actual composer
+                # failure is worth judging; otherwise fall straight through.
+                composed = await self._share_via_composer(what)
+                if composed:
                     return True
-                if not self._share_error_is_transient():
-                    return False
-                if not await self._back_on_target_post(f"the {what} share"):
-                    return False
+                if composed is False:
+                    if not self._share_error_is_transient():
+                        return False
+                    if not await self._back_on_target_post(f"the {what} share"):
+                        return False
             if await self._share_once(options, what):
                 return True
             if not self._share_error_is_transient():
