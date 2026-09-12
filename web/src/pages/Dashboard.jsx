@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import StatCard from '../components/StatCard.jsx'
+import Charts from '../components/Charts.jsx'
 import { useStore, actions } from '../store.js'
 
 const REFRESH_MS = 5000     // counts refetch while the page is on screen
@@ -70,6 +71,8 @@ export default function Dashboard({ onNavigate }) {
           </span>
         )}
       </div>
+
+      <Charts />
 
       <div className="row2">
         <section className="card">
