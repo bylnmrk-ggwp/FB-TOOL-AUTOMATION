@@ -4496,7 +4496,12 @@ class DriverManager:
         if len(name) <= 2 or name.isdigit():
             self.log(f"  Gender detection: '{name}' is not a real name, using fallback")
             return self._detect_gender_from_name_fallback(name)
-        
+
+        # No key configured: a Groq call can only fail here, so skip straight
+        # to the local heuristic instead of one doomed request per profile.
+        if not GROQ_API_KEY:
+            return self._detect_gender_from_name_fallback(name)
+
         self.log(f"  Gender detection: Querying Groq for '{name}'...")
         
         try:
@@ -4691,8 +4696,12 @@ class DriverManager:
         self.log(f"{'='*60}")
 
         # ── Groq AI analysis ──────────────────────────────────
+        # No key: skip the call (the local friendship matrix above is
+        # authoritative); the existing handler logs and moves on.
         analysis_text = ""
         try:
+            if not GROQ_API_KEY:
+                raise RuntimeError("GROQ_API_KEY not set — skipping AI analysis")
             client = Groq(api_key=GROQ_API_KEY)
 
             profile_summary = "\n".join(
