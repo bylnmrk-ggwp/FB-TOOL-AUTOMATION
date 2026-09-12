@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 
@@ -593,6 +594,17 @@ class EventBridge(threading.Thread):
 
     # ── The thread ────────────────────────────────────────
 
+    def _trace_to_file(self) -> None:
+        """Append the current exception's full traceback to the daily log
+        file only (not the UI ring): a one-line 'NoneType is not
+        subscriptable' cannot be pinned without the stack, but a phone does
+        not want the stack scrolling past. Best-effort; never raises."""
+        try:
+            with open(self.logring.log_path, "a", encoding="utf-8") as f:
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
+
     def _tick(self) -> None:
         result = self.manager.poll_result()
         while result:
@@ -601,6 +613,7 @@ class EventBridge(threading.Thread):
             except Exception as e:
                 self._log(f"{_CROSS} bridge error in {result.get('type')}: "
                           f"{type(e).__name__}: {e}")
+                self._trace_to_file()
             result = self.manager.poll_result()
 
         events = getattr(self.watcher, "events", None) if self.watcher is not None else None
@@ -614,6 +627,7 @@ class EventBridge(threading.Thread):
             except Exception as e:
                 self._log(f"{_CROSS} bridge error in sheet {kind}: "
                           f"{type(e).__name__}: {e}")
+                self._trace_to_file()
 
         now = time.monotonic()
         if now - self._system_at >= SYSTEM_EVERY_S:
@@ -637,6 +651,7 @@ class EventBridge(threading.Thread):
                     # polling. The bridge never dies over one result.
                     try:
                         self._log(f"{_CROSS} bridge error: {type(e).__name__}: {e}")
+                        self._trace_to_file()
                     except Exception:
                         pass
                 self._stop_event.wait(self._poll_s)
