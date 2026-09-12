@@ -25,3 +25,10 @@ mcarsmainwebsite-01d2cff94ed8.json
 .parallel-work/
 .parallel-backup/
 node_modules/
+
+# web app build output and the frp tunnel (binary + the toml with the token)
+web/node_modules/
+web/dist/
+tools/frp/frpc.toml
+tools/frp/*.exe
+tools/frp/*.zip
