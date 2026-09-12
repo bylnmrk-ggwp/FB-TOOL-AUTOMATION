@@ -1,0 +1,20 @@
+{
+  "name": "fb-tool-admin-shell-mockup",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Throwaway browser preview of the FB TOOL admin-shell layout. Shares no code with the Tkinter app.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.3.0"
+  }
+}
