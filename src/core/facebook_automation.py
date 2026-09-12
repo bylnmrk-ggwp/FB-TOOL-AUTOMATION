@@ -513,7 +513,8 @@ class FacebookAutomation:
 
     async def init_from_storage(self, browser, storage_state: dict,
                                 viewport: dict | None = None,
-                                block_resources: bool = True):
+                                block_resources: bool = True,
+                                no_viewport: bool = False):
         """Initialize automation with a context in a given browser using saved storage state.
 
         Creates an isolated incognito context with the profile's cookies
@@ -527,11 +528,14 @@ class FacebookAutomation:
         of a live stream, for every open page - through this Python process,
         which is exactly the traffic a watch cannot afford to queue behind.
         """
+        # no_viewport ties the page size to the real window, which is what a
+        # tiled watch needs: a fixed 1024x768 viewport inside a window resized
+        # to a grid cell would render at the wrong size and get cropped.
         vp = viewport or SMALL_VIEWPORT
         self.context = await browser.new_context(
             storage_state=storage_state,
-            viewport=vp,
-            no_viewport=False,
+            viewport=None if no_viewport else vp,
+            no_viewport=no_viewport,
         )
         self.page = await self.context.new_page()
         if block_resources:

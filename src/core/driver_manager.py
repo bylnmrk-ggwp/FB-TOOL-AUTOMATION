@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import math
 import os
 import random
 import threading
@@ -3679,6 +3680,54 @@ class DriverManager:
                 return got
         return None
 
+    async def _tile_watch_windows(self):
+        """Lay the visible watch windows out as a grid filling the screen.
+
+        Playwright cannot move a window, so this goes through CDP:
+        Browser.getWindowForTarget for the window behind each page, then
+        Browser.setWindowBounds. Headless modes have no windows to place, so
+        the caller only runs this for the visible mode.
+
+        The grid is the squarest one that holds every page - 11 pages become
+        4 columns by 3 rows - and the screen size comes from the browser
+        itself, so nothing here needs the UI toolkit or a guess about DPI.
+        """
+        autos = list(self._watch_autos.items())
+        if not autos:
+            return
+        first = autos[0][1]
+        try:
+            sw, sh, sx, sy = await first.page.evaluate(
+                "() => [screen.availWidth, screen.availHeight,"
+                " screen.availLeft || 0, screen.availTop || 0]")
+        except Exception as e:
+            self.log(f"  ⚠️  Could not read the screen size, leaving windows "
+                     f"where they are: {str(e)[:80]}")
+            return
+
+        count = len(autos)
+        cols = math.ceil(math.sqrt(count))
+        rows = math.ceil(count / cols)
+        cell_w, cell_h = int(sw // cols), int(sh // rows)
+        placed = 0
+        for i, (name, auto) in enumerate(autos):
+            left = int(sx + (i % cols) * cell_w)
+            top = int(sy + (i // cols) * cell_h)
+            try:
+                cdp = await auto.page.context.new_cdp_session(auto.page)
+                info = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds", {
+                    "windowId": info["windowId"],
+                    "bounds": {"left": left, "top": top,
+                               "width": cell_w, "height": cell_h,
+                               "windowState": "normal"}})
+                await cdp.detach()
+                placed += 1
+            except Exception as e:
+                self.log(f"  ⚠️  Could not place '{name}': {str(e)[:80]}")
+        self.log(f"  ▦ Tiled {placed}/{count} window(s) as {cols}x{rows} "
+                 f"on {sw}x{sh} ({cell_w}x{cell_h} each)")
+
     async def _keep_watching(self, url: str, deadline: float | None = None):
         """Keep every watch page playing until the watch is stopped.
 
@@ -3887,7 +3936,8 @@ class DriverManager:
                 await auto.init_from_storage(self._watch_browser,
                                              states[profile_name],
                                              viewport=SMALL_VIEWPORT,
-                                             block_resources=False)
+                                             block_resources=False,
+                                             no_viewport=(mode == "visible"))
                 self._watch_autos[profile_name] = auto
                 try:
                     await auto.page.goto(url, wait_until="domcontentloaded",
@@ -3907,6 +3957,8 @@ class DriverManager:
                  else "on screen")
         # Opening the pages is not watching them: without this, the first
         # pause or stall ends every view while the pages sit there looking fine.
+        if mode == "visible" and self._watch_autos:
+            await self._tile_watch_windows()
         deadline = None
         if minutes:
             deadline = asyncio.get_running_loop().time() + minutes * 60
