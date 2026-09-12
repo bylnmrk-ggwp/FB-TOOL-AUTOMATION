@@ -1841,7 +1841,8 @@ class DriverManager:
                         temp_auto, "last_account_status", "unknown_not_logged_in")
                     # The verdict is what "active" means everywhere else
                     # (status 'ok'), so record it on the linked account.
-                    db.record_login_check(profile_name, logged_in, reason)
+                    await self._record_and_publish(profile_name, logged_in,
+                                                   reason)
                     removed = False
                     if reason == "disabled_or_suspended":
                         # Remove only the app's saved reference. The underlying
@@ -2946,15 +2947,13 @@ class DriverManager:
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")
             if ok:
-                db.record_login_check(profile_name, True, "logged_in")
+                await self._record_and_publish(profile_name, True, "logged_in")
                 state_cache.invalidate(profile_name)   # force a fresh extract
                 self.log(f"  ✓ '{profile_name}' logged back in ({msg})")
-                await self._push_sheet_status(profile_name)
                 return True
             status = await auto._classify_account_access()
-            db.record_login_check(profile_name, False, status)
+            await self._record_and_publish(profile_name, False, status)
             self.log(f"  ✗ '{profile_name}' could not be logged back in: {msg}")
-            await self._push_sheet_status(profile_name)
             return False
         except Exception as e:
             self.log(f"  ✗ '{profile_name}' re-login error: {str(e)[:120]}")
@@ -3402,7 +3401,8 @@ class DriverManager:
                         # stop calling this profile active.
                         pname = result.get("profile_name", "")
                         state_cache.invalidate(pname)
-                        db.record_login_check(pname, False, "session expired")
+                        await self._record_and_publish(pname, False,
+                                                       "session expired")
                         # Queued, not run here: this browser is mid-batch and a
                         # re-login opens the profile's real user-data-dir.
                         if self._relogin_allowed(pname):
@@ -3927,6 +3927,24 @@ class DriverManager:
     WATCH_VERIFY_TIMEOUT_MS = 25000
     WATCH_VERIFY_SAMPLE_SECONDS = 3
 
+    async def _record_and_publish(self, profile_name: str, logged_in: bool,
+                                  reason: str = "") -> bool:
+        """Record a login verdict and mirror it to the sheet, together.
+
+        The one place that writes a verdict. Recording and publishing were
+        separate, and one caller - the batch demotion - only ever did the
+        first, so a profile could go inactive in the database while the sheet
+        still showed it LOGGED IN. That is exactly how the app came to report
+        five active profiles against two on the sheet.
+
+        Returns whether anything was recorded; an inconclusive check writes
+        nothing and publishes nothing.
+        """
+        recorded = db.record_login_check(profile_name, logged_in, reason)
+        if recorded:
+            await self._push_sheet_status(profile_name)
+        return recorded
+
     async def _push_sheet_status(self, profile_name: str):
         """Mirror one profile's recorded account status to the roster sheet.
 
@@ -3971,9 +3989,8 @@ class DriverManager:
             # saw the dead session, said so once, and threw the verdict away -
             # the profile stayed 'ok' and every later watch opened it again.
             status = await auto._classify_account_access(auto.page)
-            recorded = db.record_login_check(profile_name, False, status)
-            if recorded:
-                await self._push_sheet_status(profile_name)
+            recorded = await self._record_and_publish(profile_name, False,
+                                                      status)
             if status == "disabled_or_suspended":
                 return ("ACCOUNT DISABLED by Facebook"
                         + (" - marked disabled, dropped from active"
