@@ -663,3 +663,10 @@ label.check input { accent-color: var(--accent); margin: 0; }
   .dash-action .btn.accent { width: 100%; }
   .link-picker { width: 100%; }
 }
+
+/* Phase 2: queue table and compose controls */
+.ellipsis { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "Add photos" is a <label> wrapping a hidden file input, so it needs the
+   button's box and pointer itself - the .btn rules target <button>. */
+label.btn { display: inline-flex; align-items: center; cursor: pointer; }
+@media (max-width: 767px) { .ellipsis { max-width: 140px; } }
