@@ -21,14 +21,14 @@
   --placeholder: #a1a1aa;
 
   /* The single accent. Nothing else in the UI is this colour. */
-  --accent: #4f46e5;
-  --accent-hover: #5b52ea;
-  --accent-pressed: #4338ca;
-  --accent-disabled: #c7d2fe;
+  --accent: #b80000;
+  --accent-hover: #d01414;
+  --accent-pressed: #8f0000;
+  --accent-disabled: #eab3b3;
 
   /* Semantic */
   --success: #15803d;
-  --error: #b91c1c;
+  --error: #a3140a;
   --warning: #a16207;
 
   /* Header */
@@ -53,8 +53,8 @@
   /* Lists */
   --list-bg: #ffffff;
   --list-fg: #18181b;
-  --list-select-bg: #eef2ff;
-  --list-select-fg: #312e81;
+  --list-select-bg: #fdecec;
+  --list-select-fg: #7a0000;
   --list-hover-bg: #f4f4f5;
   --list-hover-fg: #18181b;
 
@@ -71,9 +71,9 @@
   --sidebar-active-fg: #09090b;
   --sidebar-hover-bg: #f4f4f5;
   --sidebar-border: #e7e7ea;
-  --brand: #d1202a;
-  --chip-bg: #eef2ff;
-  --chip-fg: #312e81;
+  --brand: #b80000;
+  --chip-bg: #fdecec;
+  --chip-fg: #7a0000;
 
   /* SPACE */
   --s-xs: 4px;
@@ -124,13 +124,13 @@
   --status: #a1a1aa;
   --placeholder: #71717a;
 
-  --accent: #6d75f5;
-  --accent-hover: #7c83f7;
-  --accent-pressed: #5a62e0;
-  --accent-disabled: #2e2f5c;
+  --accent: #e01414;
+  --accent-hover: #f22d2d;
+  --accent-pressed: #b80000;
+  --accent-disabled: #4a1414;
 
   --success: #3fb873;
-  --error: #f0645a;
+  --error: #ff7a6b;
   --warning: #d4a13a;
 
   --header-bg: #0f0f11;
@@ -151,8 +151,8 @@
 
   --list-bg: #17171a;
   --list-fg: #e4e4e7;
-  --list-select-bg: #26264a;
-  --list-select-fg: #e4e4e7;
+  --list-select-bg: #3a1113;
+  --list-select-fg: #ffe0e0;
   --list-hover-bg: #1f1f24;
   --list-hover-fg: #e4e4e7;
 
@@ -168,7 +168,7 @@
   --sidebar-active-fg: #fafafa;
   --sidebar-hover-bg: #1a1a1e;
   --sidebar-border: #27272a;
-  --brand: #e2323c;
-  --chip-bg: #26264a;
-  --chip-fg: #e4e4e7;
+  --brand: #e01414;
+  --chip-bg: #3a1113;
+  --chip-fg: #ffe0e0;
 }

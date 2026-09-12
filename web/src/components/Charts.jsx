@@ -20,7 +20,9 @@ function buckets(counts) {
     total,
     parts: [
       { key: 'logged', label: 'Logged in', value: logged, color: 'var(--success)' },
-      { key: 'pending', label: 'Need login', value: pending, color: 'var(--accent)' },
+      // Amber, not the accent: the accent is the brand red now, and red on a
+      // status chart has to mean one thing only - disabled.
+      { key: 'pending', label: 'Need login', value: pending, color: 'var(--warning)' },
       { key: 'disabled', label: 'Disabled', value: disabled, color: 'var(--error)' },
       { key: 'other', label: 'Other', value: other, color: 'var(--dot-unknown)' },
     ],
