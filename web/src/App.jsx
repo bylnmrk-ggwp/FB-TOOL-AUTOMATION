@@ -10,17 +10,20 @@ import Placeholder from './pages/Placeholder.jsx'
 // F2: pages
 import Dashboard from './pages/Dashboard.jsx'
 import Accounts from './pages/Accounts.jsx'
+import Queue from './pages/Queue.jsx'
+import Compose from './pages/Compose.jsx'
+import Monitor from './pages/Monitor.jsx'
 import Log from './pages/Log.jsx'
 import { PAGES, useStore, actions } from './store.js'
 
-// F2: pages — route dashboard/accounts/log to the real pages. Every page
-// receives {page, onNavigate}; queue/compose/monitor stay Placeholder.
+// Every page receives {page, onNavigate}. Queue/Compose are phase-1 previews
+// (real actions disabled); Monitor is live off server.system + counts.
 const PAGE_COMPONENTS = {
   dashboard: Dashboard,
   accounts: Accounts,
-  queue: Placeholder,
-  compose: Placeholder,
-  monitor: Placeholder,
+  queue: Queue,
+  compose: Compose,
+  monitor: Monitor,
   log: Log,
 }
 

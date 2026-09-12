@@ -625,6 +625,18 @@ label.check input { accent-color: var(--accent); margin: 0; }
 .log .toolbar .card-title { white-space: nowrap; }
 .log .foot { min-height: 18px; }
 
+/* Preview banner (Queue, Compose): a muted, bordered note, not the red shell
+   alert. Overrides only the .banner .preview pairing; the shell .banner rule
+   above is untouched. */
+.banner.preview {
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 400;
+  text-align: left;
+}
+
 @media (max-width: 767px) {
   .input.search { width: 100%; }
   .toolbar label.inline { flex: 1 1 100%; }
