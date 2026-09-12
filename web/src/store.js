@@ -293,6 +293,12 @@ export const actions = {
   // arrives as log lines, so the page watches server.provision_active.
   provisionProfiles() { return command('/api/accounts/provision', {}) },
 
+  // One tap for a pending row: create the Brave profile it lacks, then log
+  // that account in. Two existing runs chained on the PC.
+  setupAndLogin(usernames) {
+    return command('/api/accounts/setup-and-login', { usernames: usernames ?? [] })
+  },
+
   // --- Queue -----------------------------------------------------------
   // The list lives on the PC, so nothing here edits st.queue: every route
   // below is followed by a state event that carries the new list, and a

@@ -95,3 +95,42 @@ if _c.post("/api/accounts/provision").status_code != 409:
     failures.append("a second provision while one runs should be 409")  # noqa: F821
 
 print("FAILED" if [f for f in failures if "provision" in f] else "ok")  # noqa: F821
+
+
+# ── Setup and log in, chained ─────────────────────────
+
+step("setup-and-login route")  # noqa: F821
+
+_calls2 = []
+_app, _c = _client(calls=_calls2)
+_r = _c.post("/api/accounts/setup-and-login", json={"usernames": ["a@example.com"]})
+if _r.status_code != 202:
+    failures.append(f"setup-and-login should answer 202, got {_r.status_code} {_r.text[:120]}")  # noqa: F821
+for _ in range(40):
+    if _calls2:
+        break
+    time.sleep(0.05)
+if not _calls2:
+    failures.append("setup-and-login never ran the provisioning half")  # noqa: F821
+# The login half must reach the worker with exactly the usernames asked for.
+_queued = None
+for _ in range(40):
+    try:
+        _queued = _app.state.manager.cmd_queue.get_nowait()
+        break
+    except Exception:
+        time.sleep(0.05)
+if not _queued or _queued.get("type") != "login_accounts" or _queued.get("usernames") != ["a@example.com"]:
+    failures.append(f"setup-and-login did not queue the login: {_queued}")  # noqa: F821
+
+# An empty selection is a 400, not a silent no-op.
+_app, _c = _client()
+if _c.post("/api/accounts/setup-and-login", json={"usernames": []}).status_code != 400:
+    failures.append("setup-and-login with no usernames should be 400")  # noqa: F821
+
+# Refused while Brave is open, like provisioning.
+_app, _c = _client(brave_running=True)
+if _c.post("/api/accounts/setup-and-login", json={"usernames": ["a@example.com"]}).status_code != 409:
+    failures.append("setup-and-login with Brave open should be 409")  # noqa: F821
+
+print("FAILED" if [f for f in failures if "setup-and-login" in f] else "ok")  # noqa: F821

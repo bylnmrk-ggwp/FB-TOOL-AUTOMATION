@@ -280,3 +280,62 @@ def _state_event_safe(request: Request) -> dict:
     still be live: the same payload, built from app.state."""
     from src.server.routes.system import _state_event
     return _state_event(request)
+
+
+class SetupLoginBody(BaseModel):
+    usernames: list[str] = []
+
+
+@router.post("/accounts/setup-and-login", status_code=202)
+def setup_and_login(body: SetupLoginBody, request: Request) -> dict:
+    """One tap for a pending account: create the Brave profile it lacks, then
+    log it in.
+
+    Provisioning covers every unlinked roster row (the script has no
+    per-account mode and only ever touches rows that have no profile), then
+    the login runs for exactly the usernames asked for. Both halves are the
+    existing paths; this only chains them so the operator does not have to
+    press two buttons in the right order and wait in between.
+    """
+    st = request.app.state
+    deps = _provision_deps
+    usernames = _clean(body.usernames) or []
+    if not usernames:
+        raise HTTPException(status_code=400, detail={"error": "no usernames given"})
+    with st.cmd_lock:
+        if st.appstate.provision_active or st.appstate.login_run_active:
+            raise HTTPException(status_code=409, detail={"error": "a login or setup run is active"})
+        if st.appstate.run is not None or st.appstate.scan_active:
+            raise HTTPException(status_code=409, detail={"error": "a run is active"})
+        if deps["brave_running"]():
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "Brave is open - close every Brave window first"})
+        st.appstate.provision_active = True
+        st.appstate.login_run_active = True
+
+    logring = st.logring
+
+    def log(message: str) -> None:
+        entry = logring.write(message)
+        if isinstance(entry, dict):
+            st.bridge.broadcast({"type": "log", **entry})
+
+    def worker() -> None:
+        try:
+            log(f"Setting up and logging in {len(usernames)} account(s)...")
+            deps["run"](log)
+            st.bridge.broadcast({"type": "accounts_changed"})
+            # The login half is a worker command like any other: the bridge
+            # clears login_run_active when its result comes back.
+            st.manager.login_accounts(usernames)
+        except Exception as e:  # noqa: BLE001 - reported, never raised into the thread
+            log(f"\u2717 Setup failed: {type(e).__name__}: {e}")
+            st.appstate.login_run_active = False
+        finally:
+            st.appstate.provision_active = False
+            st.bridge.broadcast(_state_event_safe(request))
+
+    threading.Thread(target=worker, name="setup-and-login", daemon=True).start()
+    push_state(request)
+    return ACCEPTED

@@ -79,6 +79,17 @@ export default function Accounts() {
   // exists, which is what Provision creates.
   const unprovisioned = accounts.filter(a => a.username && !a.linked_profile).length
   const provisioning = !!server?.provision_active
+  // Checked rows that cannot be logged in yet because they have no profile.
+  const needSetup = checked.filter(a => a.username && !a.linked_profile)
+  const setupAndLogin = async () => {
+    const names = needSetup.map(a => a.username)
+    if (!window.confirm(
+      `Create Brave profiles for ${names.length} selected account${names.length === 1 ? '' : 's'} `
+      + 'and log them in?\n\nEvery Brave window must be closed first.')) return
+    say('Setting up profiles, then logging in…', true)
+    if (await actions.setupAndLogin(names)) say('Setup started — watch the Log page', true)
+  }
+
   const provision = async () => {
     if (!window.confirm(
       `Create a Brave profile for ${unprovisioned} account${unprovisioned === 1 ? '' : 's'} on the PC?
@@ -208,6 +219,12 @@ export default function Accounts() {
         <button type="button" className="btn" disabled={off(profiles.length > 0)} onClick={autoSetup}>Auto setup</button>
         <button type="button" className="btn" disabled={off(profiles.length > 0)} onClick={acceptPending}>Accept friend requests</button>
         <button type="button" className="btn" disabled={off(one)} onClick={launch} title="Opens a Brave window on the PC">Launch</button>
+        {needSetup.length > 0 && (
+          <button type="button" className="btn accent" disabled={busy || provisioning} onClick={setupAndLogin}
+                  title="Creates the Brave profile for each selected account, then logs it in">
+            Set up &amp; log in ({needSetup.length})
+          </button>
+        )}
         {unprovisioned > 0 && (
           <button type="button" className="btn accent" disabled={busy || provisioning} onClick={provision}
                   title="Creates and links a Brave profile for every account that has none">
