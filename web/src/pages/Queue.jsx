@@ -33,9 +33,14 @@ export default function Queue() {
   const [minutes, setMinutes] = useState(10)
   const [busy, setBusy] = useState(false)
 
-  // Ticked rows that actually have a Brave profile: only those can drive one.
-  const scope = accounts.filter(a => selected.has(rowKey(a)) && a.linked_profile)
+  // Ticked rows that actually have a Brave profile. With nothing ticked the
+  // scope is every logged-in profile - the same fan-out the desktop's
+  // "Quick Add - All Profiles" did, so the common case needs no selection.
+  const ticked = accounts.filter(a => selected.has(rowKey(a)) && a.linked_profile)
+  const loggedIn = accounts.filter(a => a.linked_profile && (a.live ?? a.logged_in))
+  const scope = ticked.length ? ticked : loggedIn
   const scopeNames = scope.map(a => a.linked_profile)
+  const scopeIsAll = ticked.length === 0
 
   const run = server?.run ?? null
   const running = !!run || !!server?.login_run_active || !!server?.scan_active
@@ -90,8 +95,12 @@ export default function Queue() {
         <div className="muted small">Profile scope</div>
         <div className="profile-strip mt-xs">
           {scopeNames.length
-            ? <span className="small">{scopeNames.length} profile{scopeNames.length === 1 ? '' : 's'} ticked: {scopeNames.slice(0, 6).join(', ')}{scopeNames.length > 6 ? ` +${scopeNames.length - 6}` : ''}</span>
-            : <span className="muted small">Nothing ticked. Choose profiles on the Accounts page first.</span>}
+            ? <span className="small">
+                {scopeIsAll ? 'All logged-in profiles' : 'Ticked on Accounts'}: {scopeNames.length} —{' '}
+                {scopeNames.slice(0, 6).join(', ')}{scopeNames.length > 6 ? ` +${scopeNames.length - 6}` : ''}
+                {scopeIsAll ? ' (tick rows on Accounts to narrow it)' : ''}
+              </span>
+            : <span className="muted small">No logged-in profile. Log accounts in from the Accounts page first.</span>}
         </div>
       </div>
 
@@ -124,9 +133,16 @@ export default function Queue() {
         </div>
         <div className="btn-row mt-md">
           <button type="button" className="btn accent" disabled={!canAdd} onClick={add}
-                  title={scopeNames.length ? '' : 'Tick profiles on the Accounts page first'}>
+                  title={scopeNames.length ? '' : 'No logged-in profile to queue for'}>
             Add to Queue{scopeNames.length ? ` (${scopeNames.length})` : ''}
           </button>
+          {scopeNames.length > 0 && !canAdd && !busy && !running && (
+            <span className="muted small">
+              {needsUrl && !url.trim().startsWith('http') ? 'Enter a post URL starting with http.'
+                : actionType === 'group' && !groupName.trim() ? 'Enter the group name.'
+                : !needsUrl && !text.trim() ? 'Enter the text to post.' : ''}
+            </span>
+          )}
         </div>
       </section>
 
