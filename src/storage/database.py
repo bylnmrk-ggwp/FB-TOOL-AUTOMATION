@@ -89,6 +89,8 @@ def init_db():
         -- USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER) so a sync maps
         -- header to column by name. linked_profile, status and status_reason
         -- are owned by this machine and never written by a sheet sync.
+        -- sheet_status mirrors the sheet's STATUS cell (sheet-owned, written
+        -- only by the sync); '' there means the row is still pending a login.
         --
         -- password and gmail_password hold plaintext credentials at the
         -- operator's explicit request (2026-09-11). They are excluded from
@@ -105,6 +107,7 @@ def init_db():
             linked_profile  TEXT    NOT NULL DEFAULT '',
             status          TEXT    NOT NULL DEFAULT '',
             status_reason   TEXT    NOT NULL DEFAULT '',
+            sheet_status    TEXT    NOT NULL DEFAULT '',
             imported_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             UNIQUE(username)
         );
@@ -156,7 +159,8 @@ def _migrate(conn):
     if have_sr and "pause_hours" not in have_sr:
         conn.execute("ALTER TABLE share_restrictions ADD COLUMN "
                      "pause_hours REAL NOT NULL DEFAULT 12")
-    for col in ("status", "status_reason", "password", "gmail_password"):
+    for col in ("status", "status_reason", "password", "gmail_password",
+                "sheet_status"):
         if col not in have:
             conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} "
                          "TEXT NOT NULL DEFAULT ''")
@@ -419,12 +423,15 @@ def get_used_image_paths() -> set[str]:
 
 def upsert_account(sheet_no, facebook_name: str, username: str,
                    gmail: str = "", number: str = "",
-                   password: str = "", gmail_password: str = "") -> str:
+                   password: str = "", gmail_password: str = "",
+                   sheet_status: str = "") -> str:
     """Insert or refresh one account, keyed by username.
 
-    Writes exactly the sheet-owned columns. linked_profile, status and
-    status_reason are preserved across re-imports. Returns "inserted" or
-    "updated" so a caller can report real counts.
+    Writes exactly the sheet-owned columns, sheet_status included: it is
+    the sheet's STATUS cell read back, so a sync overwrites it every time.
+    linked_profile, status and status_reason are preserved across
+    re-imports. Returns "inserted" or "updated" so a caller can report
+    real counts.
     """
     conn = _get_conn()
     if conn.execute("SELECT 1 FROM accounts WHERE username = ?",
@@ -432,19 +439,19 @@ def upsert_account(sheet_no, facebook_name: str, username: str,
         conn.execute(
             """UPDATE accounts SET sheet_no = ?, facebook_name = ?,
                                    password = ?, gmail = ?, gmail_password = ?,
-                                   number = ?,
+                                   number = ?, sheet_status = ?,
                                    imported_at = datetime('now','localtime')
                WHERE username = ?""",
             (sheet_no, facebook_name, password, gmail, gmail_password,
-             number, username))
+             number, sheet_status, username))
         conn.commit()
         return "updated"
     conn.execute(
         """INSERT INTO accounts (sheet_no, facebook_name, username, password,
-                                 gmail, gmail_password, number)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                 gmail, gmail_password, number, sheet_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (sheet_no, facebook_name, username, password, gmail, gmail_password,
-         number))
+         number, sheet_status))
     conn.commit()
     return "inserted"
 
@@ -461,7 +468,7 @@ def list_accounts(linked_only: bool = False,
     # password / gmail_password are deliberately not selected: every roster
     # view, label and log line is built from these dicts.
     sql = ("SELECT sheet_no, facebook_name, username, gmail, number, "
-           "linked_profile, status, status_reason FROM accounts")
+           "linked_profile, status, status_reason, sheet_status FROM accounts")
     where, params = [], []
     if linked_only:
         where.append("linked_profile != ''")
@@ -588,6 +595,32 @@ def count_disabled() -> int:
     conn = _get_conn()
     return conn.execute(
         "SELECT COUNT(*) FROM accounts WHERE status = 'disabled'").fetchone()[0]
+
+
+def pending_accounts() -> list[dict]:
+    """Roster rows whose sheet STATUS cell is blank and that are not disabled.
+
+    These are the accounts nobody has ever logged in from this tool - the set
+    the dashboard's "Log in pending" button targets.
+    """
+    conn = _get_conn()
+    sql = ("SELECT sheet_no, facebook_name, username, gmail, number, "
+           "linked_profile, status, status_reason, sheet_status FROM accounts "
+           "WHERE sheet_status = '' AND status != 'disabled' "
+           "ORDER BY CASE WHEN sheet_no IS NULL THEN 1 ELSE 0 END, sheet_no")
+    return [dict(r) for r in conn.execute(sql)]
+
+
+def count_pending() -> tuple[int, int]:
+    """(pending accounts, pending accounts with no linked Brave profile)."""
+    conn = _get_conn()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM accounts "
+        "WHERE sheet_status = '' AND status != 'disabled'").fetchone()[0]
+    unlinked = conn.execute(
+        "SELECT COUNT(*) FROM accounts WHERE sheet_status = '' "
+        "AND status != 'disabled' AND linked_profile = ''").fetchone()[0]
+    return total, unlinked
 
 
 # Auto-init on import

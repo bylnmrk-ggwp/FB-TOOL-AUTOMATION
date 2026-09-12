@@ -153,22 +153,32 @@ class DriverManager:
 
     def share_to_groups_bulk(self, post_url: str, groups: list[dict],
                               comment_text: str | None = None,
-                              reaction: str | None = None):
+                              reaction: str | None = None,
+                              profile_names: list[str] | None = None):
         """Share a post to groups across ALL profiles concurrently.
 
         groups: list of dicts with 'name', 'url', 'profiles' keys
+        profile_names narrows the run to those profiles (each group's
+        'profiles' list is intersected with it); None means every profile
+        the groups name.
         """
         self.cmd_queue.put({
             "type": "share_to_groups_bulk", "post_url": post_url,
             "groups": groups,
             "comment_text": comment_text, "reaction": reaction,
+            "profile_names": profile_names,
         })
 
-    def join_group(self, group_url):
+    def join_group(self, group_url, profile_names: list[str] | None = None):
+        # profile_names scopes the bulk form; the single-URL form runs on
+        # whichever context is open, so it carries the key only for a
+        # uniform command shape.
         if isinstance(group_url, list):
-            self.cmd_queue.put({"type": "join_group_bulk", "group_urls": group_url})
+            self.cmd_queue.put({"type": "join_group_bulk", "group_urls": group_url,
+                                "profile_names": profile_names})
         else:
-            self.cmd_queue.put({"type": "join_group", "group_url": group_url})
+            self.cmd_queue.put({"type": "join_group", "group_url": group_url,
+                                "profile_names": profile_names})
 
     def fetch_my_groups(self, profile_name: str | None = None):
         """Fetch the group list for one profile.
@@ -179,9 +189,14 @@ class DriverManager:
         self.cmd_queue.put({"type": "fetch_my_groups",
                             "profile_name": profile_name})
 
-    def fetch_my_groups_bulk(self):
-        """Fetch groups from ALL profiles at once."""
-        self.cmd_queue.put({"type": "fetch_my_groups_bulk"})
+    def fetch_my_groups_bulk(self, profile_names: list[str] | None = None):
+        """Fetch groups from ALL profiles at once.
+
+        profile_names narrows the run to those profiles; None means every
+        saved profile.
+        """
+        self.cmd_queue.put({"type": "fetch_my_groups_bulk",
+                            "profile_names": profile_names})
 
     def post_to_timeline(self, text: str,
                           image_paths: list[str] | None = None):
@@ -206,19 +221,30 @@ class DriverManager:
                                  target_friends: int = 50,
                                  pinterest_query: str = None,
                                  bio: str = None,
-                                 connect_friends: bool = True):
-        """Run auto-setup on every saved Brave profile sequentially."""
+                                 connect_friends: bool = True,
+                                 profile_names: list[str] | None = None):
+        """Run auto-setup on every saved Brave profile sequentially.
+
+        profile_names narrows the run to those profiles; None means every
+        saved profile.
+        """
         self.cmd_queue.put({
             "type": "auto_setup_all",
             "target_friends": target_friends,
             "pinterest_query": pinterest_query,
             "bio": bio,
             "connect_friends": connect_friends,
+            "profile_names": profile_names,
         })
 
-    def accept_all_pending_requests(self):
-        """Check and accept pending friend requests on ALL profiles."""
-        self.cmd_queue.put({"type": "accept_all_pending"})
+    def accept_all_pending_requests(self, profile_names: list[str] | None = None):
+        """Check and accept pending friend requests on ALL profiles.
+
+        profile_names narrows the run to those profiles; None means every
+        saved profile.
+        """
+        self.cmd_queue.put({"type": "accept_all_pending",
+                            "profile_names": profile_names})
 
     def check_login_status(self, profile_names: list[str] | None = None):
         """Live-check which saved profiles are still logged in to Facebook.
@@ -231,6 +257,12 @@ class DriverManager:
             "type": "check_login_status",
             "profile_names": profile_names,
         })
+
+    def login_accounts(self, usernames: list[str]):
+        """Log the given roster accounts in, one at a time, and publish each
+        verdict to the sheet. Emits login_accounts_progress / _result."""
+        self.cmd_queue.put({"type": "login_accounts",
+                            "usernames": list(usernames)})
 
     def login_with_credentials(self, email: str, password: str):
         self.cmd_queue.put({"type": "login_with_credentials", "email": email, "password": password})
@@ -248,14 +280,18 @@ class DriverManager:
     def run_queue(self, items: list[dict]):
         self.cmd_queue.put({"type": "run_queue", "items": items})
 
-    def watch_url(self, url: str, minutes: float | None = None):
+    def watch_url(self, url: str, minutes: float | None = None,
+                  profile_names: list[str] | None = None):
         """Open every active (logged-in) profile in a visible window on `url`.
 
         minutes bounds the watch: it stops itself after that long. None means
-        run until the Stop button.
+        run until the Stop button. profile_names narrows the watch to those
+        profiles; the logged-in filter still applies on top, so a name that
+        is not active is never opened.
         """
         self.cmd_queue.put({"type": "watch_url", "url": url,
-                            "minutes": minutes})
+                            "minutes": minutes,
+                            "profile_names": profile_names})
 
     def stop_watch(self):
         """Close the live-watch windows."""
@@ -356,10 +392,13 @@ class DriverManager:
                     await self._do_accept_all_pending(cmd)
                 elif cmd_type == "check_login_status":
                     await self._do_check_login_status(cmd)
+                elif cmd_type == "login_accounts":
+                    await self._do_login_accounts(cmd)
                 elif cmd_type == "run_queue":
                     await self._do_batch(cmd["items"])
                 elif cmd_type == "watch_url":
-                    await self._do_watch(cmd["url"], cmd.get("minutes"))
+                    await self._do_watch(cmd["url"], cmd.get("minutes"),
+                                         cmd.get("profile_names"))
                 elif cmd_type == "stop_watch":
                     await self._stop_watch()
                 elif cmd_type == "cleanup":
@@ -684,6 +723,16 @@ class DriverManager:
             })
             return
 
+        # An explicit profile list narrows each group's 'profiles' to the
+        # requested set. Done after the empty-groups check so a request that
+        # matches no profile is reported as such below, not as "no groups".
+        wanted = cmd.get("profile_names")
+        if wanted:
+            keep = set(wanted)
+            groups = [dict(g, profiles=[p for p in g.get("profiles", []) if p in keep])
+                      for g in groups]
+            groups = [g for g in groups if g["profiles"]]
+
         # Group groups by profile
         profile_groups: dict[str, list[dict]] = {}
         for g in groups:
@@ -928,7 +977,7 @@ class DriverManager:
         """Fetch groups from ALL profiles using the shared-browser batch approach."""
         from src.core.facebook_automation import FacebookAutomation
 
-        profiles = cfg.list_profiles()
+        profiles = cmd.get("profile_names") or cfg.list_profiles()
         if not profiles:
             self.result_queue.put({
                 "type": "fetch_groups_bulk_result", "ok": False,
@@ -1138,7 +1187,7 @@ class DriverManager:
             })
             return
 
-        profiles = cfg.list_profiles()
+        profiles = cmd.get("profile_names") or cfg.list_profiles()
         if not profiles:
             self.result_queue.put({
                 "type": "join_group_bulk_result", "ok": False,
@@ -1673,7 +1722,7 @@ class DriverManager:
         self.log("📥 ACCEPTING PENDING FRIEND REQUESTS ON ALL PROFILES")
         self.log("=" * 60)
         self.log("Strategy: Check both Friend Requests page AND Followers page")
-        all_profiles = cfg.list_profiles()
+        all_profiles = cmd.get("profile_names") or cfg.list_profiles()
         self.log("Processing: Sequential (one profile at a time to prevent crashes)")
         self.log(f"Estimated time: {len(all_profiles) * 2}-{len(all_profiles) * 3} minutes")
         self.log("=" * 60)
@@ -1896,6 +1945,99 @@ class DriverManager:
         })
         self.log(f"Login check done — {logged_in_count}/{total} logged in")
 
+    @staticmethod
+    def _brave_running() -> bool:
+        """Any brave.exe holds Chromium's singleton lock on the shared
+        User Data dir, so a login inside a real profile cannot launch.
+        The same check scripts/login_accounts.py makes before it starts."""
+        try:
+            import psutil
+            return any((p.info.get("name") or "").lower() == "brave.exe"
+                       for p in psutil.process_iter(["name"]))
+        except Exception:
+            return False
+
+    async def _do_login_accounts(self, cmd: dict):
+        """Log roster accounts in from the GUI.
+
+        Sequential by necessity (Brave's singleton lock), inside each
+        account's real profile so the session cookies stay decryptable.
+        Per account: LOGGING IN on the sheet, _relogin_profile() (which
+        records the verdict and pushes it), a short pause.
+        """
+        usernames = [u for u in (cmd.get("usernames") or []) if u]
+        total = len(usernames)
+
+        def finish(**kw):
+            base = {"type": "login_accounts_result", "total": total,
+                    "logged_in": [], "failed": [], "skipped": []}
+            base.update(kw)
+            self.result_queue.put(base)
+
+        if not usernames:
+            finish(ok=False, error="No accounts to log in")
+            return
+        if self._batch_running or self._watch_autos:
+            finish(ok=False, error="A run or watch is active - wait for it "
+                                   "to finish, then try again")
+            return
+        if self._brave_running():
+            finish(ok=False, error="Brave is open and locks the shared profile "
+                                   "directory. Close every Brave window, then "
+                                   "try again.")
+            return
+
+        from src.storage import sheet_status
+        by_user = {(a.get("username") or "").strip().lower(): a
+                   for a in db.list_accounts()}
+        writer = await asyncio.to_thread(sheet_status.SheetWriter)
+        if not writer.on:
+            self.log(f"  ⚠️  live sheet updates off: {writer.error}")
+        self.log(f"Logging in {total} account(s)...")
+        logged_in, failed, skipped = [], [], []
+
+        # Flagged as a run for as long as it lasts: the session sweep skips a
+        # pass while one is active, and a sweep re-login landing mid-run would
+        # open a second persistent context on the same locked User Data dir.
+        self._batch_running = True
+        try:
+            for idx, username in enumerate(usernames, 1):
+                acct = by_user.get(username.strip().lower())
+                profile = (acct or {}).get("linked_profile") or ""
+                reason = ""
+                ok = False
+                if acct is None:
+                    reason = "not in roster"
+                    skipped.append((username, reason))
+                elif acct.get("status") == "disabled":
+                    reason = "disabled"
+                    skipped.append((username, reason))
+                elif not profile:
+                    reason = "no Brave profile - run scripts/provision_profiles.py"
+                    skipped.append((username, reason))
+                else:
+                    if writer.on:
+                        await asyncio.to_thread(writer.mark_in_progress, username)
+                    ok = await self._relogin_profile(profile, why="Login requested")
+                    after = db.account_for_profile(profile) or {}
+                    reason = ("logged in" if ok else
+                              (after.get("status_reason")
+                               or "could not log in - see log"))
+                    (logged_in if ok else failed).append((username, reason))
+                self.result_queue.put({
+                    "type": "login_accounts_progress",
+                    "current": idx, "total": total,
+                    "username": username, "profile_name": profile, "ok": ok,
+                    "message": f"[{idx}/{total}] {username}: {reason}",
+                })
+                if idx < total:
+                    await asyncio.sleep(0 if getattr(self, "_fast_tests", False)
+                                        else random.uniform(2.0, 4.0))
+        finally:
+            self._batch_running = False
+
+        finish(ok=True, logged_in=logged_in, failed=failed, skipped=skipped)
+
     async def _do_auto_setup_all(self, cmd: dict):
         """Run auto-setup on every saved Brave profile sequentially.
 
@@ -1916,7 +2058,7 @@ class DriverManager:
         from src.storage import database as db
         from src.core.facebook_automation import FacebookAutomation
 
-        profiles = cfg.list_profiles()
+        profiles = cmd.get("profile_names") or cfg.list_profiles()
         total = len(profiles)
 
         # Override target_friends to match the number of managed profiles
@@ -2923,8 +3065,12 @@ class DriverManager:
         last = getattr(self, "_relogin_last", {}).get(profile_name, 0.0)
         return (time.monotonic() - last) >= self.RELOGIN_COOLDOWN_SECONDS
 
-    async def _relogin_profile(self, profile_name: str) -> bool:
-        """Log a profile back in after Facebook expired its session.
+    async def _relogin_profile(self, profile_name: str,
+                               why: str = "Session expired") -> bool:
+        """Log a profile in inside its real Brave profile.
+
+        `why` is the reason shown in the log: the default for the sweep and
+        the batch demotion, "Login requested" when the operator asked.
 
         Sequential and inside the profile's REAL Brave user-data-dir. It has to
         be: Brave binds cookie encryption to the user-data-dir, so a login
@@ -2950,7 +3096,7 @@ class DriverManager:
             self._relogin_last = {}
         self._relogin_last[profile_name] = time.monotonic()
 
-        self.log(f"  ↻ Session expired - logging '{profile_name}' back in...")
+        self.log(f"  ↻ {why} - logging '{profile_name}' in...")
         auto = FacebookAutomation(log_callback=lambda m: None)
         try:
             await auto.start_browser(brave_path, headless=True,
@@ -3900,7 +4046,8 @@ class DriverManager:
         except asyncio.CancelledError:
             raise
 
-    async def _do_watch(self, url: str, minutes: float | None = None):
+    async def _do_watch(self, url: str, minutes: float | None = None,
+                        profile_names: list[str] | None = None):
         """Open one window per active profile on `url` and keep them playing.
 
         Reuses the batch primitives - storage-state extraction (cached where
@@ -3908,6 +4055,8 @@ class DriverManager:
         request interception is off entirely so media segments never queue
         behind this process, and nothing is closed afterwards. "Active" is the
         logged-in set (status='ok'), the same source the UI filters on.
+        profile_names narrows the candidates; the 'ok' filter still applies
+        on top, so an explicit request can never open a dead session.
 
         The windows follow the "Browser mode" setting, exactly like a queue
         run: on the default hidden mode the pages load and play with no Brave
@@ -3930,7 +4079,7 @@ class DriverManager:
             return
 
         ok = db.logged_in_profiles()
-        profiles = [p for p in cfg.list_profiles() if p in ok]
+        profiles = [p for p in (profile_names or cfg.list_profiles()) if p in ok]
         if not profiles:
             self.log("Watch: no active (logged-in) profiles to open.")
             return

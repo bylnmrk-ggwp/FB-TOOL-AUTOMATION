@@ -24,3 +24,4 @@ mcarsmainwebsite-01d2cff94ed8.json
 # parallel-login scratch + profile backups (session data)
 .parallel-work/
 .parallel-backup/
+node_modules/

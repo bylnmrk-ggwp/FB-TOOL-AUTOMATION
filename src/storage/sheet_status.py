@@ -186,3 +186,65 @@ def push_account_status(username: str,
         return ""
     write_status(tok, sheet_id, gid, tab, row, text, cols["status"])
     return text
+
+
+# ── Many-row updates (a login run writing LOGGING IN before each account) ───
+
+class SheetWriter:
+    """Resolve the sheet once, then write many STATUS cells.
+
+    push_account_status() re-reads the header and the username column on
+    every call - fine for one verdict at the end of a watch, five HTTP calls
+    too many when a run writes LOGGING IN before each of forty accounts.
+    Construction does the network work, so build it off the event loop.
+    Every failure is swallowed into .on/.error: the sheet is a mirror, never
+    a reason to stop logging accounts in.
+    """
+
+    def __init__(self, sheet_id: str = api.DEFAULT_SHEET_ID,
+                 tab: str = api.DEFAULT_TAB,
+                 key_path: Path | str = api.DEFAULT_KEY):
+        self.on = False
+        self.error = ""
+        self._key_path = key_path
+        self._sheet_id = sheet_id
+        self._tab = tab
+        try:
+            if not Path(key_path).exists():
+                raise FileNotFoundError(f"no service-account key at {key_path}")
+            self._tok = api.token(key_path)
+            self._gid = resolve_gid(self._tok, sheet_id, tab)
+            if self._gid is None:
+                raise ValueError(f"tab {tab!r} not found")
+            cols = resolve_columns(self._tok, sheet_id, tab)
+            self._status_col = cols["status"]
+            self._rows = build_row_index(self._tok, sheet_id, tab, cols["username"])
+            self.on = True
+        # SystemExit too: resolve_columns() exits when the sheet has no
+        # USERNAME header, and that must not take the driver thread with it.
+        except (Exception, SystemExit) as e:
+            self.error = f"{type(e).__name__}: {e}"[:200]
+
+    def write(self, username: str, text: str) -> bool:
+        row = self._rows.get((username or "").strip().lower()) if self.on else None
+        if not row:
+            return False
+        for attempt in range(2):
+            try:
+                write_status(self._tok, self._sheet_id, self._gid, self._tab,
+                             row, text, self._status_col)
+                return True
+            except Exception as e:
+                # One retry with a fresh token: the run can outlive the hour
+                # the first token was good for.
+                if attempt == 0:
+                    try:
+                        self._tok = api.token(self._key_path)
+                        continue
+                    except Exception:
+                        pass
+                self.error = f"{type(e).__name__}: {e}"[:200]
+        return False
+
+    def mark_in_progress(self, username: str) -> bool:
+        return self.write(username, IN_PROGRESS)

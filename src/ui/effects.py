@@ -12,6 +12,8 @@ These helpers add polish to raw-tk widgets (Listbox, tk.Button):
     canvas is under the pointer. Replaces the per-tab bind_all /
     unbind_all pattern, which broke scrolling app-wide whenever one
     widget unbound the shared event.
+  - tween() and friends (slide_in, animate_press, count_up, blend): the one
+    animation clock every motion in the UI runs on; see the Motion section.
 
 Returns a `clear()` callable for listboxes — call it from apply_theme()
 after re-theming, or after repopulating the listbox contents.
@@ -263,3 +265,165 @@ class FlowFrame(ttk.Frame):
             for c, w in enumerate(items):
                 w.grid(row=r, column=c, padx=(0, self._gap),
                        pady=(0 if r == 0 else self._row_gap, 0), sticky="w")
+
+
+# ── Motion ──────────────────────────────────────────────────
+#
+# One clock for every animation in the UI. Tk has no compositor: a widget
+# cannot fade, so everything here is a geometry, colour or value tween on
+# widget.after(). Duration comes from theme.MOTION at the call site.
+
+_ANIM_OVERRIDE: bool | None = None
+_TWEENS: dict[tuple[int, str], str] = {}
+
+
+def linear(t: float) -> float:
+    return t
+
+
+def ease_out_cubic(t: float) -> float:
+    return 1.0 - (1.0 - t) ** 3
+
+
+def set_animations_override(value: bool | None) -> None:
+    """Force animations on/off (proofs and screenshots); None = config."""
+    global _ANIM_OVERRIDE
+    _ANIM_OVERRIDE = value
+
+
+def animations_enabled() -> bool:
+    if _ANIM_OVERRIDE is not None:
+        return _ANIM_OVERRIDE
+    from src.storage import config_manager as cfg
+    return cfg.get_setting("ui_animations", True) in (True, 1, "1", "true")
+
+
+def cancel_tweens(widget) -> None:
+    wid = id(widget)
+    for key in [k for k in _TWEENS if k[0] == wid]:
+        try:
+            widget.after_cancel(_TWEENS.pop(key))
+        except Exception:
+            _TWEENS.pop(key, None)
+
+
+def tween(widget, duration_ms: int, step, done=None,
+          easing=ease_out_cubic, key: str = "default") -> None:
+    """Drive step(t) from 0 to 1 over duration_ms on widget's after() clock.
+
+    A second tween with the same (widget, key) replaces the first, so a
+    click during a slide restarts the slide instead of stacking two. When
+    animations are off the end state is applied at once, so callers never
+    branch on the setting.
+    """
+    k = (id(widget), key)
+    old = _TWEENS.pop(k, None)
+    if old is not None:
+        try:
+            widget.after_cancel(old)
+        except Exception:
+            pass
+    if duration_ms <= 0 or not animations_enabled():
+        step(1.0)
+        if done:
+            done()
+        return
+    start = time.monotonic()
+
+    def frame():
+        t = min(1.0, (time.monotonic() - start) * 1000.0 / duration_ms)
+        try:
+            step(easing(t))
+        except tk.TclError:
+            _TWEENS.pop(k, None)
+            return
+        if t >= 1.0:
+            _TWEENS.pop(k, None)
+            if done:
+                done()
+            return
+        try:
+            _TWEENS[k] = widget.after(16, frame)
+        except tk.TclError:
+            _TWEENS.pop(k, None)
+
+    frame()
+
+
+def blend(hex_a: str, hex_b: str, t: float) -> str:
+    """Linear mix of two #rrggbb colours, t=0 gives hex_a."""
+    a = [int(hex_a[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(hex_b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def slide_in(frame, dx: int = 24, duration_ms: int = 160, done=None) -> None:
+    """Raise a page with a short slide from the right.
+
+    The page is a grid child at (0, 0) of a host that fills its cell. It is
+    lifted out of grid, placed over the host at x=dx, tweened to x=0, then
+    re-gridded so resizing keeps working with no place() residue.
+    """
+    frame.grid_remove()
+    frame.place(x=dx, y=0, relwidth=1.0, relheight=1.0)
+    frame.tkraise()
+
+    def step(t):
+        frame.place_configure(x=int(round(dx * (1.0 - t))))
+
+    def finish():
+        frame.place_forget()
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.tkraise()
+        if done:
+            done()
+
+    tween(frame, duration_ms, step, done=finish, key="slide")
+
+
+def animate_press(button, duration_ms: int = 150):
+    """Fade a ttk.Button's background from its pressed colour back to rest
+    after a click, so the press reads as a pulse rather than a flicker.
+
+    Uses a per-button derived style ("P<id>.<base>") so no other button is
+    affected; the style inherits everything else from its base.
+    """
+    def on_release(_event=None):
+        base = button.cget("style") or "TButton"
+        if base.startswith("P") and "." in base and base.split(".", 1)[0][1:].isdigit():
+            base = base.split(".", 1)[1]
+        style = ttk.Style(button)
+        rest = style.lookup(base, "background") or theme.get()["secondary"]
+        pressed = style.lookup(base, "background", ("pressed",)) or rest
+        if pressed == rest:
+            return
+        dyn = f"P{id(button)}.{base}"
+        style.configure(dyn, background=pressed)
+        button.configure(style=dyn)
+
+        def step(t):
+            style.configure(dyn, background=blend(pressed, rest, t))
+
+        def finish():
+            try:
+                button.configure(style=base)
+            except tk.TclError:
+                pass
+
+        tween(button, duration_ms, step, done=finish, key="press")
+
+    button.bind("<ButtonRelease-1>", on_release, add="+")
+    return button
+
+
+def count_up(label, start: int, end: int, duration_ms: int,
+             fmt=lambda v: f"{v:,}") -> None:
+    """Tween a numeric label from start to end."""
+    if start == end:
+        label.configure(text=fmt(end))
+        return
+
+    def step(t):
+        label.configure(text=fmt(int(round(start + (end - start) * t))))
+
+    tween(label, duration_ms, step, key="count")

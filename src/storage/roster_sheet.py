@@ -3,7 +3,10 @@
 Header labels, not column letters, decide where a cell lands, so the sheet can
 be reordered or gain columns without importing the wrong field. The columns
 the sheet owns are rewritten on every sync; linked_profile, status and
-status_reason belong to this machine and are never touched here.
+status_reason belong to this machine and are never touched here. STATUS
+-> sheet_status is a mirror only: the app reads the verdict cell back so
+it can count blank rows as pending, and writes it solely through
+src/storage/sheet_status.py.
 
 Two entry points share the parser:
 
@@ -21,6 +24,7 @@ import hashlib
 import json
 import queue
 import threading
+import time
 
 from src.storage import database as db
 from src.storage import sheets_api as api
@@ -35,6 +39,9 @@ HEADERS = {
     "GMAIL": "gmail",
     "PASS FOR GMAIL": "gmail_password",
     "NUMBER": "number",
+    # Read-only mirror of the cell the login runs write. "" means the row
+    # has never been given a verdict - the "pending" set the dashboard counts.
+    "STATUS": "sheet_status",
 }
 
 POLL_SECONDS = 20
@@ -131,6 +138,9 @@ class SheetWatcher(threading.Thread):
         self._creds = None
         self._last_fingerprint = None
         self._last_error = None
+        # time.time() of the last poll that reached the sheet, 0.0 before
+        # the first; the dashboard shows it as "Sheet synced N s ago".
+        self.last_ok: float = 0.0
 
     def run(self):
         while not self._stop.is_set():
@@ -148,6 +158,7 @@ class SheetWatcher(threading.Thread):
                 self._last_fingerprint = fp
                 self.events.put(("rows", parse_accounts(rows)))
             self._last_error = None
+            self.last_ok = time.time()
         except Exception as e:  # network, auth, parse - all recoverable
             msg = f"{type(e).__name__}: {e}"[:200]
             if msg != self._last_error:

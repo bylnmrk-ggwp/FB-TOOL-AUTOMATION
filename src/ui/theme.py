@@ -100,6 +100,17 @@ TYPE = {
     "display": 18, # stat card values
 }
 
+# Motion durations in milliseconds. One place, so the whole UI feels like
+# one system; effects.tween() reads these through the callers.
+MOTION = {
+    "page": 160,      # page slide-in on navigation
+    "sidebar": 180,   # sidebar collapse / expand
+    "press": 150,     # button release pulse
+    "theme": 220,     # light/dark dip (80 out, 140 in)
+    "count": 300,     # dashboard number count-up
+    "progress": 200,  # status-bar progress value
+}
+
 
 def font(size: str = "body", weight: str = "normal") -> tuple:
     """Build a UI font tuple from the type scale.
@@ -188,6 +199,19 @@ THEMES = {
         "dot_unknown": "#d4d4d8",
         "scroll_thumb": "#d4d4d8",
         "scroll_thumb_hover": "#a1a1aa",
+
+        # Sidebar (web-admin shell) and brand
+        "sidebar_bg": "#ffffff",
+        "sidebar_fg": "#3f3f46",
+        "sidebar_muted": "#71717a",
+        "sidebar_active_bg": "#f4f4f5",
+        "sidebar_active_fg": "#09090b",
+        "sidebar_hover_bg": "#f4f4f5",
+        "sidebar_border": "#e7e7ea",
+        "brand": "#d1202a",
+        "header_bg": "#fafafa",
+        "chip_bg": "#eef2ff",
+        "chip_fg": "#312e81",
     },
     "dark": {
         "bg": "#0f0f11",
@@ -246,6 +270,18 @@ THEMES = {
         "dot_unknown": "#3f3f46",
         "scroll_thumb": "#3f3f46",
         "scroll_thumb_hover": "#52525b",
+
+        "sidebar_bg": "#131316",
+        "sidebar_fg": "#a1a1aa",
+        "sidebar_muted": "#71717a",
+        "sidebar_active_bg": "#1f1f24",
+        "sidebar_active_fg": "#fafafa",
+        "sidebar_hover_bg": "#1a1a1e",
+        "sidebar_border": "#27272a",
+        "brand": "#e2323c",
+        "header_bg": "#0f0f11",
+        "chip_bg": "#26264a",
+        "chip_fg": "#e4e4e7",
     },
 }
 
