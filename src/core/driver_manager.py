@@ -295,6 +295,10 @@ class DriverManager:
 
         self._automation = FacebookAutomation(log_callback=self.log, debug=self._debug)
 
+        # Keeps live sessions warm and recovers lost ones, on its own, for as
+        # long as the app runs. Cancelled with the worker.
+        self._sweep_task = asyncio.create_task(self._session_sweep_loop())
+
         # Track when we last collected JS heaps (every ~2s)
         last_js_heap_collection = 0.0
         js_heap_interval = 2.0
@@ -363,6 +367,9 @@ class DriverManager:
                 elif cmd_type == "logout":
                     await self._do_logout()
                 elif cmd_type == "quit":
+                    task = getattr(self, "_sweep_task", None)
+                    if task is not None:
+                        task.cancel()
                     await self._do_quit()
                     break
             except Exception as e:
@@ -3978,6 +3985,190 @@ class DriverManager:
     # currentTime is sampled to prove the player is really running.
     WATCH_VERIFY_TIMEOUT_MS = 25000
     WATCH_VERIFY_SAMPLE_SECONDS = 3
+
+    # ── Session upkeep ───────────────────────────────────────────────────
+    #
+    # Facebook expires a session that goes cold, and the fleet lost six in one
+    # night that way. The sweep does two jobs on a timer: it keeps live
+    # sessions warm by actually using them, and it recovers the ones already
+    # lost.
+    #
+    # Recovery differs by reason, because the two are not the same problem.
+    # An expired session is ours to fix - the password still works, so log in
+    # again. A checkpoint is Facebook demanding a human (an ID photo, a code,
+    # "confirm it's you"); it has no password form at all, so a login attempt
+    # cannot clear it and repeating one is the signal that turns a checkpoint
+    # into a permanent disable. Those are only RE-CHECKED, on a long cooldown,
+    # because Facebook does lift them on its own - and the moment one lifts,
+    # the account goes straight back to active.
+    SWEEP_MINUTES_DEFAULT = 30
+    RECHECK_GATED_HOURS = 6
+    GATED_REASONS = ("checkpoint or verification required",
+                     "email confirmation required")
+
+    async def _session_sweep_loop(self):
+        """Keep sessions warm and recover lost ones, forever."""
+        while True:
+            minutes = float(cfg.get_setting("session_sweep_minutes",
+                                            self.SWEEP_MINUTES_DEFAULT) or 0)
+            if minutes <= 0:
+                return                       # switched off
+            # Jittered: a sweep landing on the same minute forever is a
+            # pattern, and nothing here needs an exact cadence.
+            await asyncio.sleep(random.uniform(minutes * 45, minutes * 75))
+            if not cfg.get_setting("session_keepalive", True):
+                continue
+            if self._batch_running or self._watch_autos:
+                continue                     # never compete with real work
+            try:
+                await self._session_sweep()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.log(f"Session sweep failed: {str(e)[:120]}")
+
+    async def _session_sweep(self):
+        """One pass: warm the live sessions, then recover the lost ones."""
+        from src.core.facebook_automation import (FacebookAutomation,
+                                                  CHROME_PATH, WATCH_FLAGS)
+        from src.storage import state_cache
+
+        ok = db.logged_in_profiles()
+        active = [p for p in cfg.list_profiles()
+                  if p in ok and state_cache.load_state(p) is not None]
+        warmed = expired = 0
+        if active:
+            pw = await async_playwright().start()
+            browser = None
+            try:
+                browser = await self._launch_browser(
+                    pw, False, ["--window-size=1024,768", *WATCH_FLAGS,
+                                "--headless=new"])
+                for name in active:
+                    result = await self._keepalive_profile(
+                        browser, name, state_cache)
+                    if result is True:
+                        warmed += 1
+                    elif result is False:
+                        expired += 1
+            finally:
+                if browser is not None:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                try:
+                    await pw.stop()
+                except Exception:
+                    pass
+        if warmed or expired:
+            self.log(f"♻ Session sweep: {warmed} kept warm, "
+                     f"{expired} found expired")
+        await self._recover_lost_sessions()
+
+    async def _keepalive_profile(self, browser, profile_name: str,
+                                 state_cache) -> bool | None:
+        """Use the session so Facebook keeps it, and re-save what comes back.
+
+        Returns True when the session is live, False when Facebook has taken
+        it away, None when the check was inconclusive and must change nothing.
+        """
+        from src.core.facebook_automation import FacebookAutomation
+
+        state = state_cache.load_state(profile_name)
+        if state is None:
+            return None
+        auto = FacebookAutomation(log_callback=lambda m: None)
+        try:
+            await auto.init_from_storage(browser, state, block_resources=False)
+            await auto.page.goto("https://www.facebook.com/",
+                                 wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(random.uniform(2, 5))
+            if await self._session_is_live(auto):
+                # Facebook reissues cookies on use; storing them back is what
+                # actually pushes the expiry out rather than just reading it.
+                try:
+                    state_cache.save_state(profile_name,
+                                           await auto.context.storage_state())
+                except Exception:
+                    pass
+                return True
+            status = await auto._classify_account_access()
+            if status in ("unreachable", "unknown"):
+                return None          # a blip says nothing about the account
+            await self._record_and_publish(profile_name, False, status)
+            state_cache.invalidate(profile_name)
+            return False
+        except Exception:
+            return None
+        finally:
+            try:
+                await auto.close_context()
+            except Exception:
+                pass
+
+    async def _recover_lost_sessions(self):
+        """Re-login what can be re-logged in; re-check what only Facebook can."""
+        if not cfg.get_setting("auto_relogin", True):
+            return
+        relogin, recheck = [], []
+        for account in db.list_accounts(include_disabled=False):
+            name = account.get("linked_profile") or ""
+            if not name or account.get("status") == "ok":
+                continue
+            reason = (account.get("status_reason") or "").strip().lower()
+            if reason in self.RELOGIN_REASONS:
+                relogin.append(name)
+            elif reason in self.GATED_REASONS:
+                recheck.append(name)
+
+        for name in relogin:
+            if self._relogin_allowed(name):
+                await self._relogin_profile(name)
+
+        if not hasattr(self, "_recheck_last"):
+            self._recheck_last = {}
+        cooldown = self.RECHECK_GATED_HOURS * 3600
+        for name in recheck:
+            if time.monotonic() - self._recheck_last.get(name, 0.0) < cooldown:
+                continue
+            self._recheck_last[name] = time.monotonic()
+            await self._recheck_gated_profile(name)
+
+    async def _recheck_gated_profile(self, profile_name: str):
+        """Has Facebook lifted this account's checkpoint yet?
+
+        Opens the profile and looks - no login attempt, no form filling.
+        Nothing here can clear a checkpoint, and pretending otherwise is how
+        an account gets disabled instead of released. If the gate is gone the
+        account returns to active immediately.
+        """
+        from src.core.facebook_automation import FacebookAutomation
+
+        brave_path = cfg.get_profile_path(profile_name)
+        if not brave_path:
+            return
+        auto = FacebookAutomation(log_callback=lambda m: None)
+        try:
+            state, logged_in = await auto.extract_storage_state(
+                brave_path, return_logged_in=True)
+            status = getattr(auto, "last_account_status", "unknown")
+            if logged_in:
+                from src.storage import state_cache
+                if state:
+                    state_cache.save_state(profile_name, state)
+                await self._record_and_publish(profile_name, True, "logged_in")
+                self.log(f"  ✓ '{profile_name}': Facebook lifted the gate - "
+                         f"active again")
+            elif status not in ("unreachable", "unknown"):
+                await self._record_and_publish(profile_name, False, status)
+        except Exception as e:
+            self.log(f"  ⚠️  re-check of '{profile_name}' failed: {str(e)[:90]}")
+        finally:
+            try:
+                await auto.quit()
+            except Exception:
+                pass
 
     async def _record_and_publish(self, profile_name: str, logged_in: bool,
                                   reason: str = "") -> bool:
