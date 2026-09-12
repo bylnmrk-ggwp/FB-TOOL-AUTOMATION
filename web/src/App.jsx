@@ -7,21 +7,21 @@ import Toasts from './components/Toasts.jsx'
 import InputPrompt from './components/InputPrompt.jsx'
 import Login from './pages/Login.jsx'
 import Placeholder from './pages/Placeholder.jsx'
-// F2: pages — import Dashboard, Accounts and Log here:
-// import Dashboard from './pages/Dashboard.jsx'
-// import Accounts from './pages/Accounts.jsx'
-// import Log from './pages/Log.jsx'
+// F2: pages
+import Dashboard from './pages/Dashboard.jsx'
+import Accounts from './pages/Accounts.jsx'
+import Log from './pages/Log.jsx'
 import { PAGES, useStore, actions } from './store.js'
 
 // F2: pages — route dashboard/accounts/log to the real pages. Every page
 // receives {page, onNavigate}; queue/compose/monitor stay Placeholder.
 const PAGE_COMPONENTS = {
-  dashboard: Placeholder,   // F2: Dashboard
-  accounts: Placeholder,    // F2: Accounts
+  dashboard: Dashboard,
+  accounts: Accounts,
   queue: Placeholder,
   compose: Placeholder,
   monitor: Placeholder,
-  log: Placeholder,         // F2: Log
+  log: Log,
 }
 
 const LS = { theme: 'fbtool.theme', sidebar: 'fbtool.sidebarCollapsed' }

@@ -612,3 +612,23 @@ label.check input { accent-color: var(--accent); margin: 0; }
   .page-enter, .toast, .modal, .spinner { animation: none !important; }
   .spinner { border-top-color: var(--track); }
 }
+
+/* F2 pages (Dashboard, Accounts, Log) ----------------------------------- */
+/* Only additions: the shell, table and phone rules above are untouched. */
+.input.search { width: 240px; max-width: 100%; }
+.btn.toggled { background: var(--secondary-active); border-color: var(--accent); color: var(--accent); }
+.card.stat { display: flex; flex-direction: column; justify-content: center; min-height: 92px; }
+.dash-action .btn.accent { min-width: 200px; justify-content: center; }
+.card.alerts:focus-visible { outline: 2px solid var(--accent); }
+.link-picker { width: min(420px, 100%); }
+.link-picker .select { height: 34px; }
+.log .toolbar .card-title { white-space: nowrap; }
+.log .foot { min-height: 18px; }
+
+@media (max-width: 767px) {
+  .input.search { width: 100%; }
+  .toolbar label.inline { flex: 1 1 100%; }
+  .toolbar label.inline .input, .toolbar label.inline .select { flex: 1; }
+  .dash-action .btn.accent { width: 100%; }
+  .link-picker { width: 100%; }
+}
