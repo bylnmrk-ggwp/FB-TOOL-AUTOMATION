@@ -637,7 +637,12 @@ class DriverManager:
 
         self.log(f"Sharing to {total} group(s)...")
 
-        profile_name = cmd.get("profile", "")
+        # The single-profile share always runs on the first saved profile —
+        # the same one _auto_launch_first_profile() launches when no context is
+        # open. No command field carries the profile name, so resolve it here
+        # instead of recording share history under "".
+        profiles = cfg.list_profiles()
+        profile_name = profiles[0] if profiles else ""
         skipped = 0
 
         for i, g in enumerate(groups, 1):
@@ -691,8 +696,6 @@ class DriverManager:
 
             # Add configurable delay between shares to avoid spam detection
             if i < total:
-                import asyncio
-                from src.storage import config_manager as cfg
                 delays = cfg.get_share_delays()
                 delay = random.uniform(delays["between_shares_min"], delays["between_shares_max"])
                 self.log(f"Waiting {delay:.1f}s before next share...")
@@ -1336,61 +1339,61 @@ class DriverManager:
                                 consecutive_timeouts = 0
                                 continue
 
-                        try:
-                            ok, msg = await auto.join_group(url)
-                            if ok:
-                                if "already" in msg.lower():
-                                    status = "already_member"
-                                    profile_skipped += 1
-                                    consecutive_timeouts = 0
-                                elif "pending" in msg.lower() or "requested" in msg.lower():
-                                    status = "pending"
-                                    profile_success += 1
-                                    consecutive_timeouts = 0
+                            try:
+                                ok, msg = await auto.join_group(url)
+                                if ok:
+                                    if "already" in msg.lower():
+                                        status = "already_member"
+                                        profile_skipped += 1
+                                        consecutive_timeouts = 0
+                                    elif "pending" in msg.lower() or "requested" in msg.lower():
+                                        status = "pending"
+                                        profile_success += 1
+                                        consecutive_timeouts = 0
+                                    else:
+                                        status = "joined"
+                                        profile_success += 1
+                                        consecutive_timeouts = 0
                                 else:
-                                    status = "joined"
-                                    profile_success += 1
-                                    consecutive_timeouts = 0
-                            else:
-                                status = "failed"
+                                    status = "failed"
+                                    profile_failed += 1
+                                    if "timeout" in msg.lower() or "timed out" in msg.lower():
+                                        consecutive_timeouts += 1
+                                    else:
+                                        consecutive_timeouts = 0
+
+                                db.record_join(profile_name, url, status, msg)
+                                self.result_queue.put({
+                                    "type": "join_group_item_result",
+                                    "ok": ok, "message": msg, "url": url,
+                                    "profile_name": profile_name,
+                                    "current": i, "total": total_urls,
+                                })
+                            except Exception as e:
                                 profile_failed += 1
-                                if "timeout" in msg.lower() or "timed out" in msg.lower():
-                                    consecutive_timeouts += 1
-                                else:
-                                    consecutive_timeouts = 0
+                                db.record_join(profile_name, url, "error", str(e))
+                                self.result_queue.put({
+                                    "type": "join_group_item_result",
+                                    "ok": False, "error": str(e), "url": url,
+                                    "profile_name": profile_name,
+                                    "current": i, "total": total_urls,
+                                })
+                                consecutive_timeouts += 1
 
-                            db.record_join(profile_name, url, status, msg)
-                            self.result_queue.put({
-                                "type": "join_group_item_result",
-                                "ok": ok, "message": msg, "url": url,
-                                "profile_name": profile_name,
-                                "current": i, "total": total_urls,
-                            })
-                        except Exception as e:
-                            profile_failed += 1
-                            db.record_join(profile_name, url, "error", str(e))
-                            self.result_queue.put({
-                                "type": "join_group_item_result",
-                                "ok": False, "error": str(e), "url": url,
-                                "profile_name": profile_name,
-                                "current": i, "total": total_urls,
-                            })
-                            consecutive_timeouts += 1
+                            # Adaptive delay: back off after consecutive timeouts.
+                            # Tunable via CONFIGURE_DELAYS.bat like the share delays.
+                            jd = cfg.get_share_delays()
+                            if consecutive_timeouts >= 3:
+                                delay = random.uniform(jd["join_backoff_min"], jd["join_backoff_max"])
+                                self.log(f"  '{profile_name}' {consecutive_timeouts} timeouts — backing off {delay:.0f}s")
+                                consecutive_timeouts = 0
+                            elif consecutive_timeouts >= 1:
+                                delay = random.uniform(jd["join_retry_min"], jd["join_retry_max"])
+                            else:
+                                delay = random.uniform(jd["between_joins_min"], jd["between_joins_max"])
 
-                        # Adaptive delay: back off after consecutive timeouts.
-                        # Tunable via CONFIGURE_DELAYS.bat like the share delays.
-                        jd = cfg.get_share_delays()
-                        if consecutive_timeouts >= 3:
-                            delay = random.uniform(jd["join_backoff_min"], jd["join_backoff_max"])
-                            self.log(f"  '{profile_name}' {consecutive_timeouts} timeouts — backing off {delay:.0f}s")
-                            consecutive_timeouts = 0
-                        elif consecutive_timeouts >= 1:
-                            delay = random.uniform(jd["join_retry_min"], jd["join_retry_max"])
-                        else:
-                            delay = random.uniform(jd["between_joins_min"], jd["between_joins_max"])
-
-                        if i < total_urls:
-                            await asyncio.sleep(delay)
+                            if i < total_urls:
+                                await asyncio.sleep(delay)
 
                         self.log(f"  '{profile_name}' done: {profile_success} joined, {profile_failed} failed, {profile_skipped} skipped")
                         return {"ok": True, "profile_name": profile_name,
@@ -1663,22 +1666,6 @@ class DriverManager:
                 profile_pic_path=profile_pic_path,
             )
             result["pinterest_images_downloaded"] = len(images) if images else 0
-
-            # Step 3: Connect this profile with other profiles as friends
-            self.log(f"  🤝 Connecting '{profile_name}' with other profiles...")
-            all_profiles = cfg.list_profiles()
-            other_profiles = [p for p in all_profiles if p != profile_name]
-            
-            if len(other_profiles) > 0:
-                self.log(f"  Found {len(other_profiles)} other profile(s) to connect with")
-                connected_count = await self._automation.connect_profiles_as_friends(
-                    [profile_name] + other_profiles
-                )
-                self.log(f"  ✅ Connected {connected_count} friend pair(s)")
-                result["friends_connected"] = connected_count
-            else:
-                self.log(f"  ℹ️  No other profiles to connect with")
-                result["friends_connected"] = 0
 
             self.state = DriverState.LOGGED_IN
             self.log(f"Auto-setup complete for '{profile_name}'")
