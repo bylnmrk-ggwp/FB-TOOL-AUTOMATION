@@ -34,9 +34,20 @@ def counts() -> dict:
     }
 
 
-def _restricted(profile_name: str) -> bool:
-    """Whether Facebook is currently refusing this profile's shares."""
-    return bool(profile_name) and db.share_restriction(profile_name) is not None
+def restricted_profiles() -> set[str]:
+    """Every profile whose share pause is still running, in ONE query.
+
+    This used to be a share_restriction() call per roster row - 261 queries
+    for one GET /api/accounts, on a connection other threads were also using.
+    The table is tiny and the window is the same 'still running' test
+    db.share_restriction applies to a single profile.
+    """
+    conn = db._get_conn()
+    rows = conn.execute(
+        "SELECT profile FROM share_restrictions "
+        "WHERE datetime(noticed_at, '+' || pause_hours || ' hours') "
+        "> datetime('now','localtime')").fetchall()
+    return {r[0] for r in rows}
 
 
 def accounts_rows() -> list[dict]:
@@ -49,6 +60,8 @@ def accounts_rows() -> list[dict]:
     """
     rows = []
     linked = set()
+    # One query for the whole table, then a set lookup per row.
+    paused = restricted_profiles()
     for acct in db.list_accounts():
         profile = acct.get("linked_profile") or ""
         if profile:
@@ -63,7 +76,7 @@ def accounts_rows() -> list[dict]:
             "status_reason": acct.get("status_reason") or "",
             "sheet_status": acct.get("sheet_status") or "",
             "logged_in": acct.get("status") == "ok",
-            "restricted": _restricted(profile),
+            "restricted": profile in paused,
         })
     for name in cfg.list_profiles():
         if name in linked:
@@ -78,7 +91,7 @@ def accounts_rows() -> list[dict]:
             "status_reason": "",
             "sheet_status": "",
             "logged_in": False,
-            "restricted": _restricted(name),
+            "restricted": name in paused,
         })
     return rows
 

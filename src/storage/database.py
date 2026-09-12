@@ -1,21 +1,33 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 AUTOSHARE_DIR = Path.home() / ".autoshare"
 DB_PATH = AUTOSHARE_DIR / "autoshare.db"
 
-_conn: sqlite3.Connection | None = None
+# One connection PER THREAD, not one shared by all of them.
+#
+# A single module-global connection survived the Tk app, where almost every
+# call came from the UI thread. The web server put four threads on it at once
+# - FastAPI's request threadpool, the EventBridge, the DriverManager worker
+# and the sheet watcher - and two threads inside conn.execute() at the same
+# moment is exactly `sqlite3.InterfaceError: bad parameter or other API
+# misuse`, which is what GET /api/accounts started returning as a 500.
+# check_same_thread stays False because a connection can still outlive the
+# request that made it; WAL lets these connections read while one writes.
+_local = threading.local()
 
 
 def _get_conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
+    conn = getattr(_local, "conn", None)
+    if conn is None:
         AUTOSHARE_DIR.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA busy_timeout=3000")
-    return _conn
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=3000")
+        _local.conn = conn
+    return conn
 
 
 def init_db():
