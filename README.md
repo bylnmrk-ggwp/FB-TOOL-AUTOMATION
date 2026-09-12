@@ -39,11 +39,21 @@ Never commit it — `.env` is gitignored; see `.env.example`.
 RUN_APP.bat
 ```
 
-Or `python main.py`. The window has two tabs:
+`RUN_APP.bat` (`python main.py`) now opens the **web UI** — the sidebar admin
+shell (Dashboard, Accounts, Queue, Compose, Monitor, Log) — in your browser.
+On the first run it builds `web/dist` with npm and, if no web password is set
+yet, prompts you for one; then it starts the server and opens
+`http://127.0.0.1:8000`. Flags: `--port N`, `--no-open`, and `--tk` for the
+old desktop window (the no-Node fallback):
 
-- **Workspace** — Profiles (add Brave profiles, auto-setup, login status,
-  friend requests) beside the share Queue, with the Log docked below.
-- **Share Center** — the share composer over the Memory Monitor.
+```bat
+python main.py            :: web UI in the browser
+python main.py --tk       :: the old Tkinter window
+```
+
+The old Tk window has two tabs — **Workspace** (Profiles beside the share
+Queue, Log docked below) and **Share Center** (composer over the Memory
+Monitor). Both UIs drive the same DriverManager, database and Brave profiles.
 
 ## Web app
 
