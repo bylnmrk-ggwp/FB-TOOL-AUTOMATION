@@ -3215,9 +3215,9 @@ class DriverManager:
             # Visible and tiled when the operator asked to watch the wave;
             # headless otherwise, which is what an unattended run wants.
             show = browser_choice.show_login_windows()
-            rect = browser_choice.grid_slot(slot, wave) if (show and slot is not None) else None
+            tile = (slot, wave) if (show and slot is not None) else None
             await auto.start_browser(brave_path, headless=not show,
-                                     flags=LOGIN_FLAGS, window=rect)
+                                     flags=LOGIN_FLAGS, tile=tile)
             await auto.go_to_facebook()
             ok, msg = True, "already logged in"
             if not await self._session_is_live(auto):

@@ -600,7 +600,7 @@ class FacebookAutomation:
 
     async def start_browser(self, profile_path: str, headless: bool = True,
                             flags: list | None = None,
-                            window: tuple[int, int, int, int] | None = None):
+                            tile: tuple[int, int] | None = None):
         """Launch the browser with the given Brave profile directory.
 
         headless defaults to True, which is what every existing caller relies
@@ -609,6 +609,10 @@ class FacebookAutomation:
 
         flags defaults to MEMORY_FLAGS. Pass LOGIN_FLAGS for interactive
         login, where reCAPTCHA has to work and RAM tuning does not matter.
+
+        tile is (slot, count): this window's cell in a grid of `count`
+        windows, so a wave of logins tiles the screen instead of stacking on
+        one spot. See _tile_window for why it is not a --window-size flag.
         
         The profile_path should point to a specific Brave profile directory
         (e.g., C:/Users/.../Brave-Browser/User Data/Default).
@@ -644,20 +648,25 @@ class FacebookAutomation:
         self.log(f"Using Brave profile directory: {profile_dir_name}")
         self.log(f"User Data dir: {user_data_dir}")
 
+        launch = {"viewport": SMALL_VIEWPORT}
+        if tile:
+            # The page has to follow the small tiled window, not sit inside it
+            # at a fixed 1024x768.
+            launch = {"no_viewport": True}
+
         self.context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             executable_path=browser_choice.executable_path(),
             headless=headless,  # background by default; False shows a window
-            viewport=SMALL_VIEWPORT,
             args=[
                 *([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
-                # A wave of logins gets a slot each, so five windows tile the
-                # screen instead of stacking on one spot.
-                *([f"--window-position={window[0]},{window[1]}",
-                   f"--window-size={window[2]},{window[3]}"] if window
-                  else ["--window-position=50,50"]),
+                # Shrinking the browser's own unit is what makes a tile
+                # possible at all; see _tile_window.
+                *([f"--force-device-scale-factor={browser_choice.GRID_SCALE:g}"]
+                  if tile else ["--window-position=50,50"]),
                 *(MEMORY_FLAGS if flags is None else flags),
             ],
+            **launch,
         )
         
         self.log("Browser started in background mode" if headless
@@ -672,7 +681,34 @@ class FacebookAutomation:
                 await p.close()
             except Exception:
                 pass
+        if tile:
+            await self._tile_window(tile[0], tile[1])
         self.log("Browser started")
+
+    async def _tile_window(self, slot: int, count: int) -> None:
+        """Move this window into its own cell of a grid of `count`.
+
+        Not --window-size: Chromium refuses a window under about 515 of its
+        own units wide, which is wider than one cell of a 5x5 grid, so the
+        flag comes back clamped and the windows overlap. Launching with
+        --force-device-scale-factor makes those units smaller than a screen
+        pixel, and this places the window inside that larger coordinate
+        space, which the page itself reports as screen.availWidth.
+
+        A window that will not move is cosmetic: log it and log in anyway.
+        """
+        try:
+            space = await self.page.evaluate(
+                "() => [screen.availWidth, screen.availHeight]")
+            x, y, w, h = browser_choice.grid_slot(slot, count,
+                                                  int(space[0]), int(space[1]))
+            cdp = await self.context.new_cdp_session(self.page)
+            window_id = (await cdp.send("Browser.getWindowForTarget"))["windowId"]
+            await cdp.send("Browser.setWindowBounds",
+                           {"windowId": window_id,
+                            "bounds": {"left": x, "top": y, "width": w, "height": h}})
+        except Exception as e:  # noqa: BLE001 - a misplaced window never fails a login
+            self.log(f"Could not tile the window: {type(e).__name__}: {e}")
 
     async def start_browser_headless(self, profile_path: str, kill_existing: bool = True, viewport: dict = None):
         """Launch the browser in HEADLESS mode (background) with the given Brave profile directory.

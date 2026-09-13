@@ -83,9 +83,19 @@ def show_login_windows() -> bool:
     return str(cfg.get_setting(GRID_KEY, "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+# Chromium's own coordinate unit while tiling, as a fraction of a screen
+# pixel. It has a minimum window width of about 515 units, which is wider
+# than a 5x5 cell on any normal screen; at 0.5 a unit is half a pixel, the
+# space is twice as wide in units, and the cell clears the minimum.
+GRID_SCALE = 0.5
+
+
 def grid_slot(index: int, count: int, screen_w: int = 1536,
               screen_h: int = 864) -> tuple[int, int, int, int]:
     """(x, y, width, height) for one window of a wave of `count`.
+
+    screen_w/screen_h are in the browser's own units - what the page reports
+    as screen.availWidth - not screen pixels.
 
     The squarest grid that holds them all: a wave of 25 becomes 5x5, five
     becomes 3x2 rather than a row of slivers. Index wraps, so a caller that

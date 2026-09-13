@@ -93,6 +93,11 @@ class ProfilesTab(ttk.Frame):
                                       style="Accent.TButton")
         self.relogin_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
 
+        self.make_profiles_btn = ttk.Button(
+            inner, text="Create Chromium Profiles (for Parallel Login)",
+            command=self._on_create_chromium_profiles)
+        self.make_profiles_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
+
         # Status
         status_frame = ttk.Frame(inner)
         status_frame.pack(fill="x", **pad)
@@ -695,6 +700,63 @@ class ProfilesTab(ttk.Frame):
         cb = getattr(self, "_on_relogin_all_cb", None)
         if cb:
             cb([a["username"] for a in targets])
+
+    def _on_create_chromium_profiles(self, confirm: bool = True):
+        """Give every roster account its own Chromium profile directory.
+
+        This is what makes a parallel login possible: Brave keeps all profiles
+        in one User Data tree and binds the cookie key to it, so only one can
+        be driven at a time. A Chromium profile is a directory of its own, so
+        a wave of them opens together.
+
+        No browser is touched - it only creates directories and links them -
+        but a 260-row roster is enough filesystem work to freeze the window,
+        so it runs on a thread.
+        """
+        from src.core import browser_choice
+        if browser_choice.current_browser() != browser_choice.CHROMIUM:
+            messagebox.showinfo(
+                "Chromium is not the selected browser",
+                "Profiles here are Brave profiles, which live in one shared "
+                "User Data tree.\n\nSwitch the browser to Chromium first, then "
+                "create the per-account profiles that allow parallel logins.",
+                parent=self)
+            return
+        if confirm and not messagebox.askyesno(
+                "Create Chromium profiles",
+                "Create a Chromium profile for every roster account that has "
+                "none?\n\nExisting profiles keep their sessions - this only "
+                "adds what is missing.",
+                parent=self):
+            return
+
+        self.make_profiles_btn.config(state="disabled")
+        self.set_auto_setup_status("Creating Chromium profiles...")
+
+        def work():
+            from src.core import chromium_profiles
+            try:
+                counts = chromium_profiles.provision_all(log=self._write_log)
+                done = (f"Chromium profiles: {counts['created']} created, "
+                        f"{counts['already']} already there, "
+                        f"{counts['skipped']} skipped")
+            except Exception as e:  # noqa: BLE001 - reported in the UI, never raised
+                done = f"Creating profiles failed: {type(e).__name__}: {e}"
+            self.after(0, finish, done)
+
+        def finish(message: str):
+            self.make_profiles_btn.config(state="normal")
+            self.set_auto_setup_status(message)
+            self.refresh_profiles()
+            self.refresh_accounts()
+
+        threading.Thread(target=work, name="chromium-profiles", daemon=True).start()
+
+    def _write_log(self, message: str):
+        """Send one line to the Log tab when the window has wired one up."""
+        callback = getattr(self, "_log_callback", None)
+        if callback:
+            callback(message)
 
     def _on_check_friendships(self):
         """Check and display friendship status between all profiles."""

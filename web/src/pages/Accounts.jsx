@@ -92,11 +92,10 @@ export default function Accounts() {
 
   const provision = async () => {
     if (!window.confirm(
-      `Create a Brave profile for ${unprovisioned} account${unprovisioned === 1 ? '' : 's'} on the PC?
-
-`
-      + 'Every Brave window must be closed first, or the new profiles are discarded.')) return
-    say('Creating Brave profiles on the PC…', true)
+      `Create a browser profile for ${unprovisioned} account${unprovisioned === 1 ? '' : 's'} on the PC?\n\n`
+      + 'The PC uses whichever browser it is set to. On Brave every Brave window '
+      + 'must be closed first, or the new profiles are discarded.')) return
+    say('Creating profiles on the PC…', true)
     if (await actions.provisionProfiles()) say('Provisioning started — watch the Log page', true)
   }
   const fire = async (promise, doing) => {
@@ -248,7 +247,7 @@ export default function Accounts() {
         )}
         {unprovisioned > 0 && (
           <button type="button" className="btn accent" disabled={busy || provisioning} onClick={provision}
-                  title="Creates and links a Brave profile for every account that has none">
+                  title="Creates and links a browser profile for every account that has none">
             {provisioning ? 'Creating profiles…' : `Provision ${unprovisioned} profile${unprovisioned === 1 ? '' : 's'}`}
           </button>
         )}

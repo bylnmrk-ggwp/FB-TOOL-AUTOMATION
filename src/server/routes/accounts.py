@@ -194,14 +194,25 @@ def unlink(username: str, request: Request) -> dict:
 
 
 def _provision_run(log) -> int:
-    """Run scripts/provision_profiles.py in-process, its printed output going
-    to `log` line by line. Imported lazily: the script lives outside the
-    package and pulls in Brave's Local State handling, which a proof that
-    never provisions should not load."""
+    """Create a profile for every unlinked roster row, in whichever browser is
+    configured.
+
+    Chromium needs no registry or Local State work at all - a profile is just
+    a directory - so it runs straight through chromium_profiles. Brave needs
+    scripts/provision_profiles.py, which registers each profile in Local State
+    or Brave drops it. That script is imported lazily: it lives outside the
+    package and a proof that never provisions should not load it.
+    """
     import contextlib
     import io
     import sys as _sys
     from pathlib import Path
+
+    from src.core import browser_choice
+    if browser_choice.current_browser() == browser_choice.CHROMIUM:
+        from src.core import chromium_profiles
+        chromium_profiles.provision_all(log=lambda line: log(f"  {line}"))
+        return 0
 
     root = Path(__file__).resolve().parents[3]
     if str(root / "scripts") not in _sys.path:
@@ -244,7 +255,9 @@ def provision(request: Request) -> dict:
         if (st.appstate.run is not None or st.appstate.login_run_active
                 or st.appstate.scan_active):
             raise HTTPException(status_code=409, detail={"error": "a run is active"})
-        if deps["brave_running"]():
+        from src.core import browser_choice
+        brave = browser_choice.current_browser() == browser_choice.BRAVE
+        if brave and deps["brave_running"]():
             raise HTTPException(
                 status_code=409,
                 detail={"error": "Brave is open - close every Brave window first, "
@@ -260,7 +273,9 @@ def provision(request: Request) -> dict:
 
     def worker() -> None:
         try:
-            log("Creating Brave profiles for unlinked roster rows...")
+            from src.core import browser_choice
+            log(f"Creating {browser_choice.current_browser().title()} profiles "
+                f"for unlinked roster rows...")
             code = deps["run"](log)
             log(f"Profile provisioning finished (exit {code})")
         except Exception as e:  # noqa: BLE001 - reported, never raised into the thread
@@ -307,7 +322,9 @@ def setup_and_login(body: SetupLoginBody, request: Request) -> dict:
             raise HTTPException(status_code=409, detail={"error": "a login or setup run is active"})
         if st.appstate.run is not None or st.appstate.scan_active:
             raise HTTPException(status_code=409, detail={"error": "a run is active"})
-        if deps["brave_running"]():
+        from src.core import browser_choice
+        if (browser_choice.current_browser() == browser_choice.BRAVE
+                and deps["brave_running"]()):
             raise HTTPException(
                 status_code=409,
                 detail={"error": "Brave is open - close every Brave window first"})
