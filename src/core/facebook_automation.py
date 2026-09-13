@@ -2738,10 +2738,16 @@ class FacebookAutomation:
 
     # ── Credential login ─────────────────────────────────
 
-    async def login_with_credentials(self, email: str, password: str) -> tuple[bool, str]:
+    async def login_with_credentials(self, email: str, password: str,
+                                     wait_for_2fa: bool = True) -> tuple[bool, str]:
         """Fill in email/password on the Facebook login page and submit.
         Returns (ok, message). On success, session cookies are stored in the profile.
-        If 2FA is triggered, waits for the user to complete it manually."""
+
+        wait_for_2fa keeps the assisted behaviour: on a checkpoint or 2FA page
+        it waits up to 120 s for a person to finish it in the visible window.
+        Unattended callers (the headless re-login the web app runs) pass False
+        - nobody can answer, so the wait only ever expires, and the verdict is
+        the same one the classification already gives."""
         # reCAPTCHA and the 2FA challenge need images and fonts. With blocking
         # on, the widget fails with "Cannot contact reCAPTCHA" - the same
         # failure class as the comment composer (see _auto_comment).
@@ -2872,6 +2878,10 @@ class FacebookAutomation:
         if any(kw in current_url for kw in checkpoint_keywords):
             self.log("\u26a0\ufe0f 2FA / checkpoint detected! Complete it manually in the browser.")
             self.log(f"Current URL: {current_url}")
+            if not wait_for_2fa:
+                # Headless and unattended: waiting 120 s changes nothing, and
+                # the classification below already names the gate.
+                return False, "2FA / checkpoint required - finish it manually"
             self.log("Waiting up to 120s for you to finish 2FA...")
 
             # Wait for user to complete 2FA and reach facebook.com

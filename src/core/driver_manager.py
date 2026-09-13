@@ -3124,7 +3124,10 @@ class DriverManager:
             await auto.go_to_facebook()
             ok, msg = True, "already logged in"
             if not await self._session_is_live(auto):
-                ok, msg = await auto.login_with_credentials(username, password)
+                # Headless: no one can answer a 2FA prompt, so take the
+                # verdict at once instead of burning 120 s per account.
+                ok, msg = await auto.login_with_credentials(
+                    username, password, wait_for_2fa=False)
                 if ok and not await self._session_is_live(auto):
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")
