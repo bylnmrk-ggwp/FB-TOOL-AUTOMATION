@@ -270,10 +270,104 @@ def auto_sync_brave_profiles() -> list[str]:
         new_profiles[name] = full_path
         added.append(name)
 
+    # Entries for the other browser live in the same map and are none of this
+    # sync's business: dropping them would unlink every Chromium account.
+    for name, path in old_profiles.items():
+        if _under(path, BRAVE_USER_DATA) or path in new_profiles.values():
+            continue
+        new_profiles.setdefault(name, path)
+
     config["profiles"] = new_profiles
     _save_config(config)
 
     return added
+
+
+# ── Profiles of whichever browser is selected ─────────────────
+
+
+def _under(path: str, root) -> bool:
+    """Whether a saved path sits inside one browser's profile root."""
+    try:
+        return str(Path(path).resolve()).lower().startswith(str(Path(root).resolve()).lower())
+    except Exception:
+        return False
+
+
+def list_chromium_profiles() -> list[dict]:
+    """Every Chromium profile directory this PC has, in the shape
+    list_brave_profiles() returns.
+
+    A Chromium profile is a directory and nothing else - there is no Local
+    State info_cache to read, and the directory name is the account it was
+    created for.
+    """
+    from src.core import browser_choice
+    root = browser_choice.CHROMIUM_USER_DATA
+    profiles = []
+    try:
+        entries = sorted(d for d in root.iterdir() if d.is_dir())
+    except Exception:
+        return profiles
+    for d in entries:
+        profiles.append({
+            "dir_name": d.name,
+            "name": d.name,
+            "display": d.name,
+            "email": d.name if "@" in d.name else "",
+            "full_path": str(d),
+        })
+    return profiles
+
+
+def list_browser_profiles() -> list[dict]:
+    """The profiles of the browser the automation is set to drive."""
+    from src.core import browser_choice
+    return (list_chromium_profiles()
+            if browser_choice.current_browser() == browser_choice.CHROMIUM
+            else list_brave_profiles())
+
+
+def auto_sync_chromium_profiles() -> list[str]:
+    """Save an entry for every Chromium profile directory, and drop entries
+    whose directory is gone. Brave entries are left alone.
+
+    The directory name IS the profile name here, so there is none of Brave's
+    renaming: one account, one directory, one entry.
+    """
+    from src.core import browser_choice
+    root = browser_choice.CHROMIUM_USER_DATA
+    config = _load_config()
+    saved = dict(config.get("profiles", {}))
+    on_disk = {p["full_path"]: p["dir_name"] for p in list_chromium_profiles()}
+
+    kept = {name: path for name, path in saved.items()
+            if not _under(path, root) or path in on_disk}
+    known = set(kept.values())
+    added = []
+    for path, dir_name in on_disk.items():
+        if path in known:
+            continue
+        name = dir_name
+        counter = 2
+        while name in kept:
+            name = f"{dir_name} ({counter})"
+            counter += 1
+        kept[name] = path
+        added.append(name)
+
+    if kept != saved:
+        config["profiles"] = kept
+        _save_config(config)
+    return added
+
+
+def auto_sync_profiles() -> list[str]:
+    """Sync saved profiles with whichever browser is selected."""
+    from src.core import browser_choice
+    return (auto_sync_chromium_profiles()
+            if browser_choice.current_browser() == browser_choice.CHROMIUM
+            else auto_sync_brave_profiles())
 
 
 # ── Facebook Profile URLs ─────────────────────────────────

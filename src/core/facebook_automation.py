@@ -96,16 +96,23 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             _log("Starting Playwright...")
             pw = await async_playwright().start()
             
-            profile_dir_name = os.path.basename(brave_profile_path)
-            user_data_dir = os.path.dirname(brave_profile_path)
-            
+            # A Chromium profile IS its own user-data directory; only Brave
+            # keeps profiles inside one shared tree and selects one by name.
+            if browser_choice.current_browser() == browser_choice.CHROMIUM:
+                profile_dir_name = None
+                user_data_dir = brave_profile_path
+            else:
+                profile_dir_name = os.path.basename(brave_profile_path)
+                user_data_dir = os.path.dirname(brave_profile_path)
+
             _log(f"Launching browser: dir={user_data_dir}, profile={profile_dir_name}")
             context = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 executable_path=browser_choice.executable_path(),
                 headless=True,
                 viewport=SMALL_VIEWPORT,
-                args=[f"--profile-directory={profile_dir_name}", *MEMORY_FLAGS],
+                args=[*([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
+                      *MEMORY_FLAGS],
             )
             
             page = context.pages[0] if context.pages else await context.new_page()

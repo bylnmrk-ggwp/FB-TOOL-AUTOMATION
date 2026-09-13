@@ -36,8 +36,9 @@ class ProfilesTab(ttk.Frame):
         inner = ttk.Frame(card)
         inner.pack(fill="both", expand=True, padx=12, pady=10)
 
-        ttk.Label(inner, text="Saved Brave Profiles",
-                  style="Header.TLabel").pack(anchor="w", **pad)
+        self._header_label = ttk.Label(inner, text="Saved Profiles",
+                                       style="Header.TLabel")
+        self._header_label.pack(anchor="w", **pad)
 
         # Profile list
         list_frame = ttk.Frame(inner)
@@ -62,7 +63,7 @@ class ProfilesTab(ttk.Frame):
         btn_frame.pack(fill="x", **pad)
 
         self.add_btn = btn_frame.add(ttk.Button(
-            btn_frame, text="+ Add Brave Profile",
+            btn_frame, text="+ Add Profile",
             command=self._on_add, style="Accent.TButton"))
         self.scan_btn = btn_frame.add(ttk.Button(
             btn_frame, text="Scan for New Profiles", command=self._on_scan))
@@ -473,6 +474,7 @@ class ProfilesTab(ttk.Frame):
         return names
 
     def refresh_profiles(self):
+        self._apply_browser_labels()
         if hasattr(self, "_clear_profile_hover"):
             self._clear_profile_hover()
         # A refresh now also follows a login scan, which can run while the
@@ -830,7 +832,51 @@ class ProfilesTab(ttk.Frame):
             for line in report_lines:
                 self._log_callback(line)
 
+    def _browser_name(self) -> str:
+        """Whichever browser the automation drives, for button and dialog text:
+        the tab used to say Brave everywhere and now adds Chromium profiles."""
+        from src.core import browser_choice
+        return browser_choice.current_browser().title()
+
+    def _apply_browser_labels(self):
+        name = self._browser_name()
+        try:
+            self._header_label.config(text=f"Saved {name} Profiles")
+            self.add_btn.config(text=f"+ Add {name} Profile")
+        except Exception:
+            pass
+
+    def _on_add_chromium(self):
+        """Create one Chromium profile directory for an account.
+
+        Nothing to pick from: a Chromium profile does not exist until it is
+        created, and it is named for the account that will use it.
+        """
+        from tkinter import simpledialog
+        from src.core import chromium_profiles
+        username = simpledialog.askstring(
+            "Add Chromium profile",
+            "Account this profile logs in as (the roster username):",
+            parent=self)
+        username = (username or "").strip()
+        if not username:
+            return
+        path = chromium_profiles.ensure_profile(username)
+        cfg.save_profile(username, str(path))
+        try:
+            from src.storage import database as db
+            db.link_account(username, username)
+        except Exception:
+            pass    # an account not on the roster yet still gets its profile
+        self.refresh_profiles()
+        self.refresh_accounts()
+        self.set_status(f"Chromium profile ready for {username}")
+
     def _on_add(self):
+        from src.core import browser_choice
+        if browser_choice.current_browser() == browser_choice.CHROMIUM:
+            self._on_add_chromium()
+            return
         # Show Brave profile picker directly
         brave_profiles = cfg.list_brave_profiles()
         if not brave_profiles:
@@ -987,8 +1033,8 @@ class ProfilesTab(ttk.Frame):
             self._on_launch_profile_cb(name)
 
     def _on_scan(self):
-        """Scan Brave for new profiles and auto-add them."""
-        new_names = cfg.auto_sync_brave_profiles()
+        """Scan the selected browser for new profiles and auto-add them."""
+        new_names = cfg.auto_sync_profiles()
         self.refresh_profiles()
         if new_names:
             self.set_status(f"Found {len(new_names)} new profile(s): {', '.join(new_names)}")
@@ -999,7 +1045,7 @@ class ProfilesTab(ttk.Frame):
                 "\n\nThey are ready to use."
             )
         else:
-            self.set_status("No new profiles found — all Brave profiles are already in the list.")
+            self.set_status("No new profiles found — every profile of this browser is already in the list.")
 
     def _on_delete(self):
         name = self.selected_profile
