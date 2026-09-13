@@ -348,6 +348,11 @@ LOGIN_FLAGS = [
 
 
 class FacebookAutomation:
+    # Seconds an unattended login lets a gate URL clear itself before
+    # calling it a checkpoint. Long enough for the device-based login
+    # redirect, far short of the 120 s a watching human gets.
+    UNATTENDED_GATE_GRACE_S = 20
+
 
     LOGIN_URL = "https://www.facebook.com/"
 
@@ -2860,14 +2865,35 @@ class FacebookAutomation:
         # "two_step_verification" is Facebook's current 2FA path and matches
         # none of the older keywords ("twofactor" is a different string), so
         # a 2FA page used to read as a completed login.
+        # Real gates only. "/login/device-based/regular/login/" is a step of
+        # the ORDINARY login flow, and a bare "review" matches pages that are
+        # not gates at all; with the unattended path no longer waiting out a
+        # 120 s human timer, either one turned a successful login into
+        # "CHECKPOINT OR VERIFICATION REQUIRED".
         checkpoint_keywords = ["checkpoint", "twofactor", "two_step_verification",
-                               "approvals", "review", "login/device-based"]
+                               "approvals", "confirmemail"]
         if any(kw in current_url for kw in checkpoint_keywords):
             self.log("\u26a0\ufe0f 2FA / checkpoint detected! Complete it manually in the browser.")
             self.log(f"Current URL: {current_url}")
             if not wait_for_2fa:
-                # Headless and unattended: waiting 120 s changes nothing, and
-                # the classification below already names the gate.
+                # Unattended: nobody can answer a real 2FA prompt, so the
+                # 120 s human timer is pointless - but a gate URL can still
+                # clear itself in a second or two, and judging the first
+                # frame is what reported working accounts as gated. Give it a
+                # short grace period, then take the verdict.
+                for _ in range(int(self.UNATTENDED_GATE_GRACE_S)):
+                    await asyncio.sleep(1)
+                    try:
+                        url_now = self.page.url.lower()
+                    except Exception:
+                        continue
+                    if any(kw in url_now for kw in checkpoint_keywords):
+                        continue
+                    if "login" in url_now or "password" in url_now:
+                        continue
+                    if "facebook.com" in url_now and await self._is_logged_in(timeout=3):
+                        self.log("Login completed after the redirect cleared")
+                        return True, "Logged in successfully"
                 return False, "2FA / checkpoint required - finish it manually"
             self.log("Waiting up to 120s for you to finish 2FA...")
 
