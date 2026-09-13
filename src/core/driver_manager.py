@@ -54,6 +54,10 @@ def login_reason(message: str | None) -> str | None:
         return None
     if "password" in m and ("invalid" in m or "incorrect" in m):
         return "wrong password"
+    if "still on the login form" in m:
+        return "rejected at the login form"
+    if "left facebook" in m:
+        return "browser left Facebook"
     if ("email or mobile" in m or "email or phone" in m) and "invalid" in m:
         return "bad username"
     if "captcha" in m or "not a robot" in m:
@@ -2081,10 +2085,14 @@ class DriverManager:
                 else:
                     if writer.on:
                         await asyncio.to_thread(writer.mark_in_progress, username)
+                    # The grid is sized for the windows actually open: a run
+                    # of five tiles 3x2, not five cells of a 5x5 grid with
+                    # twenty empty ones.
+                    width = max(1, min(int(self.LOGIN_PARALLEL), total,
+                                       batch_size or int(self.LOGIN_PARALLEL)))
                     ok = await self._relogin_profile(
                         profile, why="Login requested",
-                        slot=(idx - 1) % max(1, int(self.LOGIN_PARALLEL)),
-                        wave=int(self.LOGIN_PARALLEL))
+                        slot=(idx - 1) % width, wave=width)
                     after = db.account_for_profile(profile) or {}
                     reason = ("logged in" if ok else
                               (after.get("status_reason")
@@ -2106,7 +2114,7 @@ class DriverManager:
                 # needs an authenticator - before the next wave starts.
                 # Never run more at once than one batch: batch_size is what
                 # spaces the run, so a wave that outran it would skip the pause.
-                width = max(1, min(int(self.LOGIN_PARALLEL),
+                width = max(1, min(int(self.LOGIN_PARALLEL), total,
                                    batch_size or int(self.LOGIN_PARALLEL)))
                 self.log(f"  Chromium: logging in {width} at a time")
                 for start in range(0, len(jobs), width):
@@ -3225,8 +3233,10 @@ class DriverManager:
             if not await self._session_is_live(auto):
                 # Headless: no one can answer a 2FA prompt, so take the
                 # verdict at once instead of burning 120 s per account.
+                # A visible run has someone watching, so a 2FA prompt is
+                # worth waiting on; headless it only ever expires.
                 ok, msg = await auto.login_with_credentials(
-                    username, password, wait_for_2fa=False)
+                    username, password, wait_for_2fa=show)
                 if ok and not await self._wait_session_live(auto):
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")

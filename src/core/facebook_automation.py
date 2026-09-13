@@ -3061,7 +3061,7 @@ class FacebookAutomation:
         # "I'm not a robot" can come up on the form or right after submitting.
         # An unanswered one leaves the page sitting on the login screen, which
         # used to be reported as a wrong password.
-        captcha = await self.handle_recaptcha(0 if not wait_for_2fa else None)
+        captcha = await self.handle_recaptcha()
         if captcha == "needs human":
             return False, "captcha - solve it in the window"
         if captcha == "solved":
@@ -3092,6 +3092,16 @@ class FacebookAutomation:
         checkpoint_keywords = ["checkpoint", "twofactor", "two_step_verification",
                                "approvals", "confirmemail"]
         if any(kw in current_url for kw in checkpoint_keywords):
+            # Name the gate. "two_step_verification" is an authenticator and
+            # "confirmemail" is an inbox; recording both as CHECKPOINT told
+            # the operator nothing about what the account actually needs.
+            gate = ("two-factor authentication required"
+                    if ("two_step_verification" in current_url
+                        or "twofactor" in current_url
+                        or "approvals" in current_url)
+                    else "email confirmation required"
+                    if "confirmemail" in current_url
+                    else "checkpoint required")
             self.log("\u26a0\ufe0f 2FA / checkpoint detected! Complete it manually in the browser.")
             self.log(f"Current URL: {current_url}")
             if not wait_for_2fa:
@@ -3113,7 +3123,7 @@ class FacebookAutomation:
                     if "facebook.com" in url_now and await self._is_logged_in(timeout=3):
                         self.log("Login completed after the redirect cleared")
                         return True, "Logged in successfully"
-                return False, "2FA / checkpoint required - finish it manually"
+                return False, f"{gate} - finish it manually"
             self.log("Waiting up to 120s for you to finish 2FA...")
 
             # Wait for user to complete 2FA and reach facebook.com
@@ -3135,7 +3145,7 @@ class FacebookAutomation:
                 except Exception:
                     continue
             else:
-                return False, "2FA timed out after 120s"
+                return False, f"{gate} - timed out after 120s"
 
         # Normal login — verify we're logged in
         logged_in = await self._is_logged_in(timeout=15)
@@ -3161,6 +3171,18 @@ class FacebookAutomation:
                     return False, f"Login failed: {err_text}"
             except Exception:
                 pass
+            # No error box: say where the browser actually ended up, or the
+            # sheet records every one of these as "unknown not logged in" and
+            # the operator cannot tell a stuck form from a gate.
+            try:
+                where = self.page.url.lower()
+            except Exception:
+                where = ""
+            if "login" in where or "/login.php" in where:
+                return False, ("still on the login form - wrong password, or "
+                               "Facebook rejected the attempt")
+            if "facebook.com" not in where:
+                return False, f"left Facebook for {where[:80] or 'a blank page'}"
             return False, "Login failed — check credentials or complete login manually"
 
     # ── Auto React ────────────────────────────────────────

@@ -20,6 +20,11 @@ USER = "verify_cap@example.com"
 PROFILE = "VerifyCaptcha"
 
 _real_path = cfg.get_profile_path
+# A background run is the case under test: windows off, so the first attempt
+# has to be headless whatever this PC is set to.
+from src.core import browser_choice as bc  # noqa: E402
+_saved_grid = cfg.get_setting(bc.GRID_KEY, None)
+cfg.save_setting(bc.GRID_KEY, "0")
 _real_creds = db.credentials_for_profile
 _real_auto = None
 
@@ -95,6 +100,12 @@ try:
 finally:
     cfg.get_profile_path = _real_path
     db.credentials_for_profile = _real_creds
+    if _saved_grid is None:
+        conf = cfg._load_config()
+        conf.pop(bc.GRID_KEY, None)
+        cfg._save_config(conf)
+    else:
+        cfg.save_setting(bc.GRID_KEY, _saved_grid)
     if _real_auto is not None:
         import src.core.facebook_automation as fa
         fa.FacebookAutomation = _real_auto
