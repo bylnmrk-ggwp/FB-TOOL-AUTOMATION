@@ -746,6 +746,23 @@ class FacebookAutomation:
         await cdp.send("Browser.setWindowBounds",
                        {"windowId": window_id, "bounds": bounds})
 
+    # Facebook does not only use Google reCAPTCHA. Its own challenge is an
+    # Arkose Labs / FunCaptcha widget ("confirm you are human", a rotating
+    # picture puzzle), which is a different host and has no checkbox at all -
+    # so it was never detected and every one of them was recorded as a
+    # checkpoint or as an unexplained failure.
+    ARKOSE_HOSTS = ("arkoselabs.com", "funcaptcha.co", "arkoselabs.cn")
+    CAPTCHA_TEXTS = ("confirm you're human", "confirm that you're human",
+                     "confirm you are human", "security check",
+                     "enter the characters", "solve this puzzle",
+                     "let's confirm you're human", "i'm not a robot")
+
+    async def _frame_urls(self) -> list[str]:
+        try:
+            return [(getattr(f, "url", "") or "") for f in self.page.frames]
+        except Exception:
+            return []
+
     async def _captcha_frame(self):
         """The "I'm not a robot" checkbox frame on this page, or None.
 
@@ -762,6 +779,21 @@ class FacebookAutomation:
             if "recaptcha" in url and "anchor" in url:
                 return frame
         return None
+
+    async def _arkose_present(self) -> bool:
+        """Whether Facebook's own picture challenge is on the page.
+
+        There is nothing to click here: an Arkose puzzle is answered by a
+        person or not at all.
+        """
+        if any(any(h in url for h in self.ARKOSE_HOSTS)
+               for url in await self._frame_urls()):
+            return True
+        try:
+            body = (await self.page.locator("body").inner_text(timeout=3000)).lower()
+        except Exception:
+            return False
+        return any(t in body for t in self.CAPTCHA_TEXTS)
 
     async def _captcha_challenge_open(self) -> bool:
         """Whether the picture challenge is up - the part no click can pass."""
@@ -798,6 +830,23 @@ class FacebookAutomation:
         """
         frame = await self._captcha_frame()
         if frame is None:
+            # Facebook's own challenge, which has no checkbox to tick.
+            if await self._arkose_present():
+                self.log("Facebook picture challenge shown (Arkose)")
+                if wait_s is None:
+                    wait_s = self.CAPTCHA_WAIT_S if self._tile is not None else 0
+                if wait_s <= 0:
+                    return "needs human"
+                self.log(f"Solve the challenge in this window ({int(wait_s)}s)")
+                await self._focus_for_human()
+                try:
+                    for _ in range(int(wait_s)):
+                        await asyncio.sleep(1)
+                        if not await self._arkose_present():
+                            return "solved"
+                    return "needs human"
+                finally:
+                    await self._back_to_tile()
             return "none"
         if await self._captcha_token():
             return "solved"
@@ -3183,6 +3232,10 @@ class FacebookAutomation:
                                "Facebook rejected the attempt")
             if "facebook.com" not in where:
                 return False, f"left Facebook for {where[:80] or 'a blank page'}"
+            self.log(f"  unexplained login failure at {where[:120]}")
+            for url in await self._frame_urls():
+                if url and "facebook.com" not in url:
+                    self.log(f"  third-party frame: {url[:120]}")
             return False, "Login failed — check credentials or complete login manually"
 
     # ── Auto React ────────────────────────────────────────

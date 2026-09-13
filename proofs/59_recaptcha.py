@@ -108,6 +108,30 @@ if not page.raised:
     failures.append("recaptcha: the window was never raised for the operator, so "  # noqa: F821
                     "the challenge sits in a cell too small to answer")
 
+# Facebook's own challenge is a different widget on a different host, with no
+# checkbox at all. It was invisible to a detector that only knew Google's.
+ARKOSE = "https://client-api.arkoselabs.com/fc/assets/ec-game-core/"
+page = _Page(frames=[(ARKOSE, False)])
+auto = _auto(page, tile=None)
+if asyncio.run(auto.handle_recaptcha()) != "needs human":
+    failures.append("recaptcha: Facebook's own picture challenge is not detected, so "  # noqa: F821
+                    "it is recorded as something else")
+
+page = _Page(frames=[(ARKOSE, False)])
+auto = _auto(page)
+
+
+async def _answer_arkose():
+    task = asyncio.ensure_future(auto.handle_recaptcha(wait_s=5))
+    await asyncio.sleep(1.2)
+    page.frames = []           # the person finishes the puzzle
+    return await task
+
+if asyncio.run(_answer_arkose()) != "solved":
+    failures.append("recaptcha: an answered Facebook challenge is not noticed")  # noqa: F821
+if not page.raised:
+    failures.append("recaptcha: the window was not raised for the Facebook challenge")  # noqa: F821
+
 # The sheet reason says captcha, not "wrong password".
 if login_reason("captcha - solve it in the window") != "captcha":
     failures.append("recaptcha: the recorded reason does not say captcha")  # noqa: F821
