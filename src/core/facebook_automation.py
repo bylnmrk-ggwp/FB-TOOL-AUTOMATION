@@ -99,12 +99,8 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             
             # A Chromium profile IS its own user-data directory; only Brave
             # keeps profiles inside one shared tree and selects one by name.
-            if browser_choice.current_browser() == browser_choice.CHROMIUM:
-                profile_dir_name = None
-                user_data_dir = brave_profile_path
-            else:
-                profile_dir_name = os.path.basename(brave_profile_path)
-                user_data_dir = os.path.dirname(brave_profile_path)
+            user_data_dir, profile_dir_name = FacebookAutomation._profile_layout(
+                brave_profile_path)
 
             _log(f"Launching browser: dir={user_data_dir}, profile={profile_dir_name}")
             context = await pw.chromium.launch_persistent_context(
@@ -423,15 +419,15 @@ class FacebookAutomation:
                 _close_brave_if_running()
                 await asyncio.sleep(1)
 
-            profile_dir_name = os.path.basename(brave_path)
-            user_data_dir = os.path.dirname(brave_path)
+            user_data_dir, profile_dir_name = self._profile_layout(brave_path)
 
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 executable_path=browser_choice.executable_path(),
                 headless=True,
                 viewport=SMALL_VIEWPORT,
-                args=[f"--profile-directory={profile_dir_name}", *MEMORY_FLAGS],
+                args=[*([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
+                      *MEMORY_FLAGS],
             )
             pages = ctx.pages
             page = pages[0] if pages else await ctx.new_page()
@@ -615,6 +611,22 @@ class FacebookAutomation:
 
     # ── Driver lifecycle ───────────────────────────────────
 
+    @staticmethod
+    def _profile_layout(profile_path: str) -> tuple[str, str | None]:
+        """(user_data_dir, profile_directory) for opening one account.
+
+        Brave keeps every profile inside one shared "User Data" tree and
+        selects one with --profile-directory. A Chromium profile IS its own
+        user-data directory, and its data lives in the "Default" folder the
+        browser creates inside it - so passing Brave's split for Chromium
+        opens the PARENT of the profile and finds no cookies at all. That is
+        what made every comment report "logged out or session expired" for
+        accounts that had just logged in.
+        """
+        if browser_choice.current_browser() == browser_choice.CHROMIUM:
+            return profile_path, None
+        return os.path.dirname(profile_path), os.path.basename(profile_path)
+
     async def start_browser(self, profile_path: str, headless: bool = True,
                             flags: list | None = None,
                             tile: tuple[int, int] | None = None):
@@ -655,14 +667,9 @@ class FacebookAutomation:
         # Brave selects a profile inside one shared "User Data" tree; a
         # Chromium profile IS its own user-data directory. Passing Brave's
         # split to Chromium would open the parent folder and lose the session.
-        if browser_choice.current_browser() == browser_choice.CHROMIUM:
-            profile_dir_name = None
-            user_data_dir = profile_path
-        else:
-            profile_dir_name = os.path.basename(profile_path)
-            user_data_dir = os.path.dirname(profile_path)
+        user_data_dir, profile_dir_name = self._profile_layout(profile_path)
 
-        self.log(f"Using Brave profile directory: {profile_dir_name}")
+        self.log(f"Using profile directory: {profile_dir_name}")
         self.log(f"User Data dir: {user_data_dir}")
 
         launch = {"viewport": SMALL_VIEWPORT}
@@ -933,11 +940,9 @@ class FacebookAutomation:
 
         self._pw = await async_playwright().start()
 
-        # Split profile path
-        profile_dir_name = os.path.basename(profile_path)
-        user_data_dir = os.path.dirname(profile_path)
+        user_data_dir, profile_dir_name = self._profile_layout(profile_path)
 
-        self.log(f"Using Brave profile: {profile_dir_name} (background)")
+        self.log(f"Using profile: {profile_dir_name or user_data_dir} (background)")
 
         try:
             self.context = await self._pw.chromium.launch_persistent_context(
@@ -946,7 +951,7 @@ class FacebookAutomation:
                 headless=True,  # HEADLESS MODE!
                 viewport=viewport or SMALL_VIEWPORT,
                 args=[
-                    f"--profile-directory={profile_dir_name}",
+                    *([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
                     *MEMORY_FLAGS,
                 ],
             )
