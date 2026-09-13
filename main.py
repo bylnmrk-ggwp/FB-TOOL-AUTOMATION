@@ -1,10 +1,10 @@
-"""Launcher. Default: the web UI (the sidebar admin shell) in your browser.
+"""Launcher. Default: the Windows desktop window.
 
-    python main.py            build web/dist if needed, start the server,
-                              open http://127.0.0.1:8000 in the browser
-    python main.py --port N   serve on a different port
-    python main.py --no-open  start the server but do not open a browser
-    python main.py --tk       the old Tkinter window instead (fallback)
+    python main.py                  the desktop (Tkinter) app
+    python main.py --web            build web/dist if needed, start the
+                                    server, open http://127.0.0.1:8000
+    python main.py --web --port N   serve the web UI on a different port
+    python main.py --web --no-open  start the server, open no browser
 
 The web UI and the Tk window drive the SAME DriverManager, SQLite database
 and Brave profiles on this PC; the web build just lets a phone or another
@@ -88,15 +88,21 @@ def _open_browser_when_up(url: str, health: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Launch the FB Tool UI.")
+    parser.add_argument("--web", action="store_true",
+                        help="serve the web UI and open it in a browser "
+                             "instead of the desktop window")
     parser.add_argument("--tk", action="store_true",
-                        help="run the old Tkinter window instead of the web UI")
+                        help="the desktop window (the default; kept so the "
+                             "old flag still works)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-open", action="store_true",
                         help="do not open a browser (web mode)")
     args = parser.parse_args(argv)
 
-    if args.tk:
+    # The Windows desktop window is the default: double-clicking main.py or
+    # running it with no flag opens the app itself, not a browser tab.
+    if not args.web:
         from src.app import run
         run()
         return 0
