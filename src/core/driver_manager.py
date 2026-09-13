@@ -56,6 +56,8 @@ def login_reason(message: str | None) -> str | None:
         return "wrong password"
     if ("email or mobile" in m or "email or phone" in m) and "invalid" in m:
         return "bad username"
+    if "captcha" in m or "not a robot" in m:
+        return "captcha"
     if "disabled" in m:
         return "disabled"
     if "checkpoint" in m:
@@ -3228,6 +3230,12 @@ class DriverManager:
                 if ok and not await self._wait_session_live(auto):
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")
+            # A captcha is the one failure a person can clear in seconds, so
+            # it is worth a window even in a background run: everything else
+            # stays headless and this account alone comes to the front.
+            if not ok and login_reason(msg) == "captcha" and slot is not None:
+                ok, msg = await self._retry_visible(auto, profile_name, brave_path,
+                                                    username, password, slot, wave)
             if ok:
                 await self._record_and_publish(profile_name, True, "logged_in")
                 state_cache.invalidate(profile_name)   # force a fresh extract
@@ -3247,6 +3255,35 @@ class DriverManager:
                 await auto.quit()
             except Exception:
                 pass
+
+    async def _retry_visible(self, auto, profile_name: str, brave_path: str,
+                             username: str, password: str,
+                             slot: int, wave: int) -> tuple[bool, str]:
+        """Reopen this one account in a visible tile so the operator can answer
+        its captcha, and log in again there.
+
+        The headless attempt cannot be handed over: nothing is on screen to
+        click. Only the accounts that hit a captcha pay for the second
+        launch; the rest of the wave never leaves the background.
+        """
+        from src.core.facebook_automation import LOGIN_FLAGS
+
+        self.log(f"  ↻ '{profile_name}' hit a captcha - opening a window for it")
+        try:
+            await auto.quit()
+        except Exception:
+            pass
+        await auto.start_browser(brave_path, headless=False,
+                                 flags=LOGIN_FLAGS, tile=(slot, wave))
+        await auto.go_to_facebook()
+        if await self._session_is_live(auto):
+            return True, "already logged in"
+        ok, msg = await auto.login_with_credentials(username, password,
+                                                    wait_for_2fa=True)
+        if ok and not await self._wait_session_live(auto):
+            return False, ("signed in but never reached the home page - "
+                           "Facebook is gating this account")
+        return ok, msg
 
     async def _wait_session_live(self, auto, seconds: float | None = None,
                                  poll: float = 2.0) -> bool:

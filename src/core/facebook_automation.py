@@ -354,6 +354,10 @@ class FacebookAutomation:
     # calling it a checkpoint. Long enough for the device-based login
     # redirect, far short of the 120 s a watching human gets.
     UNATTENDED_GATE_GRACE_S = 20
+    # Seconds a visible login waits for the operator to answer a reCAPTCHA
+    # picture challenge. Only a person can answer one, so a headless run
+    # skips the wait entirely.
+    CAPTCHA_WAIT_S = 180
 
 
     LOGIN_URL = "https://www.facebook.com/"
@@ -366,6 +370,7 @@ class FacebookAutomation:
         self.page: Page | None = None
         self._browser = None  # browser instance for concurrent mode
         self._post_url_before_share: str | None = None  # URL before sharing, for verifying redirects
+        self._tile: tuple[int, int] | None = None  # this window's grid cell, if tiled
 
     # ── Concurrent profile support ─────────────────────────
 
@@ -681,6 +686,7 @@ class FacebookAutomation:
                 await p.close()
             except Exception:
                 pass
+        self._tile = tile
         if tile:
             await self._tile_window(tile[0], tile[1])
         self.log("Browser started")
@@ -709,6 +715,127 @@ class FacebookAutomation:
                             "bounds": {"left": x, "top": y, "width": w, "height": h}})
         except Exception as e:  # noqa: BLE001 - a misplaced window never fails a login
             self.log(f"Could not tile the window: {type(e).__name__}: {e}")
+
+    async def _set_window_bounds(self, bounds: dict) -> None:
+        """Move/resize this window through CDP. Bounds are in the browser's
+        own units, the same space _tile_window lays the grid out in."""
+        cdp = await self.context.new_cdp_session(self.page)
+        window_id = (await cdp.send("Browser.getWindowForTarget"))["windowId"]
+        await cdp.send("Browser.setWindowBounds",
+                       {"windowId": window_id, "bounds": bounds})
+
+    async def _captcha_frame(self):
+        """The "I'm not a robot" checkbox frame on this page, or None.
+
+        reCAPTCHA runs in two google.com iframes: the anchor frame holds the
+        checkbox, the bframe holds the picture challenge. Only the anchor can
+        be clicked.
+        """
+        try:
+            frames = self.page.frames
+        except Exception:
+            return None
+        for frame in frames:
+            url = (getattr(frame, "url", "") or "")
+            if "recaptcha" in url and "anchor" in url:
+                return frame
+        return None
+
+    async def _captcha_challenge_open(self) -> bool:
+        """Whether the picture challenge is up - the part no click can pass."""
+        try:
+            frames = self.page.frames
+        except Exception:
+            return False
+        return any("recaptcha" in (getattr(f, "url", "") or "")
+                   and "bframe" in (getattr(f, "url", "") or "") for f in frames)
+
+    async def _captcha_token(self) -> bool:
+        """Whether reCAPTCHA has issued a token, which is what "solved" means."""
+        try:
+            filled = await self.page.evaluate(
+                "() => { const el = document.querySelector("
+                "'#g-recaptcha-response, textarea[name=\"g-recaptcha-response\"]');"
+                " return el ? el.value.length : 0; }")
+        except Exception:
+            return False
+        return bool(filled)
+
+    async def handle_recaptcha(self, wait_s: float | None = None) -> str:
+        """Deal with an "I'm not a robot" box. Returns "none", "solved" or
+        "needs human".
+
+        The checkbox itself is clicked here: on a profile with history
+        reCAPTCHA usually issues its token from that click alone. A picture
+        challenge is a different thing - it is meant to be answered by a
+        person, and this does not answer it. Instead the window is enlarged
+        and raised so the operator can, then put back in its tile.
+
+        Headless there is nobody to ask, so the wait is skipped and the run
+        records the verdict instead of hanging.
+        """
+        frame = await self._captcha_frame()
+        if frame is None:
+            return "none"
+        if await self._captcha_token():
+            return "solved"
+
+        self.log("reCAPTCHA shown - ticking \"I'm not a robot\"...")
+        try:
+            box = frame.locator("#recaptcha-anchor")
+            await box.click(timeout=10000)
+        except Exception as e:  # noqa: BLE001 - the token check below decides
+            self.log(f"  could not click the checkbox: {type(e).__name__}: {e}")
+
+        # A checkbox-only reCAPTCHA issues its token within a second or two.
+        for _ in range(10):
+            await asyncio.sleep(1)
+            if await self._captcha_token():
+                self.log("reCAPTCHA passed")
+                return "solved"
+            if await self._captcha_challenge_open():
+                break
+
+        if wait_s is None:
+            wait_s = self.CAPTCHA_WAIT_S if self._tile is not None else 0
+        if wait_s <= 0:
+            self.log("reCAPTCHA needs a picture challenge and no window is visible")
+            return "needs human"
+
+        self.log(f"reCAPTCHA picture challenge - solve it in this window "
+                 f"({int(wait_s)}s)")
+        await self._focus_for_human()
+        try:
+            for _ in range(int(wait_s)):
+                await asyncio.sleep(1)
+                if await self._captcha_token():
+                    self.log("reCAPTCHA solved")
+                    return "solved"
+            return "needs human"
+        finally:
+            await self._back_to_tile()
+
+    async def _focus_for_human(self) -> None:
+        """Make this window big and frontmost: a grid cell is far too small to
+        pick traffic lights in."""
+        try:
+            space = await self.page.evaluate(
+                "() => [screen.availWidth, screen.availHeight]")
+            width = int(int(space[0]) * 0.6)
+            height = int(int(space[1]) * 0.8)
+            await self._set_window_bounds({
+                "left": (int(space[0]) - width) // 2,
+                "top": (int(space[1]) - height) // 2,
+                "width": width, "height": height, "windowState": "normal"})
+            await self.page.bring_to_front()
+        except Exception as e:  # noqa: BLE001 - cosmetic; the wait still runs
+            self.log(f"Could not raise the window: {type(e).__name__}: {e}")
+
+    async def _back_to_tile(self) -> None:
+        """Return the window to its cell so the rest of the wave stays visible."""
+        if self._tile is None:
+            return
+        await self._tile_window(self._tile[0], self._tile[1])
 
     async def start_browser_headless(self, profile_path: str, kill_existing: bool = True, viewport: dict = None):
         """Launch the browser in HEADLESS mode (background) with the given Brave profile directory.
@@ -2908,6 +3035,23 @@ class FacebookAutomation:
         # Wait for post-login navigation
         self.log("Waiting for login to complete...")
         await asyncio.sleep(random.uniform(3, 5))
+
+        # "I'm not a robot" can come up on the form or right after submitting.
+        # An unanswered one leaves the page sitting on the login screen, which
+        # used to be reported as a wrong password.
+        captcha = await self.handle_recaptcha(0 if not wait_for_2fa else None)
+        if captcha == "needs human":
+            return False, "captcha - solve it in the window"
+        if captcha == "solved":
+            await asyncio.sleep(random.uniform(2, 4))
+            if not await self._is_logged_in(timeout=5):
+                # The captcha was the gate on the form: submitting again is
+                # what actually logs in.
+                try:
+                    await self.page.keyboard.press("Enter")
+                    await asyncio.sleep(random.uniform(3, 5))
+                except Exception:
+                    pass
 
         # Check for 2FA / checkpoint page
         try:
