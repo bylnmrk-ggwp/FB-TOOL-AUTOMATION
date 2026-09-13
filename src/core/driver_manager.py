@@ -3592,13 +3592,11 @@ class DriverManager:
             for i, result in enumerate(batch_results):
                 idx, item = batch_items[i]
                 processed += 1
-                if isinstance(result, Exception):
-                    self.result_queue.put({
-                        "type": "batch_item_result", "ok": False,
-                        "profile_name": item["profile_name"],
-                        "message": str(result),
-                    })
-                elif isinstance(result, dict):
+                # No Exception branch here: batch_results is filled by a
+                # direct `await _process_one(...)`, not gather(
+                # return_exceptions=True), so a raise propagates out of the
+                # loop instead of arriving as a result.
+                if isinstance(result, dict):
                     if result.get("ok"):
                         success_count += 1
                     msg = result.get("message", "")
