@@ -37,6 +37,41 @@ class DriverState(Enum):
     ERROR = "error"
 
 
+def login_reason(message: str | None) -> str | None:
+    """Facebook's own words for a failed login, as a short sheet-friendly
+    reason - or None when the message says nothing specific.
+
+    The URL classification (_classify_account_access) only ever sees where
+    the browser ended up, so "Input Password is invalid." and an expired
+    cookie both came out as "logged out or session expired". The operator
+    could not tell a bad spreadsheet password from a dead session. When the
+    login itself explains the failure, that explanation wins.
+    """
+    m = (message or "").lower()
+    if not m:
+        return None
+    if "password" in m and ("invalid" in m or "incorrect" in m):
+        return "wrong password"
+    if ("email or mobile" in m or "email or phone" in m) and "invalid" in m:
+        return "bad username"
+    if "disabled" in m:
+        return "disabled"
+    if "checkpoint" in m:
+        return "checkpoint"
+    if "2fa" in m or "two-factor" in m or "two factor" in m:
+        return "needs 2FA"
+    if "email confirm" in m or "confirm your email" in m:
+        return "needs email confirmation"
+    if "never reached the home page" in m or "no home page" in m:
+        return "no home page"
+    if ("browser has been closed" in m or "target page" in m
+            or "context or browser" in m or "launch" in m):
+        return "browser error - retry"
+    if "timeout" in m or "timed out" in m:
+        return "needs 2FA" if "2fa" in m else "timeout - retry"
+    return None
+
+
 class DriverManager:
     """Drives FacebookAutomation from a background thread via a command queue.
 
@@ -3136,7 +3171,9 @@ class DriverManager:
                 state_cache.invalidate(profile_name)   # force a fresh extract
                 self.log(f"  ✓ '{profile_name}' logged back in ({msg})")
                 return True
-            status = await auto._classify_account_access()
+            # Facebook's own message first; the URL classification is only
+            # the fallback for a failure it did not explain.
+            status = login_reason(msg) or await auto._classify_account_access()
             await self._record_and_publish(profile_name, False, status)
             self.log(f"  ✗ '{profile_name}' could not be logged back in: {msg}")
             return False
