@@ -599,7 +599,8 @@ class FacebookAutomation:
     # ── Driver lifecycle ───────────────────────────────────
 
     async def start_browser(self, profile_path: str, headless: bool = True,
-                            flags: list | None = None):
+                            flags: list | None = None,
+                            window: tuple[int, int, int, int] | None = None):
         """Launch the browser with the given Brave profile directory.
 
         headless defaults to True, which is what every existing caller relies
@@ -619,16 +620,26 @@ class FacebookAutomation:
         """
         self.log("Starting browser...")
 
-        # Kill any running Brave process so the profile isn't locked
-        _close_brave_if_running()
-        await asyncio.sleep(1)
+        # Brave shares one User Data tree, so a running Brave locks the
+        # profile. A Chromium profile is private to this launch; killing the
+        # user's other browsers would be gratuitous.
+        if browser_choice.current_browser() != browser_choice.CHROMIUM:
+            _close_brave_if_running()
+            await asyncio.sleep(1)
 
         self._pw = await async_playwright().start()
 
         # Split profile path into User Data directory and profile directory name
         # e.g. "C:/.../Brave-Browser/User Data/Default" → parent="C:/.../User Data", name="Default"
-        profile_dir_name = os.path.basename(profile_path)
-        user_data_dir = os.path.dirname(profile_path)
+        # Brave selects a profile inside one shared "User Data" tree; a
+        # Chromium profile IS its own user-data directory. Passing Brave's
+        # split to Chromium would open the parent folder and lose the session.
+        if browser_choice.current_browser() == browser_choice.CHROMIUM:
+            profile_dir_name = None
+            user_data_dir = profile_path
+        else:
+            profile_dir_name = os.path.basename(profile_path)
+            user_data_dir = os.path.dirname(profile_path)
 
         self.log(f"Using Brave profile directory: {profile_dir_name}")
         self.log(f"User Data dir: {user_data_dir}")
@@ -639,8 +650,12 @@ class FacebookAutomation:
             headless=headless,  # background by default; False shows a window
             viewport=SMALL_VIEWPORT,
             args=[
-                f"--profile-directory={profile_dir_name}",
-                "--window-position=50,50",
+                *([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
+                # A wave of logins gets a slot each, so five windows tile the
+                # screen instead of stacking on one spot.
+                *([f"--window-position={window[0]},{window[1]}",
+                   f"--window-size={window[2]},{window[3]}"] if window
+                  else ["--window-position=50,50"]),
                 *(MEMORY_FLAGS if flags is None else flags),
             ],
         )

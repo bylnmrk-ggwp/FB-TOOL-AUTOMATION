@@ -2026,7 +2026,12 @@ class DriverManager:
         writer = await asyncio.to_thread(sheet_status.SheetWriter)
         if not writer.on:
             self.log(f"  ⚠️  live sheet updates off: {writer.error}")
-        batch_size = int(cmd.get("batch_size", self.LOGIN_BATCH_SIZE) or 0)
+        # A batch is the burst that runs before a pause. Sequentially that is
+        # LOGIN_BATCH_SIZE logins; in a parallel wave the wave itself is the
+        # burst, so the default batch is the wave width.
+        default_batch = (self.LOGIN_PARALLEL if browser_choice.supports_parallel_login()
+                         else self.LOGIN_BATCH_SIZE)
+        batch_size = int(cmd.get("batch_size", default_batch) or 0)
         pause_minutes = float(cmd.get("pause_minutes", self.LOGIN_BATCH_PAUSE_MIN) or 0)
         self.log(f"Logging in {total} account(s)..."
                  + (f" in batches of {batch_size}, {pause_minutes:g} min apart"
@@ -2037,8 +2042,13 @@ class DriverManager:
         # pass while one is active, and a sweep re-login landing mid-run would
         # open a second persistent context on the same locked User Data dir.
         self._batch_running = True
-        try:
-            for idx, username in enumerate(usernames, 1):
+
+        async def _login_one(idx: int, username: str):
+            """One account, start to definitive verdict: logged in, disabled,
+            gated, or a stated failure. Returns nothing; it files its own
+            result and emits its own progress line."""
+            nonlocal logged_in, failed, skipped
+            if True:
                 acct = by_user.get(username.strip().lower())
                 profile = (acct or {}).get("linked_profile") or ""
                 reason = ""
@@ -2069,7 +2079,10 @@ class DriverManager:
                 else:
                     if writer.on:
                         await asyncio.to_thread(writer.mark_in_progress, username)
-                    ok = await self._relogin_profile(profile, why="Login requested")
+                    ok = await self._relogin_profile(
+                        profile, why="Login requested",
+                        slot=(idx - 1) % max(1, int(self.LOGIN_PARALLEL)),
+                        wave=int(self.LOGIN_PARALLEL))
                     after = db.account_for_profile(profile) or {}
                     reason = ("logged in" if ok else
                               (after.get("status_reason")
@@ -2081,17 +2094,41 @@ class DriverManager:
                     "username": username, "profile_name": profile, "ok": ok,
                     "message": f"[{idx}/{total}] {username}: {reason}",
                 })
-                if idx < total:
-                    await asyncio.sleep(0 if getattr(self, "_fast_tests", False)
-                                        else random.uniform(2.0, 4.0))
-                # A long unbroken run of fresh logins from one machine is the
-                # pattern most likely to draw a checkpoint on every account,
-                # so the run rests between batches. Sequential either way:
-                # Brave's singleton owns the shared User Data directory.
-                if batch_size and idx < total and idx % batch_size == 0:
-                    self.log(f"  Batch of {batch_size} done - pausing "
-                             f"{pause_minutes:g} min ({idx}/{total} attempted)")
-                    await self._batch_pause(pause_minutes * 60.0)
+
+        jobs = list(enumerate(usernames, 1))
+        try:
+            if browser_choice.supports_parallel_login():
+                # Chromium: a directory per account, so nothing is shared and a
+                # wave can run together. Waves, not a rolling pool, because each
+                # account must reach a definitive verdict - logged in, disabled,
+                # needs an authenticator - before the next wave starts.
+                # Never run more at once than one batch: batch_size is what
+                # spaces the run, so a wave that outran it would skip the pause.
+                width = max(1, min(int(self.LOGIN_PARALLEL),
+                                   batch_size or int(self.LOGIN_PARALLEL)))
+                self.log(f"  Chromium: logging in {width} at a time")
+                for start in range(0, len(jobs), width):
+                    wave = jobs[start:start + width]
+                    await asyncio.gather(*(_login_one(i, u) for i, u in wave))
+                    # batch_size 0 means one unbroken run, waves included.
+                    if batch_size and start + width < len(jobs):
+                        self.log(f"  Wave of {len(wave)} done - pausing "
+                                 f"{pause_minutes:g} min "
+                                 f"({min(start + width, len(jobs))}/{total} attempted)")
+                        await self._batch_pause(pause_minutes * 60.0)
+            else:
+                # Brave: one at a time, and that is not a tuning choice. Its
+                # cookie key is bound to the shared User Data directory that
+                # Chromium's ProcessSingleton locks.
+                for idx, username in jobs:
+                    await _login_one(idx, username)
+                    if idx < total:
+                        await asyncio.sleep(0 if getattr(self, "_fast_tests", False)
+                                            else random.uniform(2.0, 4.0))
+                    if batch_size and idx < total and idx % batch_size == 0:
+                        self.log(f"  Batch of {batch_size} done - pausing "
+                                 f"{pause_minutes:g} min ({idx}/{total} attempted)")
+                        await self._batch_pause(pause_minutes * 60.0)
         finally:
             self._batch_running = False
 
@@ -3120,6 +3157,11 @@ class DriverManager:
     # credentials go in; checking once, immediately, wrote off accounts that
     # only needed another second or two.
     SESSION_CONFIRM_S = 25
+    # How many logins run together when the browser allows it (Chromium,
+    # one directory per account). Brave ignores this and stays sequential.
+    # 25 tiles the screen 5x5; each window is small but all are visible.
+    LOGIN_PARALLEL = 25
+    # Sequential (Brave) spacing only; a parallel run pauses once per wave.
     LOGIN_BATCH_SIZE = 5
     LOGIN_BATCH_PAUSE_MIN = 2.0
 
@@ -3136,7 +3178,8 @@ class DriverManager:
         return (time.monotonic() - last) >= self.RELOGIN_COOLDOWN_SECONDS
 
     async def _relogin_profile(self, profile_name: str,
-                               why: str = "Session expired") -> bool:
+                               why: str = "Session expired",
+                               slot: int | None = None, wave: int = 1) -> bool:
         """Log a profile in inside its real Brave profile.
 
         `why` is the reason shown in the log: the default for the sweep and
@@ -3169,8 +3212,12 @@ class DriverManager:
         self.log(f"  ↻ {why} - logging '{profile_name}' in...")
         auto = FacebookAutomation(log_callback=lambda m: None)
         try:
-            await auto.start_browser(brave_path, headless=True,
-                                     flags=LOGIN_FLAGS)
+            # Visible and tiled when the operator asked to watch the wave;
+            # headless otherwise, which is what an unattended run wants.
+            show = browser_choice.show_login_windows()
+            rect = browser_choice.grid_slot(slot, wave) if (show and slot is not None) else None
+            await auto.start_browser(brave_path, headless=not show,
+                                     flags=LOGIN_FLAGS, window=rect)
             await auto.go_to_facebook()
             ok, msg = True, "already logged in"
             if not await self._session_is_live(auto):

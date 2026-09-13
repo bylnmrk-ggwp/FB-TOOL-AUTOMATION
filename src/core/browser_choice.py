@@ -68,3 +68,34 @@ def profile_dir(profile_name: str) -> Path:
     safe = "".join(ch if (ch.isalnum() or ch in "-_.@") else "_"
                    for ch in (profile_name or "")).strip("_") or "profile"
     return CHROMIUM_USER_DATA / safe
+
+
+# ── Window layout ─────────────────────────────────────
+
+# Whether a login wave shows its windows. Off means headless, which is
+# faster and what an unattended run wants; on tiles them so the operator can
+# watch the whole wave at once instead of one on top of another.
+GRID_KEY = "login_window_grid"
+
+
+def show_login_windows() -> bool:
+    from src.storage import config_manager as cfg
+    return str(cfg.get_setting(GRID_KEY, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def grid_slot(index: int, count: int, screen_w: int = 1536,
+              screen_h: int = 864) -> tuple[int, int, int, int]:
+    """(x, y, width, height) for one window of a wave of `count`.
+
+    The squarest grid that holds them all: a wave of 25 becomes 5x5, five
+    becomes 3x2 rather than a row of slivers. Index wraps, so a caller that
+    miscounts still gets a real rectangle instead of an exception mid-run.
+    """
+    import math
+    count = max(1, int(count))
+    index = int(index) % count
+    cols = math.ceil(math.sqrt(count))
+    rows = math.ceil(count / cols)
+    w = max(1, screen_w // cols)
+    h = max(1, screen_h // rows)
+    return ((index % cols) * w, (index // cols) * h, w, h)
