@@ -465,8 +465,14 @@ class ProfilesTab(ttk.Frame):
         self._render_roster()
 
     def _visible_profiles(self) -> list[str]:
-        """Profile names to list, honouring the "logged in only" filter."""
-        names = cfg.list_profiles()
+        """Profile names to list: this browser's, honouring the "logged in
+        only" filter.
+
+        Both browsers' profiles live in one saved map, and a Brave profile
+        cannot be opened by a Chromium run or the other way round, so listing
+        them together only offers profiles that will not work.
+        """
+        names = cfg.list_profiles_for_browser()
         if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
             from src.storage import database as db
             ok = db.logged_in_profiles()

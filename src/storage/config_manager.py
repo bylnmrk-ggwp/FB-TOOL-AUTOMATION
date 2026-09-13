@@ -362,6 +362,20 @@ def auto_sync_chromium_profiles() -> list[str]:
     return added
 
 
+def list_profiles_for_browser() -> list[str]:
+    """Saved profile names that belong to the selected browser.
+
+    The saved map holds both: a Brave profile lives under Brave's User Data
+    and a Chromium one under CHROMIUM_USER_DATA. Neither browser can open the
+    other's, so a caller that drives one wants only its own.
+    """
+    from src.core import browser_choice
+    root = browser_choice.user_data_root()
+    config = _load_config()
+    return [name for name, path in config.get("profiles", {}).items()
+            if _under(path, root)]
+
+
 def auto_sync_profiles() -> list[str]:
     """Sync saved profiles with whichever browser is selected."""
     from src.core import browser_choice

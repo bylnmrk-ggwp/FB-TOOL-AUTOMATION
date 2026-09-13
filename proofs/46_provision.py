@@ -32,6 +32,21 @@ _saved_browser = cfg.get_setting(bc.SETTING_KEY, None)
 cfg.save_setting(bc.SETTING_KEY, bc.BRAVE)
 
 
+def _restore_browser():
+    """Put the PC's browser back even when a check below raises: leaving it on
+    Brave silently switches every later run away from Chromium."""
+    if _saved_browser is None:
+        conf = cfg._load_config()
+        conf.pop(bc.SETTING_KEY, None)
+        cfg._save_config(conf)
+    else:
+        cfg.save_setting(bc.SETTING_KEY, _saved_browser)
+
+
+import atexit  # noqa: E402
+atexit.register(_restore_browser)
+
+
 class _Bridge:
     """push_state needs something that broadcasts; record what it saw."""
 
@@ -141,11 +156,6 @@ _app, _c = _client(brave_running=True)
 if _c.post("/api/accounts/setup-and-login", json={"usernames": ["a@example.com"]}).status_code != 409:
     failures.append("setup-and-login with Brave open should be 409")  # noqa: F821
 
-if _saved_browser is None:
-    _conf = cfg._load_config()
-    _conf.pop(bc.SETTING_KEY, None)
-    cfg._save_config(_conf)
-else:
-    cfg.save_setting(bc.SETTING_KEY, _saved_browser)
+_restore_browser()
 
 print("FAILED" if [f for f in failures if "setup-and-login" in f] else "ok")  # noqa: F821
