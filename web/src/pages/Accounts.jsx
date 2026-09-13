@@ -113,6 +113,21 @@ export default function Accounts() {
     if (!window.confirm(`Log in ${plural(usernames.length, 'account')}?${note}\n\nThis opens Brave on the PC for each one, in turn.`)) return
     fire(actions.loginSelected(usernames), `Logging in ${plural(usernames.length, 'account')}…`)
   }
+  // Every account that could be driven but is not logged in right now: the
+  // bulk retry after a run where Facebook gated most of the roster. Scope is
+  // the whole table, not the ticked rows, so it needs no selection.
+  const notLoggedIn = accounts.filter(a => a.username && a.linked_profile
+    && (a.live ?? a.logged_in) !== true
+    && (a.status || '').toLowerCase() !== 'disabled')
+  const reloginFailed = () => {
+    const usernames = notLoggedIn.map(a => a.username)
+    if (usernames.length === 0) { say('Every account with a profile is already logged in'); return }
+    if (!window.confirm(
+      `Re-login ${plural(usernames.length, 'account')} that are not logged in?`
+      + '\n\nBrave must be closed. They run in batches of 5 with a pause between.')) return
+    fire(actions.loginSelected(usernames), `Re-logging in ${plural(usernames.length, 'account')}…`)
+  }
+
   const checkLogin = () => {
     const names = profiles.length ? profiles : null
     fire(actions.checkLogin(names), `Checking login status of ${names ? plural(names.length, 'profile') : 'every Brave profile'}…`)
@@ -214,6 +229,12 @@ export default function Accounts() {
 
       <div className="actions">
         <button type="button" className="btn accent" disabled={off(checked.length > 0)} onClick={loginSelected}>Log in selected</button>
+        {notLoggedIn.length > 0 && (
+          <button type="button" className="btn" disabled={busy} onClick={reloginFailed}
+                  title="Re-runs the login for every account with a Brave profile that is not logged in">
+            Re-login not logged in ({notLoggedIn.length})
+          </button>
+        )}
         <button type="button" className="btn" disabled={busy} onClick={checkLogin}
                 title={profiles.length ? `Check ${plural(profiles.length, 'checked profile')}` : 'Check every Brave profile'}>Check login status</button>
         <button type="button" className="btn" disabled={off(profiles.length > 0)} onClick={autoSetup}>Auto setup</button>
