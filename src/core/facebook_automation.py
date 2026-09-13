@@ -346,17 +346,6 @@ LOGIN_FLAGS = [
     "--disable-translate",
 ]
 
-DUAL_BROWSER_FLAGS = [
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--no-first-run",
-    "--disable-extensions",
-    "--disable-background-networking",
-    "--disable-sync",
-    "--disable-translate",
-    "--js-flags=--max-old-space-size=512",  # 512MB for comfortable operation
-]
-
 
 class FacebookAutomation:
 
@@ -1464,7 +1453,6 @@ class FacebookAutomation:
 
         except Exception as e:
             self.log(f"     ❌ Error on followers page: {e}")
-            import traceback
             self.log(f"        {traceback.format_exc()[:300]}")
             return accepted
 
@@ -1923,7 +1911,6 @@ class FacebookAutomation:
                 # Method 1: Check if there's already an ID in the URL
                 if "id=" in profile_url:
                     # Clean up the URL (remove extra query parameters except id)
-                    import re
                     match = re.search(r'[?&]id=(\d+)', profile_url)
                     if match:
                         user_id = match.group(1)
@@ -3817,13 +3804,12 @@ class FacebookAutomation:
         delays = cfg.get_comment_delays()
         
         # Handle multiple comments (one per line) - select one randomly
-        import random as rand_module
         comment_lines = [line.strip() for line in comment_text.strip().splitlines() if line.strip()]
         if not comment_lines:
             return True
         
         # Select one comment randomly from the list
-        selected_comment = rand_module.choice(comment_lines)
+        selected_comment = random.choice(comment_lines)
         self.log(f"Selected comment ({len(comment_lines)} available): '{selected_comment[:50]}...'")
         comment_text = selected_comment
 
@@ -5222,7 +5208,6 @@ class FacebookAutomation:
             
         except Exception as e:
             self.log(f"❌ Error deleting old share: {e}")
-            import traceback
             self.log(f"   Traceback: {traceback.format_exc()}")
             return False
 
@@ -5841,7 +5826,6 @@ class FacebookAutomation:
             post_url = post_url.replace("mobile.facebook.com", "www.facebook.com")
         
         # Extract the post/video ID from the URL for precise targeting
-        import re
         self._target_post_id = None
         if post_url:
             # Match patterns like /videos/123, /posts/123, /photos/123, /reel/123, story.php?...id=123
@@ -6782,7 +6766,6 @@ class FacebookAutomation:
             post_url = post_url.replace("mobile.facebook.com", "www.facebook.com")
 
         # Extract the post/video ID from the URL for precise targeting
-        import re
         self._target_post_id = None
         if post_url:
             m = re.search(r'/(?:videos?|posts?|photos?|reels?)/(\d+)', post_url)
