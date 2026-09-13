@@ -21,6 +21,8 @@ endpoint, so "live" here means within one poll interval. POLL_SECONDS = 20 is
 two reads a minute against a 300-a-minute project quota.
 """
 import hashlib
+import re
+import unicodedata
 import json
 import queue
 import threading
@@ -54,6 +56,28 @@ def fetch_rows(tok: str | None = None, sheet_id: str = api.DEFAULT_SHEET_ID,
     return api.get_values(tok, sheet_id, f"{tab}!A1:Z")
 
 
+# The roster is edited by hand and operators annotate the USERNAME cell
+# itself - a tick when an account is done, "(Na oopen)" beside one that would
+# not open, an invisible left-to-right mark pasted in from elsewhere. Taken
+# literally, those notes make a second account out of one address (the twin
+# carries no password) and get typed into Facebook, which answers "Input
+# Email or mobile number is invalid". The address is the account; the note is
+# not part of it.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def clean_username(raw: str) -> str:
+    """The account identifier inside a USERNAME cell, without the notes.
+
+    An email anywhere in the cell wins, since that is what Facebook is given.
+    Otherwise the cell keeps its own text (names and phone numbers are valid
+    identifiers) minus invisible formatting characters and outer whitespace.
+    """
+    text = "".join(ch for ch in (raw or "") if unicodedata.category(ch) != "Cf")
+    found = _EMAIL_RE.search(text)
+    return found.group(0) if found else text.strip()
+
+
 def parse_accounts(rows: list[list[str]]) -> list[dict]:
     """Sheet rows -> upsert_account kwargs. Rows without a USERNAME are skipped.
 
@@ -73,7 +97,7 @@ def parse_accounts(rows: list[list[str]]) -> list[dict]:
     for i, row in enumerate(rows[1:], start=1):
         def cell(idx):
             return row[idx].strip() if idx is not None and idx < len(row) else ""
-        username = cell(cols["USERNAME"])
+        username = clean_username(cell(cols["USERNAME"]))
         if not username:
             continue
         raw_no = cell(no_col)
