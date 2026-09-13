@@ -14,6 +14,8 @@ from typing import Callable
 from playwright.async_api import async_playwright, Locator, Page, BrowserContext
 from src.storage import config_manager as cfg
 
+from src.core import browser_choice
+
 CHROME_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 BRAVE_USER_DATA = os.environ.get("LOCALAPPDATA", "") + r"\BraveSoftware\Brave-Browser\User Data"
 
@@ -100,7 +102,7 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             _log(f"Launching browser: dir={user_data_dir}, profile={profile_dir_name}")
             context = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,
                 viewport=SMALL_VIEWPORT,
                 args=[f"--profile-directory={profile_dir_name}", *MEMORY_FLAGS],
@@ -409,7 +411,7 @@ class FacebookAutomation:
 
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,
                 viewport=SMALL_VIEWPORT,
                 args=[f"--profile-directory={profile_dir_name}", *MEMORY_FLAGS],
@@ -633,7 +635,7 @@ class FacebookAutomation:
 
         self.context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
-            executable_path=CHROME_PATH,
+            executable_path=browser_choice.executable_path(),
             headless=headless,  # background by default; False shows a window
             viewport=SMALL_VIEWPORT,
             args=[
@@ -691,7 +693,7 @@ class FacebookAutomation:
         try:
             self.context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,  # HEADLESS MODE!
                 viewport=viewport or SMALL_VIEWPORT,
                 args=[

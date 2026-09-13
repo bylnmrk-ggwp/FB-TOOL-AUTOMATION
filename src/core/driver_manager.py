@@ -28,6 +28,8 @@ from src.core.memory_tracker import MemoryTracker
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 
+from src.core import browser_choice
+
 class DriverState(Enum):
     STOPPED = "stopped"
     CREATING = "creating"
@@ -840,7 +842,7 @@ class DriverManager:
             self.log("Phase 2: Launching shared browser...")
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
@@ -1079,7 +1081,7 @@ class DriverManager:
             self.log("Phase 2: Launching shared browser...")
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
@@ -1308,7 +1310,7 @@ class DriverManager:
 
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
-                executable_path=CHROME_PATH,
+                executable_path=browser_choice.executable_path(),
                 headless=True,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
@@ -3873,7 +3875,7 @@ class DriverManager:
         last = None
         for attempt in range(1, attempts + 1):
             try:
-                return await pw.chromium.launch(executable_path=CHROME_PATH,
+                return await pw.chromium.launch(executable_path=browser_choice.executable_path(),
                                                 headless=headless, args=args)
             except Exception as e:
                 last = e
