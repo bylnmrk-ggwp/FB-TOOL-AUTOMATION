@@ -58,8 +58,9 @@ def _curve(x0: float, y0: float, x1: float, y1: float,
     """
     dx, dy = x1 - x0, y1 - y0
     distance = math.hypot(dx, dy) or 1.0
-    # Perpendicular offset, up to a fifth of the distance, either side.
-    bow = random.uniform(-0.2, 0.2) * distance
+    # Perpendicular offset, either side, never near zero: a bow that rounds
+    # to nothing is a straight line again, which is the shape being avoided.
+    bow = random.choice((-1, 1)) * random.uniform(0.07, 0.2) * distance
     cx = (x0 + x1) / 2 - dy / distance * bow
     cy = (y0 + y1) / 2 + dx / distance * bow
 

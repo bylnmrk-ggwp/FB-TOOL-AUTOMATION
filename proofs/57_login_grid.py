@@ -35,15 +35,23 @@ if any(w < 300 for _, _, w, _ in five):
     failures.append(f"login grid: five windows are too narrow to read: "  # noqa: F821
                     f"{[w for _, _, w, _ in five]}")
 
-# The real wave width has to tile the screen as a full 5x5 - that is the
-# layout the operator asked for, and it is what makes 25 windows watchable.
+# A wave of 25 is the layout the operator asked for: a full 5x5. Whatever the
+# wave width is set to, it tiles as the squarest grid that holds it, every
+# window on screen and none stacked on another.
+import math  # noqa: E402
 from src.core.driver_manager import DriverManager  # noqa: E402
-wave = int(DriverManager.LOGIN_PARALLEL)
-rects = [grid_slot(i, wave, *SCREEN) for i in range(wave)]
-cols = len({x for x, _, _, _ in rects})
-rows = len({y for _, y, _, _ in rects})
-if (cols, rows) != (5, 5):
-    failures.append(f"login grid: a wave of {wave} tiles as {cols}x{rows}, not 5x5")  # noqa: F821
+
+for wave in (25, int(DriverManager.LOGIN_PARALLEL)):
+    rects = [grid_slot(i, wave, *SCREEN) for i in range(wave)]
+    cols = len({x for x, _, _, _ in rects})
+    rows = len({y for _, y, _, _ in rects})
+    want_cols = math.ceil(math.sqrt(wave))
+    want_rows = math.ceil(wave / want_cols)
+    if (cols, rows) != (want_cols, want_rows):
+        failures.append(f"login grid: a wave of {wave} tiles as {cols}x{rows}, "  # noqa: F821
+                        f"not {want_cols}x{want_rows}")
+    if len({(x, y) for x, y, _, _ in rects}) != wave:
+        failures.append(f"login grid: a wave of {wave} stacked windows on one slot")  # noqa: F821
 
 # A tile is placed through CDP in the browser's own coordinate space, not with
 # --window-size: Chromium clamps a window to about 515 of its units, which is
