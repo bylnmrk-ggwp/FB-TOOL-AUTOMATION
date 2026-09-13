@@ -521,13 +521,18 @@ def link_account(username: str, profile_name: str) -> bool:
 
 
 def account_for_profile(profile_name: str) -> dict | None:
-    """The roster account linked to a Brave profile, or None if none is."""
+    """The roster account linked to a browser profile, or None if none is.
+
+    Carries sheet_status as well as the local verdict: a caller deciding
+    whether an account may be driven needs the sheet's own LOGGED IN cell,
+    not only what this PC last recorded.
+    """
     if not profile_name:
         return None
     conn = _get_conn()
     row = conn.execute(
         "SELECT sheet_no, facebook_name, username, gmail, number, "
-        "linked_profile, status, status_reason FROM accounts "
+        "linked_profile, status, status_reason, sheet_status FROM accounts "
         "WHERE linked_profile = ? ORDER BY sheet_no LIMIT 1",
         (profile_name,)).fetchone()
     return dict(row) if row else None

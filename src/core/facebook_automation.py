@@ -4166,8 +4166,15 @@ class FacebookAutomation:
                 await asyncio.sleep(delay_after_nav)
                 current_url = self.page.url
                 self.log(f"Comment page URL: {current_url}")
+                status = None
                 if not await self._is_logged_in(timeout=3):
+                    # Ask the classifier before giving up: a 3 s look at a
+                    # half-loaded post page is not evidence of a dead session.
                     status = await self._classify_account_access()
+                    if status == self.LOGGED_IN:
+                        self.log("Session is live - the post page was just slow")
+                        status = None
+                if status is not None:
                     self.last_comment_error = status.replace('_', ' ')
                     self.log(f"Cannot comment — account status: {self.last_comment_error}")
                     return False
@@ -4676,8 +4683,18 @@ class FacebookAutomation:
 
         return False
 
+    LOGGED_IN = "logged_in"
+
     async def _classify_account_access(self, page=None) -> str:
-        """Classify why Facebook access is unavailable."""
+        """Why Facebook access is unavailable - or LOGGED_IN when it is not.
+
+        The classifier used to have no way of saying "this account is fine".
+        Every caller asked it only after something had already failed, so a
+        live session that failed for another reason (a slow page, a post that
+        would not load) came back as "unknown_not_logged_in" and the account
+        was demoted on the sheet. Answering LOGGED_IN lets a caller tell a
+        dead session from a working one.
+        """
         target = page or self.page
         if not target:
             return "unknown"
@@ -4685,6 +4702,13 @@ class FacebookAutomation:
             url = target.url.lower()
         except Exception:
             return "unknown"
+        # A live session first: anything else here is a reason for failure,
+        # and a working account must never be given one.
+        try:
+            if "facebook.com" in url and await self._is_logged_in(timeout=5):
+                return self.LOGGED_IN
+        except Exception:
+            pass
         # Never navigated (about:blank) or navigated off Facebook: this says
         # nothing about the account, so it must not be recorded as one.
         if "facebook.com" not in url:

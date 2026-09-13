@@ -3262,6 +3262,13 @@ class DriverManager:
             # Facebook's own message first; the URL classification is only
             # the fallback for a failure it did not explain.
             status = login_reason(msg) or await auto._classify_account_access()
+            if status == auto.LOGGED_IN:
+                # The message said one thing, the browser says the session is
+                # live. The browser wins - it is looking at the account.
+                await self._record_and_publish(profile_name, True, "logged_in")
+                state_cache.invalidate(profile_name)
+                self.log(f"  ✓ '{profile_name}' is logged in after all ({msg})")
+                return True
             await self._record_and_publish(profile_name, False, status)
             self.log(f"  ✗ '{profile_name}' could not be logged back in: {msg}")
             return False
@@ -3356,6 +3363,10 @@ class DriverManager:
             status = await auto._classify_account_access()
         except Exception:
             status = "unknown"
+        from src.core.facebook_automation import FacebookAutomation
+        if status == FacebookAutomation.LOGGED_IN:
+            return {"profile_name": profile_name, "ok": True, "needs_login": False,
+                    "message": "logged in"}
         if status in ("unreachable", "unknown"):
             # Deliberately worded to match none of the needs_login keywords:
             # an inconclusive check must never demote a working account.
@@ -3366,6 +3377,20 @@ class DriverManager:
         return {"profile_name": profile_name, "ok": False,
                 "needs_login": True,
                 "message": f"Not logged in ({status.replace('_', ' ')})"}
+
+    @staticmethod
+    def _session_recorded_live(profile_name: str) -> bool:
+        """Whether the roster says this account is logged in.
+
+        The database's own verdict first - it is written by a login run or a
+        login check that saw the home page. The sheet's LOGGED IN cell counts
+        too, and nothing else does: "NOT LOGGED IN / SESSION EXPIRED"
+        contains the same words, so the match is exact.
+        """
+        account = db.account_for_profile(profile_name) or {}
+        if (account.get("status") or "") == "ok":
+            return True
+        return (account.get("sheet_status") or "").strip().upper() == "LOGGED IN"
 
     async def _do_batch(self, items: list[dict]):
         """Process queue items with all profile pages opened up front.
@@ -3391,6 +3416,32 @@ class DriverManager:
 
         # Get unique profiles
         unique_profiles = list({item["profile_name"] for item in items})
+
+        # Only accounts with a confirmed session take part. Driving a dead one
+        # costs a browser launch and a page load, writes a misleading reason
+        # to the sheet, and adds another failed request to the account's
+        # record - for an action that cannot succeed.
+        dead = [p for p in unique_profiles if not self._session_recorded_live(p)]
+        if dead:
+            self.log(f"  Skipping {len(dead)} profile(s) that are not logged in: "
+                     f"{', '.join(sorted(dead)[:6])}"
+                     + (" ..." if len(dead) > 6 else ""))
+            for index, item in enumerate(items):
+                if item["profile_name"] in dead:
+                    self.result_queue.put({
+                        "type": "batch_progress", "current": index + 1,
+                        "total": total, "profile_name": item["profile_name"],
+                        "ok": False,
+                        "message": f"{item['profile_name']}: skipped - not logged in",
+                    })
+            items = [item for item in items if item["profile_name"] not in dead]
+            unique_profiles = [p for p in unique_profiles if p not in dead]
+            if not items:
+                self._batch_running = False
+                self.log("  No logged-in account has anything to do in this batch")
+                self.result_queue.put({"type": "batch_result", "ok": True,
+                                       "results": [], "total": 0})
+                return
 
         # ── Phase 1: Load cached states, extract only the misses ──
         states: dict[str, dict | None] = {}
