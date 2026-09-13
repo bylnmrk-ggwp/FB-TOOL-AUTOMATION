@@ -2047,6 +2047,14 @@ class DriverManager:
                 elif acct.get("status") == "disabled":
                     reason = "disabled"
                     skipped.append((username, reason))
+                elif (acct.get("status") == "ok"
+                      or (acct.get("sheet_status") or "").strip().upper() == "LOGGED IN"):
+                    # Already signed in. Opening a browser for it costs a
+                    # minute and risks drawing a fresh checkpoint on a session
+                    # that was working. Note the exact match: "NOT LOGGED IN"
+                    # contains the same two words and must still be attempted.
+                    reason = "already logged in"
+                    skipped.append((username, reason))
                 elif not profile:
                     reason = "no Brave profile - run scripts/provision_profiles.py"
                     skipped.append((username, reason))

@@ -22,6 +22,7 @@ class ProfilesTab(ttk.Frame):
         }
         self._rate_limited: set[str] = set()  # profiles currently rate-limited
         self._login_scan_running = False  # True while a login-status scan is in flight
+        self._on_relogin_all_cb = None
 
         self._build_ui()
         self.refresh_profiles()
@@ -86,6 +87,11 @@ class ProfilesTab(ttk.Frame):
                                           state="normal",
                                           style="TButton")
         self.check_login_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
+
+        self.relogin_btn = ttk.Button(inner, text="Re-login All That Need Login",
+                                      command=self._on_relogin_all,
+                                      style="Accent.TButton")
+        self.relogin_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
 
         # Status
         status_frame = ttk.Frame(inner)
@@ -501,6 +507,13 @@ class ProfilesTab(ttk.Frame):
     def set_on_check_login_status(self, callback):
         self._on_check_login_status_cb = callback
 
+    def set_on_relogin_all(self, callback):
+        """callback(usernames) - log every account that needs it back in."""
+        self._on_relogin_all_cb = callback
+
+    def set_relogin_enabled(self, enabled: bool):
+        self.relogin_btn.config(state="normal" if enabled else "disabled")
+
     def set_check_login_enabled(self, enabled: bool):
         """Enable or disable the Check Login Status button."""
         self._login_scan_running = not enabled
@@ -641,6 +654,47 @@ class ProfilesTab(ttk.Frame):
         self._login_scan_running = True
         self.check_login_btn.config(state="disabled")
         self._on_check_login_status_cb()
+
+    def _needs_login(self) -> list[dict]:
+        """Roster rows we could actually drive but whose session is not live:
+        a Brave profile this PC has saved, not disabled, status not 'ok'."""
+        from src.storage import database as db
+        rows = []
+        for a in db.list_accounts():
+            profile = a.get("linked_profile") or ""
+            if not profile or not cfg.get_profile_path(profile):
+                continue
+            if (a.get("status") or "") in ("ok", "disabled"):
+                continue
+            sheet = (a.get("sheet_status") or "").strip().upper()
+            if sheet == "DISABLED":
+                continue
+            # Exact match: "NOT LOGGED IN" contains the same words.
+            if sheet == "LOGGED IN":
+                continue
+            rows.append(a)
+        return rows
+
+    def _on_relogin_all(self, confirm: bool = True):
+        """Re-login every account that needs it. Sequential on the worker -
+        Brave's profile lock allows nothing else - in batches with a pause."""
+        targets = self._needs_login()
+        if not targets:
+            self.set_auto_setup_status("Every account with a profile is already logged in")
+            return
+        if confirm and not messagebox.askyesno(
+                "Re-login accounts",
+                f"Log {len(targets)} account(s) back in?\n\n"
+                "Close every Brave window first. They run a few at a time "
+                "with a pause between, so this takes a while.",
+                parent=self):
+            return
+        self.set_relogin_enabled(False)
+        self.set_status(f"Logging {len(targets)} account(s) back in...")
+        self.set_auto_setup_status(f"Re-login: 0/{len(targets)}")
+        cb = getattr(self, "_on_relogin_all_cb", None)
+        if cb:
+            cb([a["username"] for a in targets])
 
     def _on_check_friendships(self):
         """Check and display friendship status between all profiles."""

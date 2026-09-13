@@ -120,6 +120,42 @@ try:
                         f"failed={res.get('failed')}")
     if attempts:
         failures.append("unregistered profile must not open a browser")  # noqa: F821
+    # An account already logged in is skipped, not driven again: opening a
+    # browser for it costs a minute and risks a fresh checkpoint on a session
+    # that was working. Both spellings count - the database's own 'ok' and
+    # the sheet's "LOGGED IN" cell - but never "NOT LOGGED IN", which
+    # contains the same words.
+    pauses.clear(); attempts.clear()
+    while True:
+        try:
+            m.result_queue.get_nowait()
+        except _queue.Empty:
+            break
+    db.link_account(_USERS[1], "VerifyProfile1")
+    db.set_account_status(_USERS[1], "ok")
+    conn = db._get_conn()
+    conn.execute("UPDATE accounts SET sheet_status='LOGGED IN' WHERE username=?", (_USERS[2],))
+    conn.execute("UPDATE accounts SET sheet_status='NOT LOGGED IN' WHERE username=?", (_USERS[3],))
+    conn.commit()
+    asyncio.run(m._do_login_accounts({"type": "login_accounts",
+                                      "usernames": [_USERS[1], _USERS[2], _USERS[3]]}))
+    tail2 = []
+    while True:
+        try:
+            tail2.append(m.result_queue.get_nowait())
+        except _queue.Empty:
+            break
+    res2 = tail2[-1] if tail2 else {}
+    skipped_users = [u for u, _ in res2.get("skipped", [])]
+    if _USERS[1] not in skipped_users:
+        failures.append(f"login batches: status 'ok' must be skipped, got {res2.get('skipped')}")  # noqa: F821
+    if _USERS[2] not in skipped_users:
+        failures.append(f"login batches: sheet 'LOGGED IN' must be skipped, got {res2.get('skipped')}")  # noqa: F821
+    if _USERS[3] in skipped_users:
+        failures.append("login batches: 'NOT LOGGED IN' must still be attempted")  # noqa: F821
+    if _USERS[3] not in [u for u, _ in res2.get("logged_in", [])]:
+        failures.append(f"login batches: the not-logged-in account was not attempted: {res2}")  # noqa: F821
+
 finally:
     sheet_status.SheetWriter = _real_writer
     cfg.get_profile_path = _real_path

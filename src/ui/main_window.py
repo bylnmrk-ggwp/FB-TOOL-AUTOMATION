@@ -535,6 +535,9 @@ class MainWindow(tk.Tk):
         self.profiles_tab.set_on_auto_setup_all(self.manager.auto_setup_all_profiles)
         self.profiles_tab.set_on_accept_all_pending(self.manager.accept_all_pending_requests)
         self.profiles_tab.set_on_check_login_status(self.manager.check_login_status)
+        # Re-login every account that needs it: the worker paces them in
+        # batches, since Brave's profile lock makes logins sequential anyway.
+        self.profiles_tab.set_on_relogin_all(self.manager.login_accounts)
 
     # ── Queue Polling ─────────────────────────────────────
 
