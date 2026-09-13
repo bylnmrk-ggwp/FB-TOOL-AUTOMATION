@@ -15,6 +15,7 @@ from playwright.async_api import async_playwright, Locator, Page, BrowserContext
 from src.storage import config_manager as cfg
 
 from src.core import browser_choice
+from src.core import human_input
 
 CHROME_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 BRAVE_USER_DATA = os.environ.get("LOCALAPPDATA", "") + r"\BraveSoftware\Brave-Browser\User Data"
@@ -346,6 +347,10 @@ WATCH_FLAGS = [f for f in MEMORY_FLAGS
 # reporting "Cannot contact reCAPTCHA". One human-driven browser makes the RAM
 # savings irrelevant, so keep only the flags that aid stability.
 LOGIN_FLAGS = [
+    # Chromium otherwise ships a "Blink automation" fingerprint that scores
+    # the session as a bot before a single key is pressed, which is what puts
+    # an "I am not a robot" box on the login form.
+    "--disable-blink-features=AutomationControlled",
     "--disable-gpu",
     "--disable-dev-shm-usage",
     "--no-first-run",
@@ -693,6 +698,16 @@ class FacebookAutomation:
                 await p.close()
             except Exception:
                 pass
+        try:
+            # Chromium sets navigator.webdriver=true whatever the flags say,
+            # and it is the first thing a bot check reads.
+            # false, not undefined: an ordinary Chrome reports false, and a
+            # missing property is its own anomaly.
+            await self.context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => false});")
+        except Exception:
+            pass
+
         self._tile = tile
         if tile:
             await self._tile_window(tile[0], tile[1])
@@ -2949,6 +2964,10 @@ class FacebookAutomation:
                 self.log(f"Retrying navigation... ({e})")
                 await asyncio.sleep(3)
 
+        # Land on the page like a reader, not like a script that starts
+        # typing the instant load fires.
+        await human_input.settle(self.page)
+
         # A signed-out-but-remembered profile lands on the account chooser,
         # which has no email field at all. Step through it first.
         await self._dismiss_account_chooser()
@@ -2985,12 +3004,8 @@ class FacebookAutomation:
             return False, "Email input not found"
 
         try:
-            await email_input.scroll_into_view_if_needed()
-            await asyncio.sleep(0.3)
-            await email_input.click(force=True)
-            await asyncio.sleep(0.2)
-            await email_input.fill(email)
-            await asyncio.sleep(random.uniform(0.5, 1.0))
+            await human_input.type_text(self.page, email_input, email)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
         except Exception as e:
             return False, f"Could not fill email: {e}"
 
@@ -3004,12 +3019,8 @@ class FacebookAutomation:
             )
             if not pass_input:
                 return False, "Password input not found"
-            await pass_input.scroll_into_view_if_needed()
-            await asyncio.sleep(0.3)
-            await pass_input.click(force=True)
-            await asyncio.sleep(0.2)
-            await pass_input.fill(password)
-            await asyncio.sleep(random.uniform(0.5, 1.0))
+            await human_input.type_text(self.page, pass_input, password)
+            await asyncio.sleep(random.uniform(0.4, 1.1))
         except Exception as e:
             return False, f"Could not fill password: {e}"
 
@@ -3033,9 +3044,13 @@ class FacebookAutomation:
                 self.log("Login button not found, trying Enter key...")
                 await self.page.keyboard.press("Enter")
             else:
-                await login_btn.scroll_into_view_if_needed()
-                await asyncio.sleep(0.3)
-                await login_btn.click(force=True)
+                # A pause before submitting, then a real pointer press: the
+                # button used to be hit at its exact centre with no travel.
+                await asyncio.sleep(random.uniform(0.3, 0.9))
+                if not await human_input.click(self.page, login_btn):
+                    await login_btn.scroll_into_view_if_needed()
+                    await asyncio.sleep(0.3)
+                    await login_btn.click(force=True)
         except Exception as e:
             return False, f"Could not click Login button: {e}"
 
