@@ -30,10 +30,12 @@ else:
 
 # The headless re-login path must opt out: it is the one with no human.
 src = inspect.getsource(dm.DriverManager._relogin_profile)
-if "wait_for_2fa=show" not in src:
+if "wait_for_2fa=wait_2fa" not in src or "wait_2fa = show and" not in src:
     failures.append(  # noqa: F821
-        "_relogin_profile must call login_with_credentials(..., wait_for_2fa=show): "
-        "its browser is headless, so a 2FA wait can only time out")
+        "_relogin_profile must derive wait_for_2fa from a visible window plus the "
+    "login_wait_2fa setting: "
+        "headless there is nobody to type a code, and in a bulk run "
+    "nobody has the phone either")
 
 # The assisted script still hands off to a person, so it must not opt out.
 assisted = (ROOT / "scripts" / "login_accounts.py").read_text(encoding="utf-8")  # noqa: F821

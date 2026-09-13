@@ -3169,8 +3169,11 @@ class DriverManager:
     SESSION_CONFIRM_S = 25
     # How many logins run together when the browser allows it (Chromium,
     # one directory per account). Brave ignores this and stays sequential.
-    # 25 tiles the screen 5x5; each window is small but all are visible.
-    LOGIN_PARALLEL = 25
+    # 25 tiled the screen 5x5, and 25 logins from one IP inside a minute is
+    # the pattern Facebook prices highest: the first run that way produced one
+    # login in 73 attempts. Ten at a time still fills the screen and spreads
+    # the run out. The grid follows this number - ten tiles 4x3.
+    LOGIN_PARALLEL = 10
     # Sequential (Brave) spacing only; a parallel run pauses once per wave.
     LOGIN_BATCH_SIZE = 5
     LOGIN_BATCH_PAUSE_MIN = 2.0
@@ -3233,10 +3236,15 @@ class DriverManager:
             if not await self._session_is_live(auto):
                 # Headless: no one can answer a 2FA prompt, so take the
                 # verdict at once instead of burning 120 s per account.
-                # A visible run has someone watching, so a 2FA prompt is
-                # worth waiting on; headless it only ever expires.
+                # Waiting 120 s for a 2FA code only pays off when someone
+                # will type one. In a bulk run nobody can - the codes are on
+                # phones this PC does not have - so the wait is opt-in with
+                # the login_wait_2fa setting and off by default. A captcha is
+                # different: handle_recaptcha still gives a visible window its
+                # full wait, because a person can answer that one.
+                wait_2fa = show and bool(cfg.get_setting("login_wait_2fa", False))
                 ok, msg = await auto.login_with_credentials(
-                    username, password, wait_for_2fa=show)
+                    username, password, wait_for_2fa=wait_2fa)
                 if ok and not await self._wait_session_live(auto):
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")
