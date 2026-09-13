@@ -3113,6 +3113,11 @@ class DriverManager:
     # A login run walks the roster in batches with a rest between them. Five
     # at a time is what the operator asked for; the pause is the anti-spam
     # lever, since the logins themselves cannot overlap (Brave's singleton).
+    # How long a fresh login gets to actually become a live session.
+    # Facebook still has redirects to finish and c_user/xs to set after the
+    # credentials go in; checking once, immediately, wrote off accounts that
+    # only needed another second or two.
+    SESSION_CONFIRM_S = 25
     LOGIN_BATCH_SIZE = 5
     LOGIN_BATCH_PAUSE_MIN = 2.0
 
@@ -3171,7 +3176,7 @@ class DriverManager:
                 # verdict at once instead of burning 120 s per account.
                 ok, msg = await auto.login_with_credentials(
                     username, password, wait_for_2fa=False)
-                if ok and not await self._session_is_live(auto):
+                if ok and not await self._wait_session_live(auto):
                     ok, msg = False, ("signed in but never reached the home "
                                       "page - Facebook is gating this account")
             if ok:
@@ -3193,6 +3198,22 @@ class DriverManager:
                 await auto.quit()
             except Exception:
                 pass
+
+    async def _wait_session_live(self, auto, seconds: float | None = None,
+                                 poll: float = 2.0) -> bool:
+        """True as soon as the session is live, or False when the window
+        closes. Polling rather than one instant look: a slow redirect is the
+        normal case, not a failed login."""
+        deadline = time.monotonic() + (self.SESSION_CONFIRM_S if seconds is None else seconds)
+        while True:
+            try:
+                if await self._session_is_live(auto):
+                    return True
+            except Exception:
+                pass
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0 if getattr(self, "_fast_tests", False) else poll)
 
     @staticmethod
     async def _session_is_live(auto) -> bool:
