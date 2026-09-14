@@ -3936,7 +3936,8 @@ class DriverManager:
             minutes = watch_items[0].get("watch_minutes")
             watchers = [i["profile_name"] for i in watch_items]
             self.log(f"▶ Staying on the post to watch: {len(watchers)} profile(s)"
-                     + (f" for {minutes:g} min" if minutes else " until you press Stop"))
+                     + (f" for {minutes:g} min" if minutes
+                        else " for the whole live, start to end"))
             await self._do_watch(url, minutes=minutes, profile_names=watchers)
 
     async def _cleanup_batch(self):
@@ -4102,6 +4103,29 @@ class DriverManager:
         return out;
     }"""
 
+    # Has the BROADCAST ended, as opposed to this page pausing? Facebook
+    # relabels a finished live and drops the LIVE badge, and the player stops
+    # being live-seekable. A watch with no time limit ends when this is true
+    # on every page - "stay until the live is over" is the default, not a
+    # number of minutes the operator has to guess in advance.
+    _WATCH_ENDED_JS = """() => {
+        const text = (document.body.innerText || '').toLowerCase();
+        const finished = ['this live video has ended', 'live video ended',
+                          'the live video has ended', 'video has ended',
+                          'this video is no longer available',
+                          'ended live video'];
+        if (finished.some(phrase => text.includes(phrase))) return true;
+        // A live post still showing its LIVE badge is still running.
+        const badge = [...document.querySelectorAll('span, div')]
+            .some(el => (el.innerText || '').trim().toUpperCase() === 'LIVE');
+        if (badge) return false;
+        const v = document.querySelector('video');
+        if (!v) return false;
+        // A finished broadcast becomes an ordinary VOD: it stops being
+        // seekable to a moving edge and reports a fixed duration.
+        return v.ended === true;
+    }"""
+
     # Recovery for a page that is "playing" but frozen: jump to the live edge
     # and re-issue play(). A stalled live viewer that is minutes behind the
     # broadcast is not watching the broadcast.
@@ -4192,6 +4216,24 @@ class DriverManager:
         self.log(f"  ▦ Tiled {placed}/{count} window(s) as {cols}x{rows} "
                  f"on {sw}x{sh} ({cell_w}x{cell_h} each)")
 
+    async def _live_is_over(self) -> bool:
+        """Whether the broadcast has finished on every page still open.
+
+        Every page has to agree. One page that lost its player, hit a gate or
+        navigated away is a broken viewer, not proof that the live is over -
+        and ending the whole watch on it would stop the rest mid-broadcast.
+        """
+        autos = list(self._watch_autos.values())
+        if not autos:
+            return False
+        verdicts = []
+        for auto in autos:
+            try:
+                verdicts.append(bool(await auto.page.evaluate(self._WATCH_ENDED_JS)))
+            except Exception:
+                return False      # could not ask: assume it is still running
+        return all(verdicts)
+
     async def _keep_watching(self, url: str, deadline: float | None = None):
         """Keep every watch page playing until the watch is stopped.
 
@@ -4212,7 +4254,9 @@ class DriverManager:
         navigation away).
 
         deadline is an event-loop timestamp; reaching it stops the whole watch
-        through the normal stop command. None runs until the Stop button.
+        through the normal stop command. None means watch the whole broadcast:
+        the keeper then ends the watch when the live itself is over, which is
+        the default - an operator cannot know in advance how long a live runs.
         """
         loop = asyncio.get_running_loop()
         last_t: dict[str, float] = {}
@@ -4229,6 +4273,12 @@ class DriverManager:
                     return
                 if deadline is not None and loop.time() >= deadline:
                     self.log("👁 Watch: time limit reached - stopping.")
+                    self.cmd_queue.put({"type": "stop_watch"})
+                    return
+                if deadline is None and await self._live_is_over():
+                    # No time limit means "watch the whole live", so the end of
+                    # the broadcast is what ends the watch.
+                    self.log("👁 Watch: the live has ended - stopping.")
                     self.cmd_queue.put({"type": "stop_watch"})
                     return
                 rounds += 1
@@ -4361,7 +4411,7 @@ class DriverManager:
             return
 
         how_long = (f"for {minutes:.0f} min" if minutes
-                    else "until you press Stop")
+                    else "until the live ends (or you press Stop)")
         self.log(f"👁 Watch: opening {len(profiles)} active profile(s) on {url} "
                  f"({how_long})")
 

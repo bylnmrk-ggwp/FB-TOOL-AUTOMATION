@@ -181,7 +181,7 @@ class QueueTab(ttk.Frame):
         self._feat_watch_minutes_var = tk.StringVar(value="")
         ttk.Entry(feat_row, textvariable=self._feat_watch_minutes_var,
                   width=5).pack(side="left")
-        ttk.Label(feat_row, text="(blank = until Stop)",
+        ttk.Label(feat_row, text="(blank = whole live, start to end)",
                   foreground=theme.get()["muted"]).pack(side="left", padx=(4, 0))
 
         ttk.Label(features_form, text="Comment (name - text per profile):").grid(row=2, column=0, padx=(0, 6), pady=(6, 0), sticky="nw")
