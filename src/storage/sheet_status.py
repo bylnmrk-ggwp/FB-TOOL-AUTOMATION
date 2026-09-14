@@ -148,6 +148,26 @@ def write_status(tok: str, sheet_id: str, gid: int, tab: str,
         "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}])
 
 
+# The Google Sheet is off. The roster, the credentials and every verdict live
+# in the local database, and the accounts themselves live in the browser
+# profiles on this PC - neither needs a network round trip to Google, and a
+# PC without DNS was spending one per account to be told it has no network.
+# Nothing here is deleted: flip this to True (or set the "sheet_sync"
+# setting) and the mirror works exactly as before.
+SHEET_SYNC = False
+
+
+def sheet_enabled() -> bool:
+    """Whether the roster sheet is mirrored at all."""
+    if SHEET_SYNC:
+        return True
+    try:
+        from src.storage import config_manager as cfg
+        return bool(cfg.get_setting("sheet_sync", False))
+    except Exception:
+        return False
+
+
 def push_account_status(username: str,
                         sheet_id: str = api.DEFAULT_SHEET_ID,
                         tab: str = api.DEFAULT_TAB,
@@ -158,11 +178,13 @@ def push_account_status(username: str,
     whatever status_for() makes of it, so a caller cannot put a verdict on the
     sheet that the database does not already hold.
 
+    Does nothing while the sheet is off, without touching the network.
+
     Returns the status text written, or '' when nothing was written - no key
     file, no matching sheet row, or an unknown account. Blocking network I/O:
     call it off the event loop.
     """
-    if not username:
+    if not username or not sheet_enabled():
         return ""
     account = next((a for a in db.list_accounts()
                     if (a.get("username") or "").strip().lower()
@@ -209,6 +231,9 @@ class SheetWriter:
         self._key_path = key_path
         self._sheet_id = sheet_id
         self._tab = tab
+        if not sheet_enabled():
+            self.error = "sheet sync is off"
+            return
         try:
             if not Path(key_path).exists():
                 raise FileNotFoundError(f"no service-account key at {key_path}")

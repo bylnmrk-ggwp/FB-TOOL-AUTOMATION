@@ -555,6 +555,11 @@ class MainWindow(tk.Tk):
         """
         if self._sheet_watcher is not None:
             return
+        from src.storage.sheet_status import sheet_enabled
+        if not sheet_enabled():
+            self.log_tab.write("Roster: local database and browser profiles "
+                               "(Google Sheet sync is off)")
+            return
         from src.storage.roster_sheet import SheetWatcher
         self._sheet_watcher = SheetWatcher()
         self._sheet_watcher.start()

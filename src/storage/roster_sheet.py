@@ -197,6 +197,11 @@ class SheetWatcher(threading.Thread):
         return min(self.MAX_BACKOFF, self.interval * (2 ** min(self._failures, 8)))
 
     def run(self):
+        from src.storage.sheet_status import sheet_enabled
+        if not sheet_enabled():
+            # Nothing to watch: the roster is the local database, and the
+            # accounts are the browser profiles on this PC.
+            return
         while not self._stop.is_set():
             self._poll_once()
             self._stop.wait(self._retry_wait())
