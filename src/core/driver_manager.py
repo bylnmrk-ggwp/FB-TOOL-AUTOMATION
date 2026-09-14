@@ -4189,6 +4189,37 @@ class DriverManager:
                 return got
         return None
 
+    def _pages_that_fit(self) -> int | None:
+        """How many watch pages this machine's free RAM can hold, or None when
+        it cannot be measured.
+
+        Opening past that point does not get more viewers - it gets a swapping
+        machine where nothing plays and the desktop stops responding.
+        """
+        try:
+            import ctypes
+
+            class _Status(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            status = _Status()
+            status.dwLength = ctypes.sizeof(_Status)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return None
+            free_mb = int(status.ullAvailPhys / (1024 * 1024))
+        except Exception:
+            return None
+        usable = max(0, free_mb - self.WATCH_RESERVE_MB)
+        return max(1, usable // max(1, self.WATCH_PAGE_MB))
+
     @staticmethod
     def _desktop_size() -> tuple[int, int] | None:
         """The desktop in the units a window is positioned in.
@@ -4486,19 +4517,25 @@ class DriverManager:
             self.log("Watch: URL must start with http:// or https://")
             return
 
+        # Every profile asked for takes part. A stored status is a verdict
+        # from an earlier run, not the state of the session now - the same
+        # rule the queue follows - so a profile the roster calls signed out is
+        # still opened and judged by whether its page actually plays.
         ok = db.logged_in_profiles()
-        asked = list(profile_names or cfg.list_profiles_for_browser())
-        profiles = [p for p in asked if p in ok]
-        left_out = [p for p in asked if p not in ok]
-        if left_out:
-            # A dead session cannot watch anything, but silently dropping it
-            # made the watcher count unexplainable next to the run's own.
-            self.log(f"Watch: {len(left_out)} profile(s) skipped, not logged in: "
-                     f"{', '.join(sorted(left_out)[:5])}"
-                     + (" ..." if len(left_out) > 5 else ""))
+        profiles = list(profile_names or cfg.list_profiles_for_browser())
+        unproven = [p for p in profiles if p not in ok]
+        if unproven:
+            self.log(f"Watch: {len(unproven)} profile(s) were not logged in at "
+                     f"their last check - opening them anyway")
         if not profiles:
-            self.log("Watch: no active (logged-in) profiles to open.")
+            self.log("Watch: no profiles to open.")
             return
+
+        room = self._pages_that_fit()
+        if room is not None and len(profiles) > room:
+            self.log(f"Watch: RAM fits about {room} page(s); opening the first "
+                     f"{room} of {len(profiles)} so the machine keeps up")
+            profiles = profiles[:room]
 
         how_long = (f"for {minutes:.0f} min" if minutes
                     else "until the live ends (or you press Stop)")
@@ -4623,6 +4660,16 @@ class DriverManager:
     # How many watch pages load at the same time. Past this the machine
     # starves its own players: the pages open but the video never starts.
     WATCH_OPEN_AT_ONCE = 8
+
+    # What one watching page costs in RAM, measured on this fleet: a Chromium
+    # renderer decoding a live, with images off and a 96 MB heap cap. The
+    # watch refuses to open more pages than the machine can hold, because a
+    # machine in swap plays no video at all - 46 visible pages took 14 minutes
+    # to open and 22 of them ever played.
+    WATCH_PAGE_MB = 180
+    # Never eat the last of the machine: leave this much for Windows and the
+    # app itself.
+    WATCH_RESERVE_MB = 2048
 
     # The visible watch lays its windows out ten to a row, as many rows as it
     # takes. Chromium refuses a window under about 515 of its own units wide

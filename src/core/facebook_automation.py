@@ -333,7 +333,25 @@ MEMORY_FLAGS = [
 # and paused still false - i.e. they LOOK healthy and watch nothing. Dropping
 # the two caps gives each context its own renderer and its own heap.
 WATCH_FLAGS = [f for f in MEMORY_FLAGS
-               if not f.startswith(("--renderer-process-limit=", "--js-flags="))]
+               if not f.startswith(("--renderer-process-limit=", "--js-flags="))] + [
+    # What a watch page actually needs is the video. Everything else on a
+    # Facebook page is weight: the feed's images, the web fonts, and a JS heap
+    # sized for an app nobody is driving. These are browser-level switches,
+    # not page.route() handlers - an installed route would send every media
+    # segment of every stream through this Python process, which is the one
+    # thing a watch cannot afford.
+    "--blink-settings=imagesEnabled=false",
+    "--js-flags=--max-old-space-size=96",
+    "--disable-remote-fonts",
+    "--disable-features=Translate,ChromeWhatsNewUI,InterestFeedContentSuggestions,"
+    "MediaRouter,OptimizationHints,AutofillServerCommunication",
+    "--disable-breakpad",
+    "--disable-hang-monitor",
+    "--disable-prompt-on-repost",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--mute-audio",
+]
 
 # Lighter memory flags for dual-browser mode (less aggressive)
 # Interactive login needs a permissive browser, not a memory-tuned one.
