@@ -27,11 +27,7 @@ class QueueTab(ttk.Frame):
         # Track login status per profile: profile_name → True (logged in) / False (not) / None (unknown)
         self._profile_status: dict[str, bool | None] = {}
         self._rate_limited_profiles: set[str] = set()
-        # No seeding from cached cookies: a cached session says only that
-        # cookies exist, not that the account can use its home page (a
-        # checkpointed profile keeps c_user/xs). _dot_for already greens
-        # every profile in the recorded logged-in set, which is the same
-        # source as the count and the filter.
+        # Kept for the live run: a queue run marks each profile as it goes.
 
         self._build_ui()
 
@@ -714,7 +710,7 @@ class QueueTab(ttk.Frame):
         text = self._text_content_widget.get("1.0", "end-1c").strip()
         if not text:
             return
-        profiles = self._displayed_profiles()
+        profiles = cfg.list_profiles_for_browser()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -749,7 +745,7 @@ class QueueTab(ttk.Frame):
             messagebox.showerror("Invalid URL", "Post URL must start with http:// or https://")
             return
         
-        profiles = self._displayed_profiles()
+        profiles = cfg.list_profiles_for_browser()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -848,7 +844,7 @@ class QueueTab(ttk.Frame):
             messagebox.showerror("Invalid URL", "Post URL must start with http:// or https://")
             return
 
-        profiles = self._displayed_profiles()
+        profiles = cfg.list_profiles_for_browser()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
@@ -943,7 +939,7 @@ class QueueTab(ttk.Frame):
                                    "Enter the comment text (one comment per line).")
             return
 
-        profiles = self._displayed_profiles()
+        profiles = cfg.list_profiles_for_browser()
         if not profiles:
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
