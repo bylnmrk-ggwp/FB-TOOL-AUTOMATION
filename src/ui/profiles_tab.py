@@ -314,12 +314,26 @@ class ProfilesTab(ttk.Frame):
             self._accounts = []
             total = linked = 0
             self._roster_status_var.set(f"Could not read accounts: {e}")
-        self._roster_count_var.set(f"{total} account(s), {linked} linked")
+        from src.core import browser_choice
+        mine = set(cfg.list_profiles_for_browser())
+        here = sum(1 for a in self._accounts
+                   if (a.get("linked_profile") or "") in mine)
+        self._roster_count_var.set(
+            f"{total} account(s), {here} on {browser_choice.current_browser().title()}"
+            f" ({linked} linked in total)")
         self._render_roster()
 
     def _render_roster(self):
         """Draw the roster, filtered by the search box, into the listbox."""
         accounts = getattr(self, "_accounts", [])
+        # Only what this browser can connect to: an account linked to the
+        # other browser's profile cannot be opened here, so offering it in the
+        # search is offering something that will not run. An account with no
+        # profile at all stays - that is the one you link next.
+        mine = set(cfg.list_profiles_for_browser())
+        accounts = [a for a in accounts
+                    if not (a.get("linked_profile") or "")
+                    or (a.get("linked_profile") in mine)]
         if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
             accounts = [a for a in accounts if a.get("status") == "ok"]
         needle = self._roster_search_var.get().strip().lower()
@@ -377,11 +391,11 @@ class ProfilesTab(ttk.Frame):
         Mirrors _show_brave_picker, which instead chooses from the Brave
         installation's own profile directories.
         """
-        names = cfg.list_profiles()
+        names = cfg.list_profiles_for_browser()
         if not names:
             messagebox.showinfo(
                 "No Profiles",
-                "No Brave profiles are saved yet. Add one first.",
+                f"No {self._browser_name()} profiles are saved yet. Add one first.",
                 parent=self)
             return None
 
