@@ -39,6 +39,16 @@ class DriverState(Enum):
     ERROR = "error"
 
 
+def sheet_reason(error: Exception) -> str:
+    """One short line for a failed sheet write.
+
+    The roster watcher already reduces the same urllib3 stack to "offline";
+    this is its counterpart on the write side, so both speak the same way.
+    """
+    from src.storage.roster_sheet import _reason
+    return _reason(error)
+
+
 def login_reason(message: str | None) -> str | None:
     """Facebook's own words for a failed login, as a short sheet-friendly
     reason - or None when the message says nothing specific.
@@ -2031,7 +2041,8 @@ class DriverManager:
                    for a in db.list_accounts()}
         writer = await asyncio.to_thread(sheet_status.SheetWriter)
         if not writer.on:
-            self.log(f"  ⚠️  live sheet updates off: {writer.error}")
+            self.log(f"  ⚠️  live sheet updates off: "
+                     f"{sheet_reason(Exception(writer.error))}")
         # A batch is the burst that runs before a pause. Sequentially that is
         # LOGIN_BATCH_SIZE logins; in a parallel wave the wave itself is the
         # burst, so the default batch is the wave width.
@@ -4640,8 +4651,18 @@ class DriverManager:
             text = await asyncio.to_thread(
                 sheet_status.push_account_status, username)
         except Exception as e:
-            self.log(f"  ⚠️  sheet not updated for '{profile_name}': {e}")
+            # Offline is one fact about the PC, not one fact per account: a
+            # DNS failure printed urllib3's three nested exceptions for every
+            # profile in the run, hundreds of identical lines that said only
+            # "no network". Say it once per run, short, and carry on - the
+            # database already holds the verdict and the sheet is a mirror.
+            reason = sheet_reason(e)
+            if reason != getattr(self, "_sheet_push_error", None):
+                self._sheet_push_error = reason
+                self.log(f"  ⚠️  sheet not updated ({reason}) - "
+                         f"the verdicts are recorded locally")
             return
+        self._sheet_push_error = None
         if text:
             self.log(f"  ✓ sheet updated: {username} → {text}")
 
