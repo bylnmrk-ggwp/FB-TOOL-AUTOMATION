@@ -833,6 +833,21 @@ class QueueTab(ttk.Frame):
                 "post_url": url,
                 "comment_text": comment_text,
             })
+
+        # Profiles left over when there are fewer comment lines than accounts
+        # used to get nothing at all: 49 lines against 53 profiles queued 49
+        # items and four accounts sat out the post without saying so. The
+        # lines rotate instead, so every profile comments and no two adjacent
+        # accounts share a line.
+        if unassigned:
+            texts = [i["comment_text"] for i in items] or lines
+            for index, profile in enumerate(unassigned):
+                items.append({
+                    "action_type": "comment",
+                    "profile_name": profile,
+                    "post_url": url,
+                    "comment_text": texts[index % len(texts)],
+                })
         return items
 
     def _on_add_features(self):
