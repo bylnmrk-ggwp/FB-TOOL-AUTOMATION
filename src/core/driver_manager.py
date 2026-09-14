@@ -3419,11 +3419,19 @@ class DriverManager:
              delay between actions (deliberate — protects the accounts)
           5. Teardown contexts, report, cleanup
         """
-        total = len(items)
         self._batch_running = True
-        self.log(f"Starting batch: {total} item(s)")
 
         from src.storage import state_cache
+
+        # Watch is not an action performed once and closed - it is where the
+        # profiles stay when the run is over, so it is pulled out before the
+        # count and started after the batch instead of processed as an item.
+        watch_items = [i for i in items if i.get("action_type") == "watch"]
+        items = [i for i in items if i.get("action_type") != "watch"]
+        total = len(items)
+        self.log(f"Starting batch: {total} item(s)"
+                 + (f", then {len(watch_items)} profile(s) stay to watch"
+                    if watch_items else ""))
 
         # Get unique profiles
         unique_profiles = list({item["profile_name"] for item in items})
@@ -3919,6 +3927,17 @@ class DriverManager:
                     restored += 1
             self.log(f"↻ Auto re-login: {restored}/{len(names)} restored")
         self.log(f"Batch complete: {success_count}/{total} successful")
+
+        if watch_items:
+            # The post is already open in every context, but those close with
+            # the batch; _do_watch reopens them with media interception off,
+            # which is what keeps a live video actually playing.
+            url = watch_items[0].get("post_url") or ""
+            minutes = watch_items[0].get("watch_minutes")
+            watchers = [i["profile_name"] for i in watch_items]
+            self.log(f"▶ Staying on the post to watch: {len(watchers)} profile(s)"
+                     + (f" for {minutes:g} min" if minutes else " until you press Stop"))
+            await self._do_watch(url, minutes=minutes, profile_names=watchers)
 
     async def _cleanup_batch(self):
         """Close all profile automations and the shared browser."""

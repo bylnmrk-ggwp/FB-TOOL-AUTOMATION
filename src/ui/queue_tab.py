@@ -160,6 +160,9 @@ class QueueTab(ttk.Frame):
         self._feat_share_var = tk.BooleanVar(value=False)
         self._feat_story_var = tk.BooleanVar(value=False)
         self._feat_react_var = tk.BooleanVar(value=False)
+        # Watch runs after the others and does not close: the profiles stay on
+        # the post playing the live, which is what counts as a viewer.
+        self._feat_watch_var = tk.BooleanVar(value=False)
 
         feat_row = ttk.Frame(features_form)
         feat_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
@@ -171,6 +174,15 @@ class QueueTab(ttk.Frame):
                         command=self._update_features_btn).pack(side="left", padx=(0, 10))
         ttk.Checkbutton(feat_row, text="React", variable=self._feat_react_var,
                         command=self._update_features_btn).pack(side="left", padx=(0, 10))
+        ttk.Checkbutton(feat_row, text="Watch Live (stay on post)",
+                        variable=self._feat_watch_var,
+                        command=self._update_features_btn).pack(side="left", padx=(0, 10))
+        ttk.Label(feat_row, text="mins:").pack(side="left", padx=(6, 2))
+        self._feat_watch_minutes_var = tk.StringVar(value="")
+        ttk.Entry(feat_row, textvariable=self._feat_watch_minutes_var,
+                  width=5).pack(side="left")
+        ttk.Label(feat_row, text="(blank = until Stop)",
+                  foreground=theme.get()["muted"]).pack(side="left", padx=(4, 0))
 
         ttk.Label(features_form, text="Comment (name - text per profile):").grid(row=2, column=0, padx=(0, 6), pady=(6, 0), sticky="nw")
         self._features_comment_text = tk.Text(features_form, height=2, width=30, wrap="word")
@@ -671,6 +683,7 @@ class QueueTab(ttk.Frame):
             self._feat_share_var.get(),
             self._feat_story_var.get(),
             self._feat_react_var.get(),
+            self._feat_watch_var.get(),
         ])
         ready = bool(url and has_feature)
         if self._feat_comment_var.get():
@@ -897,6 +910,24 @@ class QueueTab(ttk.Frame):
                     "reaction": reaction,
                 })
             feature_names.append(f"React ({len(profiles)})")
+
+        if self._feat_watch_var.get():
+            raw_minutes = self._feat_watch_minutes_var.get().strip()
+            try:
+                minutes = float(raw_minutes) if raw_minutes else None
+            except ValueError:
+                messagebox.showerror("Watch minutes",
+                                     "Minutes must be a number, or blank to watch "
+                                     "until you press Stop.")
+                return
+            for profile_name in profiles:
+                self._items.append({
+                    "action_type": "watch",
+                    "profile_name": profile_name,
+                    "post_url": url,
+                    "watch_minutes": minutes,
+                })
+            feature_names.append(f"Watch ({len(profiles)})")
 
         if self._feat_comment_var.get():
             comment_items = self._build_comment_items(comment, url, profiles)
