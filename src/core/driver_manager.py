@@ -117,6 +117,9 @@ class DriverManager:
         self._watch_pw = None
         self._watch_browser = None
         self._watch_autos: dict = {}
+        # Which live each watching page is on, so one broadcast ending never
+        # closes the pages watching another.
+        self._watch_urls: dict = {}
         self._watch_keeper = None
 
         # Concurrent batch mode — each profile gets its own browser window
@@ -4234,23 +4237,30 @@ class DriverManager:
         self.log(f"  ▦ Tiled {placed}/{count} window(s) as {cols}x{rows} "
                  f"on {sw}x{sh} ({cell_w}x{cell_h} each)")
 
-    async def _live_is_over(self) -> bool:
-        """Whether the broadcast has finished on every page still open.
+    async def _finished_lives(self) -> set:
+        """The URLs whose broadcast has ended, judged per live.
 
-        Every page has to agree. One page that lost its player, hit a gate or
-        navigated away is a broken viewer, not proof that the live is over -
-        and ending the whole watch on it would stop the rest mid-broadcast.
+        Every page on a live has to agree before that live counts as over.
+        One page that lost its player, hit a gate or cannot be asked is a
+        broken viewer, not proof the broadcast ended - and a second live
+        running in the same browser must not be ended by the first one
+        finishing, which is why the verdict is per URL and not per fleet.
         """
-        autos = list(self._watch_autos.values())
+        autos = getattr(self, "_watch_autos", None) or {}
+        urls = getattr(self, "_watch_urls", None) or {}
         if not autos:
-            return False
-        verdicts = []
-        for auto in autos:
+            return set()
+        per_live: dict = {}
+        for name, auto in list(autos.items()):
+            url = urls.get(name)
+            if not url:
+                continue
             try:
-                verdicts.append(bool(await auto.page.evaluate(self._WATCH_ENDED_JS)))
+                ended = bool(await auto.page.evaluate(self._WATCH_ENDED_JS))
             except Exception:
-                return False      # could not ask: assume it is still running
-        return all(verdicts)
+                ended = False     # could not ask: assume it is still running
+            per_live.setdefault(url, []).append(ended)
+        return {url for url, verdicts in per_live.items() if verdicts and all(verdicts)}
 
     async def _keep_watching(self, url: str, deadline: float | None = None):
         """Keep every watch page playing until the watch is stopped.
@@ -4293,12 +4303,19 @@ class DriverManager:
                     self.log("👁 Watch: time limit reached - stopping.")
                     self.cmd_queue.put({"type": "stop_watch"})
                     return
-                if deadline is None and await self._live_is_over():
-                    # No time limit means "watch the whole live", so the end of
-                    # the broadcast is what ends the watch.
-                    self.log("👁 Watch: the live has ended - stopping.")
-                    self.cmd_queue.put({"type": "stop_watch"})
-                    return
+                if deadline is None:
+                    finished = await self._finished_lives()
+                    if finished:
+                        done = [n for n, u in self._watch_urls.items()
+                                if u in finished]
+                        self.log(f"👁 Watch: a live has ended - closing "
+                                 f"{len(done)} page(s) on it.")
+                        await self._close_watch_pages(done)
+                        if not self._watch_autos:
+                            self.log("👁 Watch: no live left to watch - "
+                                     "stopping.")
+                            self.cmd_queue.put({"type": "stop_watch"})
+                            return
                 rounds += 1
                 resumed, reloaded, kicked, playing = [], [], [], 0
                 for name, auto in list(self._watch_autos.items()):
@@ -4310,7 +4327,8 @@ class DriverManager:
                         last_t.pop(name, None)
                         stalls.pop(name, None)
                         try:
-                            await auto.page.goto(url, wait_until="domcontentloaded",
+                            await auto.page.goto(self._watch_urls.get(name, url),
+                                                 wait_until="domcontentloaded",
                                                  timeout=45000)
                             reloaded.append(name)
                         except Exception:
@@ -4341,7 +4359,8 @@ class DriverManager:
                         # A kick did not take: the renderer is wedged, so
                         # rebuild the page rather than keep a dead viewer.
                         try:
-                            await auto.page.goto(url, wait_until="domcontentloaded",
+                            await auto.page.goto(self._watch_urls.get(name, url),
+                                                 wait_until="domcontentloaded",
                                                  timeout=45000)
                             reloaded.append(name)
                             stalls[name] = 0
@@ -4407,7 +4426,10 @@ class DriverManager:
                                                    LOGIN_GATE_JS)
         from src.storage import state_cache
 
-        await self._stop_watch()        # replace any previous watch
+        # Only the profiles about to be reused are closed. Closing the whole
+        # watch here is what took an unrelated live down with it: one account
+        # watches one live at a time, but the other accounts' windows are
+        # nobody else's business.
 
         url = (url or "").strip()
         if not url.startswith(("http://", "https://")):
@@ -4464,16 +4486,22 @@ class DriverManager:
         mode, launch_headless, launch_args = \
             self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
                                       flags=WATCH_FLAGS)
-        self._watch_pw = await async_playwright().start()
-        self._watch_browser = await self._launch_browser(
-            self._watch_pw, launch_headless, launch_args)
-        self._watch_autos = {}
+        await self._close_watch_pages(active)
 
-        # Every page opens at once. A live has one edge and it moves: opening
-        # in waves of five meant the last profiles joined minutes of stream
-        # later than the first, which is exactly the part of a broadcast the
-        # operator wanted them on.
-        sem = asyncio.Semaphore(max(1, len(active)))
+        if not getattr(self, "_watch_browser", None):
+            self._watch_pw = await async_playwright().start()
+            self._watch_browser = await self._launch_browser(
+                self._watch_pw, launch_headless, launch_args)
+        self._watch_autos = getattr(self, "_watch_autos", {}) or {}
+        self._watch_urls = getattr(self, "_watch_urls", {}) or {}
+
+        # Opening all of them at once does not work: 46 pages loading and 46
+        # decoders starting together took 198 s to open and left 2 playing,
+        # with the keeper reloading twenty of them afterwards. Opening a few
+        # at a time is fast and keeps the players alive, and joining late
+        # costs nothing because every page is pulled to the live edge below -
+        # the edge is where the broadcast is now, whatever time a page opened.
+        sem = asyncio.Semaphore(min(max(1, len(active)), self.WATCH_OPEN_AT_ONCE))
 
         verdicts: dict[str, str] = {}
 
@@ -4486,6 +4514,7 @@ class DriverManager:
                                              block_resources=False,
                                              no_viewport=(mode == "visible"))
                 self._watch_autos[profile_name] = auto
+                self._watch_urls[profile_name] = url
                 try:
                     await auto.page.goto(url, wait_until="domcontentloaded",
                                          timeout=45000)
@@ -4497,6 +4526,20 @@ class DriverManager:
                     auto, profile_name)
 
         await asyncio.gather(*(_open(p) for p in active), return_exceptions=True)
+
+        # Everyone to the same moment of the broadcast. Pages opened in
+        # groups, so the first ones have been playing while the last were
+        # still loading; the live edge is where the stream is NOW, so one
+        # pass over every page puts the whole fleet on the same content.
+        aligned = 0
+        for auto in list(self._watch_autos.values()):
+            try:
+                if await auto.page.evaluate(self._WATCH_KICK_JS):
+                    aligned += 1
+            except Exception:
+                pass
+        if aligned:
+            self.log(f"  ⇥ {aligned} page(s) moved to the live edge")
 
         watching = [n for n, v in verdicts.items() if v == "playing"]
         broken = {n: v for n, v in verdicts.items() if v != "playing"}
@@ -4520,6 +4563,10 @@ class DriverManager:
         self.log(f"👁 Watch started: {len(watching)}/{len(self._watch_autos)} "
                  f"page(s) playing at open [{mode}, {where}], {how_long}. "
                  f"Live count follows every 1.5-3 min.")
+
+    # How many watch pages load at the same time. Past this the machine
+    # starves its own players: the pages open but the video never starts.
+    WATCH_OPEN_AT_ONCE = 8
 
     # How long a freshly opened page gets to mount a player, and how long its
     # currentTime is sampled to prove the player is really running.
@@ -4820,6 +4867,31 @@ class DriverManager:
         self.log(f"  👁 watching '{profile_name}'")
         return "playing"
 
+    async def _close_watch_pages(self, names) -> int:
+        """Close the watch pages of these profiles only.
+
+        A profile has one session, so it can be on one live at a time and a
+        new watch has to take its page back. Every other page stays open -
+        that is the difference between starting a second live and ending the
+        first.
+        """
+        autos = getattr(self, "_watch_autos", None) or {}
+        urls = getattr(self, "_watch_urls", None) or {}
+        closed = 0
+        for name in list(names):
+            auto = autos.pop(name, None)
+            urls.pop(name, None)
+            if auto is None:
+                continue
+            try:
+                await auto.close_context()
+            except Exception:
+                pass
+            closed += 1
+        if closed:
+            self.log(f"👁 Watch: {closed} page(s) moved to the new live")
+        return closed
+
     async def _stop_watch(self):
         """Close every live-watch window and its browser, if any."""
         keeper = getattr(self, "_watch_keeper", None)
@@ -4839,6 +4911,7 @@ class DriverManager:
             except Exception:
                 pass
         self._watch_autos = {}
+        self._watch_urls = {}
         if getattr(self, "_watch_browser", None):
             try:
                 await self._watch_browser.close()

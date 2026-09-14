@@ -64,8 +64,14 @@ for name in ("_do_quit",):
     if "_stop_watch" not in inspect.getsource(getattr(DriverManager, name)):
         failures.append(f"watch survives cleanup: {name} leaves the watch running, "  # noqa: F821
                         f"so the browser outlives the app")
-if "_stop_watch" not in inspect.getsource(DriverManager._do_watch):
-    failures.append("watch survives cleanup: a new watch does not replace the old "  # noqa: F821
-                    "one, so pages would pile up")
+# A new watch takes back only the pages of the profiles it is about to use.
+# Closing the whole watch here is what took an unrelated live down with it.
+watch_src = inspect.getsource(DriverManager._do_watch)
+if "_close_watch_pages" not in watch_src:
+    failures.append("watch survives cleanup: a new watch does not take back the "  # noqa: F821
+                    "pages it is about to reuse, so a profile would end up with two")
+if "await self._stop_watch()" in watch_src:
+    failures.append("watch survives cleanup: starting a watch still closes every "  # noqa: F821
+                    "other live in the browser")
 
 print("FAILED" if [f for f in failures if "watch survives cleanup" in f] else "ok")  # noqa: F821

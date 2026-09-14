@@ -79,10 +79,20 @@ if "if watch_items and not items:" not in batch_src:
     failures.append("direct watch: the shortcut is not conditional on the queue "  # noqa: F821
                     "holding only watch items")
 
-# Pages open together, not in waves of five.
+# Pages open several at a time - not one wave of five, and not all at once
+# either: 46 simultaneous loads took 198s and left 2 of them playing. What
+# makes a late-opened page harmless is the pull to the live edge afterwards.
 watch_src = inspect.getsource(DriverManager._do_watch)
 if "Semaphore(5)" in watch_src:
-    failures.append("direct watch: the watch still opens five pages at a time, so "  # noqa: F821
-                    "later profiles join the live late")
+    failures.append("direct watch: the watch opens a fixed five at a time again")  # noqa: F821
+if "WATCH_OPEN_AT_ONCE" not in watch_src:
+    failures.append("direct watch: the number of simultaneous opens is not bounded, "  # noqa: F821
+                    "which starves the players at fleet size")
+if not (2 <= DriverManager.WATCH_OPEN_AT_ONCE <= 16):
+    failures.append(f"direct watch: WATCH_OPEN_AT_ONCE is {DriverManager.WATCH_OPEN_AT_ONCE}, "  # noqa: F821
+                    f"outside what one machine sustains")
+if "_WATCH_KICK_JS" not in watch_src:
+    failures.append("direct watch: the pages are never pulled to the live edge, so "  # noqa: F821
+                    "the ones opened last watch older content than the rest")
 
 print("FAILED" if [f for f in failures if "direct watch" in f] else "ok")  # noqa: F821
