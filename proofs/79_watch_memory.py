@@ -22,21 +22,25 @@ from src.core.facebook_automation import MEMORY_FLAGS, WATCH_FLAGS  # noqa: E402
 
 joined = " ".join(WATCH_FLAGS)
 for flag, why in (
-        ("imagesEnabled=false", "a watch page still loads the feed's images"),
-        ("--js-flags=--max-old-space-size=", "the JS heap is uncapped"),
         ("--disable-remote-fonts", "web fonts are still downloaded"),
-        ("--mute-audio", "every page decodes audio nobody hears")):
+        ("--mute-audio", "every page decodes audio nobody hears"),
+        ("--disable-breakpad", "the crash reporter still runs per page")):
     if flag not in joined:
         failures.append(f"watch memory: {why}")  # noqa: F821
 
-# The two flags that froze players must stay out: one renderer for every
-# page, and a heap cap shared between them, is what stalled 3-4 of 9.
+# Two savings are forbidden, both measured on a live broadcast: a JS heap cap
+# freezes players at readyState 2 while paused stays false, and turning
+# images off takes Facebook's own player chrome with it.
+for flag, why in (
+        ("--js-flags", "a JS heap cap starves the decoder and freezes players"),
+        ("imagesEnabled=false", "turning images off breaks Facebook's player")):
+    if flag in joined:
+        failures.append(f"watch memory: {why}")  # noqa: F821
+
+# One renderer for every page stalled 3-4 of 9 the same way.
 if "--renderer-process-limit=1" in WATCH_FLAGS:
     failures.append("watch memory: every watch page is back in one renderer, which "  # noqa: F821
                     "froze players mid-stream")
-if any(f.startswith("--js-flags") for f in MEMORY_FLAGS) and \
-        len([f for f in WATCH_FLAGS if f.startswith("--js-flags")]) != 1:
-    failures.append("watch memory: the watch has no single clear JS heap cap")  # noqa: F821
 
 # No page.route() on a watch page: that is the traffic this cannot afford.
 from src.core.facebook_automation import FacebookAutomation  # noqa: E402

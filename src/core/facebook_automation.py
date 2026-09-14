@@ -340,8 +340,12 @@ WATCH_FLAGS = [f for f in MEMORY_FLAGS
     # not page.route() handlers - an installed route would send every media
     # segment of every stream through this Python process, which is the one
     # thing a watch cannot afford.
-    "--blink-settings=imagesEnabled=false",
-    "--js-flags=--max-old-space-size=96",
+    # No JS heap cap and no imagesEnabled=false here. The heap cap is the
+    # documented cause of pages that freeze at readyState 2 while still
+    # reporting paused=false, and turning images off takes Facebook's player
+    # chrome with them: with both on, 7 of 46 pages played at open where 25
+    # had played without them. Memory has to come from what a page is NOT
+    # asked to do, never from starving the decoder.
     "--disable-remote-fonts",
     "--disable-features=Translate,ChromeWhatsNewUI,InterestFeedContentSuggestions,"
     "MediaRouter,OptimizationHints,AutofillServerCommunication",
