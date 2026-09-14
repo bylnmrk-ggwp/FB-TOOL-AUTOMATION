@@ -51,4 +51,35 @@ else:
         failures.append(f"watch grid: a cell is {cell_w:.0f} units wide, under "  # noqa: F821
                         f"Chromium's minimum - the windows would be clamped")
 
+# Square tiles with a gutter, centred - the layout in the icon, not a screen
+# chopped into whatever rectangles fit.
+if "cell_w = cell_h" not in tile:
+    failures.append("watch grid: the tiles are not square")  # noqa: F821
+if "WATCH_GRID_GAP" not in tile:
+    failures.append("watch grid: there is no gap between windows, so the wall "  # noqa: F821
+                    "reads as one sheet instead of a grid")
+if "pad_x" not in tile or "pad_y" not in tile:
+    failures.append("watch grid: the block is not centred, so a half-full last "  # noqa: F821
+                    "row sits in a corner")
+if "max(gap, int((sw" not in tile or "max(gap, int((sh" not in tile:
+    failures.append("watch grid: there is no margin at the screen edges, so the "  # noqa: F821
+                    "outer windows sit flush against them")
+
+# Tiles are laid left to right, filling a row before starting the next.
+if "(i % cols)" not in tile or "(i // cols)" not in tile:
+    failures.append("watch grid: the fill order is not left to right by row")  # noqa: F821
+if not (0 < DriverManager.WATCH_GRID_GAP <= 200):
+    failures.append(f"watch grid: the gutter is {DriverManager.WATCH_GRID_GAP}, "  # noqa: F821
+                    f"which is not a usable gap")
+
+# The arithmetic has to leave a real tile at fleet size.
+space_w, space_h = 1920 / DriverManager.WATCH_GRID_SCALE, 1080 / DriverManager.WATCH_GRID_SCALE
+cols = DriverManager.WATCH_GRID_COLS
+rows = 5
+gap = DriverManager.WATCH_GRID_GAP
+side = min((space_w - gap * (cols + 1)) // cols, (space_h - gap * (rows + 1)) // rows)
+if side < 520:
+    failures.append(f"watch grid: a tile is {side:.0f} units, under Chromium's "  # noqa: F821
+                    f"minimum window width - the windows would be clamped")
+
 print("FAILED" if [f for f in failures if "watch grid" in f] else "ok")  # noqa: F821

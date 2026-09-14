@@ -4214,17 +4214,27 @@ class DriverManager:
                      f"where they are: {str(e)[:80]}")
             return
 
-        # Ten to a row, always. The squarest-grid-that-fits changed shape with
-        # the page count - 9 open made 3x3, 46 made 7x7 - so the wall never
-        # looked the same twice.
+        # Ten to a row, square tiles, a gap between them - the layout in the
+        # icon the operator drew, not a screen chopped into whatever
+        # rectangles happened to fit. Square means one side governs: take the
+        # smaller of "a tenth of the width" and "one row's share of the
+        # height", and the leftover becomes the margin the grid is centred in.
         count = len(autos)
         cols = max(1, self.WATCH_GRID_COLS)
         rows = max(1, math.ceil(count / cols))
-        cell_w, cell_h = int(sw // cols), int(sh // rows)
+        gap = self.WATCH_GRID_GAP
+        side = max(1, min((sw - gap * (cols + 1)) // cols,
+                          (sh - gap * (rows + 1)) // rows))
+        cell_w = cell_h = int(side)
+        # Centre the block AND keep a margin at the edges: never less than one
+        # gutter on the left, right, top and bottom, so the outer windows are
+        # not flush against the screen edge while the inner ones have space.
+        pad_x = max(gap, int((sw - (cols * cell_w + gap * (cols - 1))) // 2))
+        pad_y = max(gap, int((sh - (rows * cell_h + gap * (rows - 1))) // 2))
         placed = 0
         for i, (name, auto) in enumerate(autos):
-            left = int(sx + (i % cols) * cell_w)
-            top = int(sy + (i // cols) * cell_h)
+            left = int(sx + pad_x + (i % cols) * (cell_w + gap))
+            top = int(sy + pad_y + (i // cols) * (cell_h + gap))
             try:
                 cdp = await auto.page.context.new_cdp_session(auto.page)
                 info = await cdp.send("Browser.getWindowForTarget")
@@ -4584,6 +4594,9 @@ class DriverManager:
     # pixel - the same trick the login grid uses.
     WATCH_GRID_COLS = 10
     WATCH_GRID_SCALE = 0.25
+    # The gutter between tiles, in the browser's own units. Without it the
+    # windows touch and read as one sheet instead of a grid.
+    WATCH_GRID_GAP = 24
 
     # How long a freshly opened page gets to mount a player, and how long its
     # currentTime is sampled to prove the player is really running.
