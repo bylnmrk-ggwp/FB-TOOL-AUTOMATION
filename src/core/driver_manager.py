@@ -3536,6 +3536,8 @@ class DriverManager:
         })
 
         processed = 0
+        # Attempts and successes are counted apart: "53/53 done" was read as
+        # 53 accounts having acted, when it only ever meant 53 items tried.
         success_count = 0
         handled: set[str] = set()  # profiles that actually produced a result
 
@@ -3853,7 +3855,8 @@ class DriverManager:
                 self.result_queue.put({
                     "type": "batch_progress",
                     "current": processed, "total": total,
-                    "message": f"{processed}/{total} done...",
+                    "succeeded": success_count,
+                    "message": f"{processed}/{total} attempted, {success_count} ok",
                 })
 
             # Close this batch's contexts → frees RAM immediately
@@ -3889,7 +3892,8 @@ class DriverManager:
             })
             self.result_queue.put({
                 "type": "batch_progress", "current": processed,
-                "total": total, "message": f"{processed}/{total} done...",
+                "total": total, "succeeded": success_count,
+                "message": f"{processed}/{total} attempted, {success_count} ok",
             })
 
         # ── Phase 4: Final cleanup ─────────────────────────
