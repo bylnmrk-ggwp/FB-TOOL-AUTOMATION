@@ -120,6 +120,9 @@ class DriverManager:
         # Which live each watching page is on, so one broadcast ending never
         # closes the pages watching another.
         self._watch_urls: dict = {}
+        # The storage state each page was opened with, so a page that dies
+        # mid-broadcast can be rebuilt instead of silently leaving the live.
+        self._watch_states: dict = {}
         self._watch_keeper = None
 
         # Concurrent batch mode — each profile gets its own browser window
@@ -4318,6 +4321,49 @@ class DriverManager:
         self.log(f"  ▦ Tiled {placed}/{count} window(s) as {cols}x{rows} "
                  f"on {sw}x{sh} ({cell_w}x{cell_h} each)")
 
+    # How many times one profile's page is rebuilt before the watch gives up
+    # on it. A page that dies repeatedly is a dead session, not a blip, and
+    # rebuilding it forever would spend the machine on nothing.
+    WATCH_REVIVE_LIMIT = 3
+
+    async def _revive_watcher(self, name: str) -> bool:
+        """Rebuild one watcher's page on the live it was watching.
+
+        A crashed renderer or a closed context used to drop that profile out
+        of the broadcast without a word, so a watch that was meant to last
+        until the live ended quietly shrank instead.
+        """
+        url = (getattr(self, "_watch_urls", None) or {}).get(name)
+        state = (getattr(self, "_watch_states", None) or {}).get(name)
+        browser = getattr(self, "_watch_browser", None)
+        if not url or state is None or browser is None:
+            return False
+        tries = getattr(self, "_watch_revivals", None)
+        if tries is None:
+            tries = self._watch_revivals = {}
+        if tries.get(name, 0) >= self.WATCH_REVIVE_LIMIT:
+            return False
+        tries[name] = tries.get(name, 0) + 1
+
+        from src.core.facebook_automation import FacebookAutomation, SMALL_VIEWPORT
+        mode = cfg.get_setting("browser_mode", "headless_new")
+        old = self._watch_autos.pop(name, None)
+        if old is not None:
+            try:
+                await old.close_context()
+            except Exception:
+                pass
+        auto = FacebookAutomation(log_callback=self.log, debug=self._debug)
+        try:
+            await auto.init_from_storage(browser, state, viewport=SMALL_VIEWPORT,
+                                         block_resources=False,
+                                         no_viewport=(mode == "visible"))
+            await auto.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            return False
+        self._watch_autos[name] = auto
+        return True
+
     async def _finished_lives(self) -> set:
         """The URLs whose broadcast has ended, judged per live.
 
@@ -4398,12 +4444,19 @@ class DriverManager:
                             self.cmd_queue.put({"type": "stop_watch"})
                             return
                 rounds += 1
-                resumed, reloaded, kicked, playing = [], [], [], 0
+                resumed, reloaded, kicked, revived, playing = [], [], [], [], 0
                 for name, auto in list(self._watch_autos.items()):
                     try:
                         r = await auto.page.evaluate(self._WATCH_RESUME_JS)
                     except Exception:
-                        continue          # page closing or mid-navigation
+                        # A page that cannot be asked anything is not watching.
+                        # Rebuilding it is the whole point of "until the live
+                        # ends": a crashed renderer used to drop that profile
+                        # out of the broadcast silently, and the watch looked
+                        # healthy with fewer and fewer viewers.
+                        if await self._revive_watcher(name):
+                            revived.append(name)
+                        continue
                     if not r.get("video"):
                         last_t.pop(name, None)
                         stalls.pop(name, None)
@@ -4456,6 +4509,10 @@ class DriverManager:
                     self.log(f"  👁 stalled, seeking to live edge: "
                              f"{len(kicked)} page(s): {', '.join(kicked[:4])}"
                              + (" ..." if len(kicked) > 4 else ""))
+                if revived:
+                    self.log(f"  👁 rebuilt {len(revived)} page(s) that died "
+                             f"mid-broadcast: {', '.join(revived[:4])}"
+                             + (" ..." if len(revived) > 4 else ""))
                 if reloaded:
                     self.log(f"  👁 reloaded {len(reloaded)} page(s) that lost "
                              f"the player or stayed frozen: "
@@ -4587,6 +4644,7 @@ class DriverManager:
                 self._watch_pw, launch_headless, launch_args)
         self._watch_autos = getattr(self, "_watch_autos", {}) or {}
         self._watch_urls = getattr(self, "_watch_urls", {}) or {}
+        self._watch_states = getattr(self, "_watch_states", {}) or {}
 
         # Opening all of them at once does not work: 46 pages loading and 46
         # decoders starting together took 198 s to open and left 2 playing,
@@ -4608,6 +4666,7 @@ class DriverManager:
                                              no_viewport=(mode == "visible"))
                 self._watch_autos[profile_name] = auto
                 self._watch_urls[profile_name] = url
+                self._watch_states[profile_name] = states[profile_name]
                 try:
                     await auto.page.goto(url, wait_until="domcontentloaded",
                                          timeout=45000)
@@ -5026,6 +5085,8 @@ class DriverManager:
                 pass
         self._watch_autos = {}
         self._watch_urls = {}
+        self._watch_states = {}
+        self._watch_revivals = {}
         if getattr(self, "_watch_browser", None):
             try:
                 await self._watch_browser.close()
