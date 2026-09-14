@@ -4189,6 +4189,30 @@ class DriverManager:
                 return got
         return None
 
+    @staticmethod
+    def _desktop_size() -> tuple[int, int] | None:
+        """The desktop in the units a window is positioned in.
+
+        Not the physical mode: Browser.setWindowBounds speaks the same
+        device-independent pixels Windows uses to place windows - 1536x864 on
+        a 1920x1080 screen at 125% - and the physical figure put the grid a
+        quarter of a screen too wide, so every window was clamped back to the
+        corner and the tiles piled up.
+        """
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+            dc = user32.GetDC(0)
+            try:
+                width = int(gdi32.GetDeviceCaps(dc, 118))   # DESKTOPHORZRES
+                height = int(gdi32.GetDeviceCaps(dc, 117))  # DESKTOPVERTRES
+            finally:
+                user32.ReleaseDC(0, dc)
+            return (width, height) if width > 0 and height > 0 else None
+        except Exception:
+            return None
+
     async def _tile_watch_windows(self):
         """Lay the visible watch windows out as a grid filling the screen.
 
@@ -4219,6 +4243,19 @@ class DriverManager:
         # rectangles happened to fit. Square means one side governs: take the
         # smaller of "a tenth of the width" and "one row's share of the
         # height", and the leftover becomes the margin the grid is centred in.
+        # What the page reports as its screen cannot be trusted here: a
+        # context opened with a storage state came back saying 1280x800 while
+        # devicePixelRatio was 0.25, which would put the whole grid inside a
+        # corner of the real screen. The desktop size comes from Windows
+        # instead, converted into the browser's own units by the same scale
+        # factor the browser was launched with - the two numbers then agree
+        # by construction rather than by hope.
+        native = self._desktop_size()
+        if native:
+            sw = int(native[0] / self.WATCH_GRID_SCALE)
+            sh = int(native[1] / self.WATCH_GRID_SCALE)
+            sx = sy = 0
+
         count = len(autos)
         cols = max(1, self.WATCH_GRID_COLS)
         rows = max(1, math.ceil(count / cols))

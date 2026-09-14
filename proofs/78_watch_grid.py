@@ -82,4 +82,22 @@ if side < 520:
     failures.append(f"watch grid: a tile is {side:.0f} units, under Chromium's "  # noqa: F821
                     f"minimum window width - the windows would be clamped")
 
+# The grid is measured from the desktop, not from what the page claims its
+# screen is: a watch context reported 1280x800 while devicePixelRatio was
+# 0.25, which squeezed the whole grid into a corner of the real screen.
+if "_desktop_size" not in tile:
+    failures.append("watch grid: the layout still trusts the page's own screen "  # noqa: F821
+                    "size, which a watch context reports wrongly")
+size = DriverManager._desktop_size()
+if size is None or not (size[0] > 200 and size[1] > 200):
+    failures.append(f"watch grid: the desktop size came back as {size!r}")  # noqa: F821
+else:
+    space_w = size[0] / DriverManager.WATCH_GRID_SCALE
+    gap = DriverManager.WATCH_GRID_GAP
+    cols = DriverManager.WATCH_GRID_COLS
+    side = (space_w - gap * (cols + 1)) // cols
+    if side < 520:
+        failures.append(f"watch grid: on this desktop a tile is {side:.0f} units, "  # noqa: F821
+                        f"under Chromium's minimum window width")
+
 print("FAILED" if [f for f in failures if "watch grid" in f] else "ok")  # noqa: F821
