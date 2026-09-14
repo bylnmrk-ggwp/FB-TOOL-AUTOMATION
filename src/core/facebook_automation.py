@@ -3654,7 +3654,20 @@ class FacebookAutomation:
                     return False
 
             if reaction == "like":
-                await like_locator.click(timeout=5000)
+                # A pointer press, not locator.click(). Facebook nests the
+                # actual Like control and its <i> icon inside the React
+                # button, so Playwright's actionability check refuses the
+                # click - "subtree intercepts pointer events" - and every
+                # attempt on such a post died as "Timeout 5000ms exceeded"
+                # after 13 retries. A real mouse press at a point inside the
+                # element lands on whatever is on top, which is what a person
+                # clicking there would hit.
+                if not await human_input.click(self.page, like_locator):
+                    try:
+                        await like_locator.click(timeout=5000, force=True)
+                    except Exception as e:  # noqa: BLE001 - reported, not raised
+                        self.log(f"Could not press Like: {e}")
+                        return False, f"Could not press Like: {str(e)[:80]}"
                 await asyncio.sleep(random.uniform(2, 3))
                 if await _verify_reacted("like"):
                     self.log("Liked the post")
