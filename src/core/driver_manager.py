@@ -3940,7 +3940,14 @@ class DriverManager:
             await self._do_watch(url, minutes=minutes, profile_names=watchers)
 
     async def _cleanup_batch(self):
-        """Close all profile automations and the shared browser."""
+        """Close all profile automations and the shared browser.
+
+        The watch is deliberately untouched. Its pages ARE the viewers: they
+        have to stay open with the video playing after the run is over, so
+        _watch_pw, _watch_browser and _watch_autos belong to _stop_watch
+        alone - reached by the Stop button, by a new watch replacing this one,
+        or by quitting the app.
+        """
         for name, auto in list(self._batch_automations.items()):
             try:
                 await auto.close_context()
@@ -4340,7 +4347,15 @@ class DriverManager:
             return
 
         ok = db.logged_in_profiles()
-        profiles = [p for p in (profile_names or cfg.list_profiles()) if p in ok]
+        asked = list(profile_names or cfg.list_profiles_for_browser())
+        profiles = [p for p in asked if p in ok]
+        left_out = [p for p in asked if p not in ok]
+        if left_out:
+            # A dead session cannot watch anything, but silently dropping it
+            # made the watcher count unexplainable next to the run's own.
+            self.log(f"Watch: {len(left_out)} profile(s) skipped, not logged in: "
+                     f"{', '.join(sorted(left_out)[:5])}"
+                     + (" ..." if len(left_out) > 5 else ""))
         if not profiles:
             self.log("Watch: no active (logged-in) profiles to open.")
             return
