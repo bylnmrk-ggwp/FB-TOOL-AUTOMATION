@@ -1,12 +1,12 @@
-"""A batch runs only on accounts with a live session, and a live session is
-never reported as a dead one.
+"""A batch attempts every profile, and a live session is never reported dead.
 
-Two halves of the same mistake. The queue opened a browser for all 65
-profiles whatever their status, so accounts marked NOT LOGGED IN were driven
-anyway - each one costing a launch, a page load, a misleading reason on the
-sheet and another failed request on the account's record. And the classifier
-had no way of answering "this account is fine": asked after any failure, it
-returned unknown_not_logged_in for a working session, which demoted it.
+The pre-filter that skipped accounts marked NOT LOGGED IN was asked for and
+then withdrawn: the operator wants the whole fleet to act and to judge from
+the per-item results, because a stored status is a verdict from an earlier
+run, not the state of the session now. What remains from that work is the
+half that was always right - the classifier can answer "this account is
+fine". Asked after any failure it used to return unknown_not_logged_in for a
+working session, and the account was demoted on that.
 """
 import asyncio
 import queue as _queue
@@ -45,27 +45,15 @@ try:
         failures.append("only logged in: 'NOT LOGGED IN / SESSION EXPIRED' was read as "  # noqa: F821
                         "logged in - the words overlap, so the match must be exact")
 
-    # A batch of dead accounts opens no browser at all.
-    m = DriverManager()
-    m.log = lambda message: None
-    m._fast_tests = True
-    opened = []
-    m._create_temp_automation = lambda *a, **k: opened.append("browser")
-    asyncio.run(m._do_batch([{"profile_name": DEAD, "action_type": "comment",
-                              "comment": "hi"}]))
-    if opened:
-        failures.append("only logged in: a dead account still opened a browser")  # noqa: F821
-    messages = []
-    while True:
-        try:
-            messages.append(m.result_queue.get_nowait())
-        except _queue.Empty:
-            break
-    if not any("skipped - not logged in" in (r.get("message") or "") for r in messages):
-        failures.append(f"only logged in: the skip was not reported: {messages}")  # noqa: F821
-    if not any(r.get("type") == "batch_result" for r in messages):
-        failures.append("only logged in: the batch never finished when every account "  # noqa: F821
-                        "was skipped")
+    # An account last seen signed out is still attempted: no pre-filter.
+    import inspect
+    batch_src = inspect.getsource(DriverManager._do_batch)
+    if "skipped - not logged in" in batch_src:
+        failures.append("only logged in: the batch still drops accounts before "  # noqa: F821
+                        "opening a browser, so the fleet cannot be seen acting")
+    if "attempting them anyway" not in batch_src:
+        failures.append("only logged in: the batch does not say it is attempting "  # noqa: F821
+                        "profiles that were last seen signed out")
 
     # The classifier can say an account is fine.
     if not hasattr(FacebookAutomation, "LOGGED_IN"):

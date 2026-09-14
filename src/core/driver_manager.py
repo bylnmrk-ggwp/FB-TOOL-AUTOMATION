@@ -3428,31 +3428,16 @@ class DriverManager:
         # Get unique profiles
         unique_profiles = list({item["profile_name"] for item in items})
 
-        # Only accounts with a confirmed session take part. Driving a dead one
-        # costs a browser launch and a page load, writes a misleading reason
-        # to the sheet, and adds another failed request to the account's
-        # record - for an action that cannot succeed.
-        dead = [p for p in unique_profiles if not self._session_recorded_live(p)]
-        if dead:
-            self.log(f"  Skipping {len(dead)} profile(s) that are not logged in: "
-                     f"{', '.join(sorted(dead)[:6])}"
-                     + (" ..." if len(dead) > 6 else ""))
-            for index, item in enumerate(items):
-                if item["profile_name"] in dead:
-                    self.result_queue.put({
-                        "type": "batch_progress", "current": index + 1,
-                        "total": total, "profile_name": item["profile_name"],
-                        "ok": False,
-                        "message": f"{item['profile_name']}: skipped - not logged in",
-                    })
-            items = [item for item in items if item["profile_name"] not in dead]
-            unique_profiles = [p for p in unique_profiles if p not in dead]
-            if not items:
-                self._batch_running = False
-                self.log("  No logged-in account has anything to do in this batch")
-                self.result_queue.put({"type": "batch_result", "ok": True,
-                                       "results": [], "total": 0})
-                return
+        # Every profile takes part, whatever the roster records. A stored
+        # status is a verdict from an earlier run, not the state of the
+        # session now, and the operator asked to see the whole fleet act and
+        # judge from the per-item results. A dead session still costs a
+        # launch and a page load and still shows up as a failed item - that
+        # is the price of not filtering, and it is the operator's call.
+        stale = [p for p in unique_profiles if not self._session_recorded_live(p)]
+        if stale:
+            self.log(f"  {len(stale)} profile(s) were not logged in at their last "
+                     f"check - attempting them anyway")
 
         # ── Phase 1: Load cached states, extract only the misses ──
         states: dict[str, dict | None] = {}
