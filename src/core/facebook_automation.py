@@ -357,6 +357,26 @@ LOGIN_FLAGS = [
 ]
 
 
+# Facebook appends its own tracking to any link it resolves: rdid on a
+# redirect, mibextid/__cft__/__tn__ on feed links. None of it identifies the
+# post, and leaving it in made identity checks compare noise.
+_TRACKING_PARAMS = ("rdid", "share_url", "mibextid", "__cft__", "__tn__",
+                    "notif_id", "notif_t", "ref", "refid")
+
+
+def _without_tracking(url: str) -> str:
+    """The same URL with Facebook's tracking parameters removed."""
+    try:
+        parts = urllib.parse.urlsplit(url or "")
+        kept = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+                if k.split("[")[0] not in _TRACKING_PARAMS]
+        return urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc, parts.path,
+             urllib.parse.urlencode(kept), parts.fragment))
+    except Exception:
+        return url or ""
+
+
 class FacebookAutomation:
     # Seconds an unattended login lets a gate URL clear itself before
     # calling it a checkpoint. Long enough for the device-based login
@@ -3307,34 +3327,40 @@ class FacebookAutomation:
                 current_url = self.page.url
                 self.log(f"   Current URL: {current_url}")
                 
-                # Check if Facebook added rdid parameter (redirect)
-                if "&rdid=" in current_url or "?rdid=" in current_url:
-                    self.log(f"   ⚠️  WARNING: Facebook added redirect parameter!")
-                    self.log(f"   This may show a different post - will verify author...")
+                # rdid is Facebook's own redirect token, added to every
+                # /share/ link it resolves to a permalink. It says nothing
+                # about WHICH post was opened, so warning about it made every
+                # ordinary share link look like a hijacked navigation. What
+                # matters is the post identity, checked below against the
+                # landed URL with tracking parameters stripped.
+                current_url = _without_tracking(current_url)
                 
-                # Extract expected post identifiers for verification
+                # What the requested URL says the post is. A /share/p/ or
+                # /share/v/ link says nothing: it is a token Facebook
+                # exchanges for the permalink, so there is no identity to
+                # compare and comparing anyway reported every share link as a
+                # redirect to the wrong post.
                 expected_story_fbid = None
                 expected_post_id = None
                 expected_profile_id = None
-                
-                # From permalink format
-                if "story_fbid=" in post_url:
-                    expected_story_fbid = post_url.split("story_fbid=")[1].split("&")[0]
-                if "&id=" in post_url:
-                    expected_profile_id = post_url.split("&id=")[1].split("&")[0]
-                elif "id=" in post_url:
-                    expected_profile_id = post_url.split("id=")[1].split("&")[0]
-                
-                # From /posts/ format (only if auto-fix failed)
-                if "/posts/" in post_url:
-                    parts = post_url.split("/posts/")
-                    expected_post_id = parts[1].split("/")[0].split("?")[0]
-                    # Extract profile ID from URL
-                    if "/" in parts[0]:
-                        profile_part = parts[0].split("/")[-1]
-                        if profile_part.isdigit():
-                            expected_profile_id = profile_part
-                
+
+                if "/share/" in post_url:
+                    self.log(f"   Share link resolved to: {current_url[:110]}")
+                else:
+                    if "story_fbid=" in post_url:
+                        expected_story_fbid = post_url.split("story_fbid=")[1].split("&")[0]
+                    if "&id=" in post_url:
+                        expected_profile_id = post_url.split("&id=")[1].split("&")[0]
+                    elif "id=" in post_url:
+                        expected_profile_id = post_url.split("id=")[1].split("&")[0]
+                    if "/posts/" in post_url:
+                        parts = post_url.split("/posts/")
+                        expected_post_id = parts[1].split("/")[0].split("?")[0]
+                        if "/" in parts[0]:
+                            profile_part = parts[0].split("/")[-1]
+                            if profile_part.isdigit():
+                                expected_profile_id = profile_part
+
                 # Verify current URL matches expected identifiers
                 if expected_story_fbid:
                     if expected_story_fbid not in current_url:
