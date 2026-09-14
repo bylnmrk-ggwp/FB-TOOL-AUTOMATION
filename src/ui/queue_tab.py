@@ -50,9 +50,6 @@ class QueueTab(ttk.Frame):
         self._scroll = ScrollFrame(card, bg_key="canvas_bg")
         self._scroll.grid(row=0, column=0, sticky="nsew")
         self._canvas = self._scroll.canvas
-        # The viewport is the only width that does not depend on what the
-        # dot grid lays out, so the column count has to be derived here.
-        self._canvas.bind("<Configure>", self._on_status_frame_resize, add="+")
 
         # Inner frame with padding so content doesn't touch canvas edges
         inner = ttk.Frame(self._scroll.interior)
@@ -65,29 +62,15 @@ class QueueTab(ttk.Frame):
         intro.pack(anchor="w", **pad)
         bind_wrap(intro, pad=2 * pad["padx"])
 
-        # ── Profile status ────────────────────────────────
+        # ── Profiles ──────────────────────────────────────
+        # A dot per profile used to sit here. At 400+ profiles it was a wall
+        # of names nobody read, and it cost a full relayout every time one
+        # logged in. How many profiles this browser has is the whole answer.
         status_header = ttk.Frame(inner)
         status_header.pack(fill="x", **pad)
-        ttk.Label(status_header, text="Profile Status:",
-                  style="Heading.TLabel").pack(side="left", padx=(0, 8))
-        # Live "logged in / total" next to the heading, kept current by
-        # _refresh_profile_status so it tracks a login scan or queue run.
         self._active_count_var = tk.StringVar(value="")
         ttk.Label(status_header, textvariable=self._active_count_var,
-                  style="Muted.TLabel").pack(side="left")
-
-        self._profile_status_frame = ttk.Frame(inner)
-        self._profile_status_frame.pack(fill="x", **pad)
-        self._status_labels: dict[str, ttk.Label] = {}
-        self._status_grid_cols: int | None = None  # cols the grid was built at
-        self._profile_status_cols = 6  # dots per row (responsive, see below)
-        self._status_avail_px: int | None = None   # viewport width for the grid
-        self._status_rendered: dict[str, tuple[str, str]] = {}  # last text/colour
-        self._status_font = None                    # cached for name measuring
-        # Column count is recomputed from the canvas viewport in
-        # _configure_canvas above. Binding <Configure> on this frame instead
-        # would feed the grid's own width back into the column count and
-        # diverge; see _on_status_frame_resize.
+                  style="Heading.TLabel").pack(side="left")
 
         ttk.Separator(inner, orient="horizontal").pack(fill="x", **pad)
 
@@ -579,31 +562,7 @@ class QueueTab(ttk.Frame):
         """Rebuild profile status display."""
         self._refresh_profile_status()
 
-    def _displayed_profiles(self) -> list[str]:
-        """Profiles shown in the dot grid, honouring the logged-in-only filter.
 
-        The single source both the grid and the count read, so they can never
-        disagree the way the old session-based count did.
-        """
-        profiles = cfg.list_profiles()
-        if cfg.get_setting("show_logged_in_only", True):
-            from src.storage import database as db
-            ok = db.logged_in_profiles()
-            profiles = [p for p in profiles if p in ok]
-        return profiles
-
-    def logged_in_count(self) -> tuple[int, int]:
-        """(profiles whose account is logged in, profiles shown).
-
-        "Logged in" is the persisted status='ok', the same source as the
-        filter and the roster - not the live session scan, which starts empty
-        and made the label read 1/140 while four profiles were saved logged in.
-        """
-        from src.storage import database as db
-        profiles = self._displayed_profiles()
-        ok = db.logged_in_profiles()
-        active = sum(1 for p in profiles if p in ok)
-        return active, len(profiles)
 
     def update_profile_status(self, profile_name: str, logged_in: bool):
         """Update login status for a profile and refresh the display."""
@@ -615,117 +574,22 @@ class QueueTab(ttk.Frame):
         self._rate_limited_profiles.add(profile_name)
         self._refresh_profile_status()
 
-    def _on_status_frame_resize(self, event):
-        """Adapt the dot-grid column count to the available viewport width.
-
-        `event` must come from the scroll canvas, never from
-        _profile_status_frame. The frame is inside a scrollable canvas, so its
-        own width follows the widgets this handler lays out: reading it here
-        would make the column count its own input and grow without bound
-        (139 profiles drove the width past 5800px and froze the main loop).
-        """
-        if getattr(self, "_profile_status_frame", None) is None:
-            return
-        # inner's padx=12 plus the status frame's own padx=12, both sides.
-        avail = event.width - 48
-        if avail <= 1 or avail == self._status_avail_px:
-            return
-        self._status_avail_px = avail
-        self._refresh_profile_status()
-
-    def _status_columns(self, profiles: list[str]) -> int:
-        """Columns that fit the viewport, sized so no name is clipped.
-
-        A fixed 130px column cut long names at the right edge; the column is
-        instead as wide as the longest name currently shown.
-        """
-        if self._status_avail_px is None:
-            return self._profile_status_cols
-        if self._status_font is None:
-            import tkinter.font as tkfont
-            from src.ui import theme
-            self._status_font = tkfont.Font(family=theme.UI_FONT, size=10)
-        longest = max((self._status_font.measure(f"● {p}")
-                       for p in profiles), default=0)
-        col_px = max(130, longest + 14)  # +14 = the grid cell's padx
-        return max(1, self._status_avail_px // col_px)
-
-    def _dot_for(self, name: str, colors: dict) -> tuple[str, str]:
-        """Glyph and colour describing one profile's current login state."""
-        if name in self._rate_limited_profiles:
-            return "⚠", colors["warning"]
-        # A persisted status='ok' is a confirmed login, so it shows green even
-        # before this session's live scan has run - otherwise a profile the
-        # filter calls "logged in" would still draw a grey unknown dot.
-        state = self._profile_status.get(name)
-        if state is True or name in getattr(self, "_db_ok", ()):
-            return "●", colors["success"]
-        if state is False:
-            return "○", colors["muted"]
-        return "○", colors["dot_unknown"]
 
     def _refresh_profile_status(self):
-        """Refresh the profile status row, rebuilding widgets only when needed."""
-        from src.ui import theme
+        """Say how many profiles the selected browser has, and how many of
+        them are logged in."""
+        from src.core import browser_choice
         from src.storage import database as db
-        colors = theme.get()
 
-        # Fetch the confirmed-login set once per refresh; _dot_for reads it so
-        # every persisted-ok profile is green, not just this session's scans.
         self._db_ok = db.logged_in_profiles()
-        profiles = self._displayed_profiles()
-        self._profile_status_cols = self._status_columns(profiles)
-
-        # Clean up stale entries for deleted profiles. The rate-limit set is
-        # pruned too, or a re-provisioned profile inherits a stale warning dot.
-        existing = set(profiles)
-        for key in list(self._profile_status):
-            if key not in existing:
-                del self._profile_status[key]
-        self._rate_limited_profiles.intersection_update(existing)
-
-        active, total = self.logged_in_count()
-        self._active_count_var.set(f"{active} / {total} logged in" if total else "")
-
-        # Tearing every label down costs ~250ms at 139 profiles, and a run calls
-        # this once per profile as each logs in. Only a changed profile set or
-        # column count needs new widgets; a status or theme change just relabels
-        # the ones already on screen.
-        if (self._status_labels
-                and self._status_grid_cols == self._profile_status_cols
-                and list(self._status_labels) == profiles):
-            # configure() on an unchanged label still costs a Tcl round trip
-            # and a relayout (~98ms across 139 labels), so only touch the
-            # ones whose glyph or colour actually moved.
-            for name, lbl in self._status_labels.items():
-                dot, color = self._dot_for(name, colors)
-                want = (f"{dot} {name}", color)
-                if self._status_rendered.get(name) != want:
-                    lbl.configure(text=want[0], foreground=want[1])
-                    self._status_rendered[name] = want
-            return
-
-        for w in self._profile_status_frame.winfo_children():
-            w.destroy()
-        self._status_labels.clear()
-        self._status_rendered.clear()
-        self._status_grid_cols = None
-
-        if not profiles:
-            ttk.Label(self._profile_status_frame, text="(no profiles)",
-                      foreground=colors["muted"]).pack(side="left")
-            return
-
-        cols = self._profile_status_cols
-        for idx, p in enumerate(profiles):
-            row, col = divmod(idx, cols)
-            dot, color = self._dot_for(p, colors)
-            lbl = ttk.Label(self._profile_status_frame,
-                           text=f"{dot} {p}", foreground=color)
-            lbl.grid(row=row, column=col, sticky="w", padx=(0, 14), pady=2)
-            self._status_labels[p] = lbl
-            self._status_rendered[p] = (f"{dot} {p}", color)
-        self._status_grid_cols = cols
+        profiles = cfg.list_profiles_for_browser()
+        live = sum(1 for p in profiles if p in self._db_ok)
+        browser = browser_choice.current_browser().title()
+        if profiles:
+            self._active_count_var.set(
+                f"{len(profiles)} {browser} profile(s) - {live} logged in")
+        else:
+            self._active_count_var.set(f"No {browser} profiles saved")
 
     def set_running(self, running: bool):
         state = "disabled" if running else "normal"

@@ -626,11 +626,16 @@ class MainWindow(tk.Tk):
             n_queue = len(self.queue_tab._items)
         except Exception:
             n_queue = 0
-        # Profiles reflects what is on screen: with the logged-in-only filter
-        # on it is the confirmed set (4), not every registered Brave profile
-        # (140). logged_in_count() returns (active, shown) from that same set.
+        # Profiles of the browser in use, and how many of them are logged in.
+        # Counting both browsers together read "Profiles: 437, Active: 84"
+        # while Brave was selected and could open none of those 84.
         try:
-            n_active, n_profiles = self.queue_tab.logged_in_count()
+            from src.storage import config_manager as cfg
+            from src.storage import database as db
+            profiles = cfg.list_profiles_for_browser()
+            ok = db.logged_in_profiles()
+            n_profiles = len(profiles)
+            n_active = sum(1 for p in profiles if p in ok)
         except Exception:
             n_active = n_profiles = 0
         text = (f"Profiles: {n_profiles}   •   Active: {n_active}"
