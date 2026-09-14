@@ -4214,9 +4214,12 @@ class DriverManager:
                      f"where they are: {str(e)[:80]}")
             return
 
+        # Ten to a row, always. The squarest-grid-that-fits changed shape with
+        # the page count - 9 open made 3x3, 46 made 7x7 - so the wall never
+        # looked the same twice.
         count = len(autos)
-        cols = math.ceil(math.sqrt(count))
-        rows = math.ceil(count / cols)
+        cols = max(1, self.WATCH_GRID_COLS)
+        rows = max(1, math.ceil(count / cols))
         cell_w, cell_h = int(sw // cols), int(sh // rows)
         placed = 0
         for i, (name, auto) in enumerate(autos):
@@ -4486,6 +4489,12 @@ class DriverManager:
         mode, launch_headless, launch_args = \
             self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
                                       flags=WATCH_FLAGS)
+        if mode == "visible":
+            # Shrink the browser's own unit so a 10x10 cell clears Chromium's
+            # minimum window width; without this every window comes back
+            # clamped and the grid is a pile.
+            launch_args = [*launch_args,
+                           f"--force-device-scale-factor={self.WATCH_GRID_SCALE:g}"]
         await self._close_watch_pages(active)
 
         if not getattr(self, "_watch_browser", None):
@@ -4567,6 +4576,14 @@ class DriverManager:
     # How many watch pages load at the same time. Past this the machine
     # starves its own players: the pages open but the video never starts.
     WATCH_OPEN_AT_ONCE = 8
+
+    # The visible watch lays its windows out ten to a row, as many rows as it
+    # takes. Chromium refuses a window under about 515 of its own units wide
+    # and a tenth of a screen is far below that, so the watch browser is
+    # launched with a scale factor that makes its unit smaller than a screen
+    # pixel - the same trick the login grid uses.
+    WATCH_GRID_COLS = 10
+    WATCH_GRID_SCALE = 0.25
 
     # How long a freshly opened page gets to mount a player, and how long its
     # currentTime is sampled to prove the player is really running.
