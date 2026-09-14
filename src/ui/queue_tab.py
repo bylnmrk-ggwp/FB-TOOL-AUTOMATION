@@ -576,20 +576,19 @@ class QueueTab(ttk.Frame):
 
 
     def _refresh_profile_status(self):
-        """Say how many profiles the selected browser has, and how many of
-        them are logged in."""
-        from src.core import browser_choice
-        from src.storage import database as db
+        """Say how many profiles the selected browser has.
 
-        self._db_ok = db.logged_in_profiles()
+        No login state: reading it meant a database query on every refresh -
+        and a refresh runs per profile during a login scan - to answer a
+        question the Check Login Status button already answers on demand.
+        """
+        from src.core import browser_choice
+
         profiles = cfg.list_profiles_for_browser()
-        live = sum(1 for p in profiles if p in self._db_ok)
         browser = browser_choice.current_browser().title()
-        if profiles:
-            self._active_count_var.set(
-                f"{len(profiles)} {browser} profile(s) - {live} logged in")
-        else:
-            self._active_count_var.set(f"No {browser} profiles saved")
+        self._active_count_var.set(
+            f"{len(profiles)} {browser} profile(s)" if profiles
+            else f"No {browser} profiles saved")
 
     def set_running(self, running: bool):
         state = "disabled" if running else "normal"

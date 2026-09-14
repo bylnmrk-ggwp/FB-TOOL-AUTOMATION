@@ -36,4 +36,16 @@ if "list_profiles_for_browser" not in picker:
     failures.append("roster follows browser: the link picker still offers the other "  # noqa: F821
                     "browser's profiles")
 
+# Listing profiles must not consult login state at all: the list answers
+# "what profiles are there", and Check Login Status answers the other
+# question on demand instead of on every refresh.
+for name, source in (("_visible_profiles", inspect.getsource(ProfilesTab._visible_profiles)),):
+    if "logged_in_profiles" in source:
+        failures.append(f"roster follows browser: {name} still fetches login state")  # noqa: F821
+
+from src.ui.queue_tab import QueueTab  # noqa: E402
+if "logged_in_profiles" in inspect.getsource(QueueTab._refresh_profile_status):
+    failures.append("roster follows browser: the queue count still fetches login "  # noqa: F821
+                    "state on every refresh")
+
 print("FAILED" if [f for f in failures if "roster follows browser" in f] else "ok")  # noqa: F821

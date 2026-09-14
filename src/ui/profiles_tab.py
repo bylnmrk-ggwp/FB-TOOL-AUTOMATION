@@ -188,15 +188,6 @@ class ProfilesTab(ttk.Frame):
         roster_search.pack(side="left")
         roster_search.bind("<KeyRelease>", lambda e: self._render_roster())
 
-        # Show only accounts/profiles a login run has confirmed. On by default
-        # and persisted, so the app opens to the usable set; the queue's dot
-        # grid reads the same setting.
-        self._logged_in_only = tk.BooleanVar(
-            value=bool(cfg.get_setting("show_logged_in_only", True)))
-        ttk.Checkbutton(roster_header, text="Logged in only",
-                        variable=self._logged_in_only,
-                        command=self._on_logged_in_only_toggle
-                        ).pack(side="left", padx=(12, 0))
 
         self._roster_count_var = tk.StringVar(value="")
         ttk.Label(roster_header, textvariable=self._roster_count_var,
@@ -334,8 +325,6 @@ class ProfilesTab(ttk.Frame):
         accounts = [a for a in accounts
                     if not (a.get("linked_profile") or "")
                     or (a.get("linked_profile") in mine)]
-        if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
-            accounts = [a for a in accounts if a.get("status") == "ok"]
         needle = self._roster_search_var.get().strip().lower()
         if needle:
             accounts = [
@@ -473,25 +462,16 @@ class ProfilesTab(ttk.Frame):
             self.refresh_accounts()
             self._roster_status_var.set("Unlinked")
 
-    def _on_logged_in_only_toggle(self):
-        cfg.save_setting("show_logged_in_only", bool(self._logged_in_only.get()))
-        self.refresh_profiles()
-        self._render_roster()
-
     def _visible_profiles(self) -> list[str]:
-        """Profile names to list: this browser's, honouring the "logged in
-        only" filter.
+        """Profile names to list: every profile of the selected browser.
 
         Both browsers' profiles live in one saved map, and a Brave profile
         cannot be opened by a Chromium run or the other way round, so listing
-        them together only offers profiles that will not work.
+        them together only offers profiles that will not work. Login state is
+        not consulted - the list answers "what profiles are there", and a
+        login check answers the other question.
         """
-        names = cfg.list_profiles_for_browser()
-        if getattr(self, "_logged_in_only", None) and self._logged_in_only.get():
-            from src.storage import database as db
-            ok = db.logged_in_profiles()
-            names = [n for n in names if n in ok]
-        return names
+        return cfg.list_profiles_for_browser()
 
     def refresh_profiles(self):
         self._apply_browser_labels()

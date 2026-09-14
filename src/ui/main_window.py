@@ -631,15 +631,10 @@ class MainWindow(tk.Tk):
         # while Brave was selected and could open none of those 84.
         try:
             from src.storage import config_manager as cfg
-            from src.storage import database as db
-            profiles = cfg.list_profiles_for_browser()
-            ok = db.logged_in_profiles()
-            n_profiles = len(profiles)
-            n_active = sum(1 for p in profiles if p in ok)
+            n_profiles = len(cfg.list_profiles_for_browser())
         except Exception:
-            n_active = n_profiles = 0
-        text = (f"Profiles: {n_profiles}   •   Active: {n_active}"
-                f"   •   Queue: {n_queue}")
+            n_profiles = 0
+        text = f"Profiles: {n_profiles}   •   Queue: {n_queue}"
         if self._ram_text:
             text += f"   •   {self._ram_text}"
         if self._sb_right.cget("text") != text:
