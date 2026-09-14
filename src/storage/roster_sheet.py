@@ -142,6 +142,22 @@ def sync(sheet_id: str = api.DEFAULT_SHEET_ID, tab: str = api.DEFAULT_TAB,
     return result
 
 
+# urllib3 wraps a failed name lookup in three nested exceptions and prints all
+# of them; the operator only needs to know the PC cannot reach Google.
+_OFFLINE_MARKERS = ("nameresolutionerror", "failed to resolve", "getaddrinfo",
+                    "temporary failure in name resolution", "max retries exceeded",
+                    "connection refused", "network is unreachable",
+                    "connection aborted", "timed out")
+
+
+def _reason(error: Exception) -> str:
+    """One short line for a failed poll."""
+    text = f"{error}".lower()
+    if any(marker in text for marker in _OFFLINE_MARKERS):
+        return "offline - cannot reach Google"
+    return f"{type(error).__name__}: {error}"[:160]
+
+
 class SheetWatcher(threading.Thread):
     """Poll the sheet; queue ("rows", accounts) when it changes.
 
@@ -165,11 +181,25 @@ class SheetWatcher(threading.Thread):
         # time.time() of the last poll that reached the sheet, 0.0 before
         # the first; the dashboard shows it as "Sheet synced N s ago".
         self.last_ok: float = 0.0
+        # Consecutive failures, and the wait they have earned. A PC that
+        # loses its network answers every poll with the same DNS failure, and
+        # polling it every 20 s for an hour only fills the log.
+        self._failures = 0
+
+    # Longest wait between retries while the sheet is unreachable.
+    MAX_BACKOFF = 300.0
+
+    def _retry_wait(self) -> float:
+        """The wait before the next poll: the normal interval while healthy,
+        doubling per consecutive failure up to MAX_BACKOFF."""
+        if not self._failures:
+            return self.interval
+        return min(self.MAX_BACKOFF, self.interval * (2 ** min(self._failures, 8)))
 
     def run(self):
         while not self._stop.is_set():
             self._poll_once()
-            self._stop.wait(self.interval)
+            self._stop.wait(self._retry_wait())
 
     def _poll_once(self):
         try:
@@ -181,13 +211,18 @@ class SheetWatcher(threading.Thread):
             if fp != self._last_fingerprint:
                 self._last_fingerprint = fp
                 self.events.put(("rows", parse_accounts(rows)))
+            if self._failures:
+                self.events.put(("error", "back online - the sheet is reachable again"))
+            self._failures = 0
             self._last_error = None
             self.last_ok = time.time()
         except Exception as e:  # network, auth, parse - all recoverable
-            msg = f"{type(e).__name__}: {e}"[:200]
+            self._failures += 1
+            msg = _reason(e)
+            wait = self._retry_wait()
             if msg != self._last_error:
                 self._last_error = msg
-                self.events.put(("error", msg))
+                self.events.put(("error", f"{msg} - retrying every {wait:.0f}s"))
 
     def stop(self):
         self._stop.set()
