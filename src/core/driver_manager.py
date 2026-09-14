@@ -3429,6 +3429,24 @@ class DriverManager:
         watch_items = [i for i in items if i.get("action_type") == "watch"]
         items = [i for i in items if i.get("action_type") != "watch"]
         total = len(items)
+
+        if watch_items and not items:
+            # Nothing to perform first: open the live now. Going through the
+            # batch machinery would launch a shared browser, walk the
+            # profiles in fives and tear it all down again before the first
+            # page ever reached the stream.
+            url = watch_items[0].get("post_url") or ""
+            minutes = watch_items[0].get("watch_minutes")
+            watchers = [i["profile_name"] for i in watch_items]
+            self.log(f"▶ Watching live directly: {len(watchers)} profile(s)"
+                     + (f" for {minutes:g} min" if minutes
+                        else " for the whole live, start to end"))
+            self._batch_running = False
+            self.result_queue.put({"type": "batch_result", "ok": True,
+                                   "results": [], "total": 0})
+            await self._do_watch(url, minutes=minutes, profile_names=watchers)
+            return
+
         self.log(f"Starting batch: {total} item(s)"
                  + (f", then {len(watch_items)} profile(s) stay to watch"
                     if watch_items else ""))
@@ -4451,7 +4469,11 @@ class DriverManager:
             self._watch_pw, launch_headless, launch_args)
         self._watch_autos = {}
 
-        sem = asyncio.Semaphore(5)
+        # Every page opens at once. A live has one edge and it moves: opening
+        # in waves of five meant the last profiles joined minutes of stream
+        # later than the first, which is exactly the part of a broadcast the
+        # operator wanted them on.
+        sem = asyncio.Semaphore(max(1, len(active)))
 
         verdicts: dict[str, str] = {}
 
