@@ -150,6 +150,7 @@ python scripts/login_accounts.py --unattended --batch 10 --pause 20
 python scripts/provision_profiles.py --rename-from-roster
 python scripts/export_sessions.py --out transfer  export signed-in sessions for another PC
 python scripts/import_sessions.py --in transfer   inject them into this PC's Brave profiles
+python scripts/setup_machine.py --xlsx FILE       a fresh clone -> a working fleet, in one command
 ```
 
 Accounts Facebook has disabled are marked during login and skipped afterwards;
@@ -167,6 +168,7 @@ Accounts Facebook has disabled are marked during login and skipped afterwards;
 | `INSTALL.bat` | `scripts/diagnose_and_fix.py` | Install or repair dependencies; `--check` only reports |
 | `SERVER.bat` | `server.py` | Web app server on `127.0.0.1:8000`, plus the `frpc` tunnel when `tools/frp/frpc.toml` exists |
 | | `scripts/set_web_password.py` | Set the web app password; `--check` reports whether one exists |
+| | `scripts/setup_machine.py` | Import roster, provision profiles, inject sessions, check logins - in order |
 | | `scripts/export_sessions.py` | Export each profile's Facebook session as portable JSON |
 | | `scripts/import_sessions.py` | Inject exported sessions into this PC's Brave profiles |
 | | `verify.py` | Proof harness: compiles every module, imports all of them, builds the window and asserts the callback wiring |
