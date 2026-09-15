@@ -32,3 +32,6 @@ web/dist/
 tools/frp/frpc.toml
 tools/frp/*.exe
 tools/frp/*.zip
+
+# Exported Facebook sessions - plaintext, never commit
+transfer/
