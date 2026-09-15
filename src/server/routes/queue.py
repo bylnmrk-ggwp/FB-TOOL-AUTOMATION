@@ -153,6 +153,19 @@ def run(request: Request) -> dict:
     return ACCEPTED
 
 
+@router.post("/queue/stop", status_code=202)
+def stop(request: Request) -> dict:
+    """End the running queue after the item in flight.
+
+    Answers 202 even with nothing running: the operator's intent - do not
+    keep going - is satisfied either way, and a phone that pressed Stop
+    twice should not see an error for the second press.
+    """
+    request.app.state.manager.stop_queue()
+    push_state(request)
+    return ACCEPTED
+
+
 @router.post("/queue/watch", status_code=202)
 def watch(body: WatchBody, request: Request) -> dict:
     """Opens a visible Brave window per active profile on the PC - the page

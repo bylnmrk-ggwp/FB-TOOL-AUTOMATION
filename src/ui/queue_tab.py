@@ -22,6 +22,7 @@ class QueueTab(ttk.Frame):
 
         self._items: list[dict] = []
         self._on_run_queue_cb = None
+        self._on_stop_queue_cb = None
         self._on_watch_url_cb = None
         self._on_stop_watch_cb = None
         # Track login status per profile: profile_name → True (logged in) / False (not) / None (unknown)
@@ -410,6 +411,12 @@ class QueueTab(ttk.Frame):
                                   style="Accent.TButton")
         self.run_btn.grid(row=0, column=3, padx=(6, 0), pady=2, sticky="e")
 
+        # Only usable while a run is going: a queue that has started is
+        # otherwise unstoppable short of closing the app.
+        self.stop_btn = ttk.Button(btn_frame, text="Stop Queue",
+                                   command=self._on_stop_queue, state="disabled")
+        self.stop_btn.grid(row=0, column=4, padx=(6, 0), pady=2, sticky="e")
+
         # ── Live watch: open every active profile on a pasted URL ─────
         watch_frame = ttk.Frame(inner)
         watch_frame.pack(fill="x", **pad)
@@ -486,6 +493,23 @@ class QueueTab(ttk.Frame):
 
     def set_on_run_queue(self, callback):
         self._on_run_queue_cb = callback
+
+    def set_on_stop_queue(self, callback):
+        """callback() - end the run after the item currently in flight."""
+        self._on_stop_queue_cb = callback
+
+    def _on_stop_queue(self):
+        """Ask the worker to stop, and say so rather than looking frozen.
+
+        The button goes disabled straight away: the run does not end on the
+        click, it ends when the action in flight finishes, and a button that
+        still looks pressable invites a second press.
+        """
+        self.stop_btn.config(state="disabled")
+        self.set_status("Stopping after the current item...")
+        callback = getattr(self, "_on_stop_queue_cb", None)
+        if callback:
+            callback()
 
     def set_on_watch_url(self, callback):
         self._on_watch_url_cb = callback
@@ -605,6 +629,7 @@ class QueueTab(ttk.Frame):
         self.clear_btn.config(state=state)
         self.run_btn.config(state="disabled" if running else
                             ("normal" if self._items else "disabled"))
+        self.stop_btn.config(state="normal" if running else "disabled")
 
     def update_progress(self, current: int, total: int):
         if total > 0:

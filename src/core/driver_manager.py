@@ -143,6 +143,10 @@ class DriverManager:
         self._batch_size: int = cfg.get_setting("batch_size", 7)  # Balanced: not too slow, not too many
         # Tracks whether a queue/batch is actively running
         self._batch_running: bool = False
+        # Set from the UI thread to end a queue run early. Not a cmd_queue
+        # message: the worker processes one command at a time, so a running
+        # batch would not read it until it had already finished.
+        self._stop_batch = threading.Event()
         # Response queue for user interaction (e.g., image preview selection)
         self._user_response_queue: Queue = Queue()
 
@@ -355,6 +359,17 @@ class DriverManager:
         self.cmd_queue.put({"type": "watch_url", "url": url,
                             "minutes": minutes,
                             "profile_names": profile_names})
+
+    def stop_queue(self):
+        """End the running queue after the item in flight.
+
+        Sets a flag rather than queueing a command, because the worker is
+        inside _do_batch and will not read the queue until that returns. The
+        action already under way finishes - killing a half-posted comment
+        would leave Facebook in a state nothing here can see - and nothing
+        after it starts.
+        """
+        self._stop_batch.set()
 
     def stop_watch(self):
         """Close the live-watch windows."""
@@ -3426,6 +3441,7 @@ class DriverManager:
           5. Teardown contexts, report, cleanup
         """
         self._batch_running = True
+        self._stop_batch.clear()
 
         from src.storage import state_cache
 
@@ -3574,6 +3590,9 @@ class DriverManager:
         handled: set[str] = set()  # profiles that actually produced a result
 
         for batch_idx, batch_profiles in enumerate(batches):
+            if self._stop_batch.is_set():
+                self.log(f"⏹ Stopped: {batch_idx} of {len(batches)} batch(es) run")
+                break
             self.log(f"── Batch {batch_idx + 1}/{len(batches)}: "
                      f"{', '.join(batch_profiles)} ──")
 
@@ -3815,6 +3834,9 @@ class DriverManager:
             comment_delays = cfg.get_comment_delays()
 
             for i, (idx, item) in enumerate(batch_items):
+                if self._stop_batch.is_set():
+                    self.log("  ⏹ Stop requested - no further items in this batch")
+                    break
                 # Delay between actions (except before the first one)
                 if i > 0:
                     delay = random.uniform(
@@ -3952,7 +3974,9 @@ class DriverManager:
             self.log(f"↻ Auto re-login: {restored}/{len(names)} restored")
         self.log(f"Batch complete: {success_count}/{total} successful")
 
-        if watch_items:
+        if watch_items and self._stop_batch.is_set():
+            self.log("⏹ Stopped before the watch - nothing is left on the post")
+        elif watch_items:
             # The post is already open in every context, but those close with
             # the batch; _do_watch reopens them with media interception off,
             # which is what keeps a live video actually playing.

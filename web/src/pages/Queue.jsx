@@ -67,6 +67,10 @@ export default function Queue() {
     if (!window.confirm(`Run ${queue.length} queued item${queue.length === 1 ? '' : 's'} on the PC now?`)) return
     wrap(actions.queueRun)
   }
+  const stop = () => {
+    if (!window.confirm('Stop the run after the item currently in flight?')) return
+    wrap(actions.queueStop)
+  }
   const clear = () => {
     if (!queue.length) return
     if (!window.confirm(`Remove all ${queue.length} queued items?`)) return
@@ -183,6 +187,11 @@ export default function Queue() {
           <button type="button" className="btn accent" disabled={!queue.length || busy || running} onClick={start}>
             {batch ? `Running ${batch.current}/${batch.total}…` : 'Start Queue'}
           </button>
+          {running && (
+            <button type="button" className="btn" disabled={busy} onClick={stop}>
+              Stop Queue
+            </button>
+          )}
           {running && !batch && <span className="muted small">Another run is active.</span>}
         </div>
       </section>

@@ -321,6 +321,7 @@ export const actions = {
   queueRemove(id) { return command('/api/queue/remove', { id }) },
   queueClear() { return command('/api/queue/clear', {}) },
   queueRun() { return command('/api/queue/run', {}) },
+  queueStop() { return command('/api/queue/stop', {}) },
   // Opens a visible Brave window per profile on the PC, which may be a room
   // away - the page says so before the tap.
   queueWatch({ url, minutes, profile_names } = {}) {
