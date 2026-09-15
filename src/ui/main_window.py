@@ -259,6 +259,23 @@ class MainWindow(tk.Tk):
         # Window background
         self.configure(bg=c["bg"])
 
+    def _open_workspace(self):
+        """Open the accounts workspace, or raise the one already open.
+
+        One window only: a second copy would show the same accounts with its
+        own stale selection, and closing "the" workspace would then be
+        ambiguous.
+        """
+        existing = getattr(self, "_workspace", None)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            existing.refresh()
+            return
+        from src.ui.workspace import AccountsWorkspace
+        self._workspace = AccountsWorkspace(self, on_open=self.manager.start_profile)
+
     def _toggle_theme(self):
         mode = theme.toggle()
         from src.storage import config_manager as cfg
@@ -326,6 +343,13 @@ class MainWindow(tk.Tk):
             topbar, text="Dark" if theme.current == "light" else "Light",
             command=self._toggle_theme, style="Header.TButton")
         self.theme_btn.pack(side="right", padx=(0, S["md"]))
+        # The accounts themselves, as a workspace rather than a roster: the
+        # Profiles list exists to maintain the fleet, not to reach one
+        # account out of forty-nine quickly.
+        self.workspace_btn = ttk.Button(topbar, text="Accounts",
+                                        command=self._open_workspace,
+                                        style="Header.TButton")
+        self.workspace_btn.pack(side="right", padx=(0, S["md"]))
         # Log Out closes every profile's browser mid-run; it does not sit
         # flush against the theme toggle.
         self.logout_btn = ttk.Button(topbar, text="Log Out",
