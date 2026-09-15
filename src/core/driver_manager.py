@@ -4744,12 +4744,13 @@ class DriverManager:
     # starves its own players: the pages open but the video never starts.
     WATCH_OPEN_AT_ONCE = 8
 
-    # What one watching page costs in RAM, measured on this fleet: a Chromium
-    # renderer decoding a live, with images off and a 96 MB heap cap. The
-    # watch refuses to open more pages than the machine can hold, because a
-    # machine in swap plays no video at all - 46 visible pages took 14 minutes
-    # to open and 22 of them ever played.
-    WATCH_PAGE_MB = 180
+    # What one watching page costs in RAM, measured rather than guessed: 51
+    # pages held 16,061 MB of working set across 110 browser processes, which
+    # is 315 MB each. The first guess of 180 MB let the watch open nearly
+    # twice what the machine could hold - 94% memory load, 28 of 51 playing -
+    # so the cap has to be generous, not optimistic. A machine in swap plays
+    # no video at all.
+    WATCH_PAGE_MB = 320
     # Never eat the last of the machine: leave this much for Windows and the
     # app itself.
     WATCH_RESERVE_MB = 2048
