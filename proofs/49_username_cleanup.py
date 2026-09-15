@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))  # noqa: F821 - verify.py injects ROOT
 
 step("username cleanup")  # noqa: F821
 
-from src.storage.roster_sheet import clean_username, parse_accounts  # noqa: E402
+from src.storage.roster_import import clean_username, parse_accounts  # noqa: E402
 
 CASES = [
     ("n38tq48zln8@dispmail.org✅", "n38tq48zln8@dispmail.org", "trailing tick emoji"),
@@ -50,7 +50,7 @@ names = [a["username"] for a in parsed]
 if names != ["dup@dispmail.org", "dup@dispmail.org"]:
     failures.append(f"username cleanup: parse_accounts gave {names}")  # noqa: F821
 # The row carrying the password must be the one that survives an upsert, so
-# the cleaned pair has to be ordered as the sheet had them.
+# the cleaned pair has to be ordered as the workbook had them.
 if parsed and parsed[-1].get("password") != "secret":
     failures.append("username cleanup: the password row must come last so it wins the upsert")  # noqa: F821
 

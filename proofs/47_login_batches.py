@@ -20,20 +20,10 @@ step("login batches")  # noqa: F821
 
 from src.core.driver_manager import DriverManager  # noqa: E402
 from src.storage import database as db  # noqa: E402
-import src.storage.sheet_status as sheet_status  # noqa: E402
 from src.storage import config_manager as cfg  # noqa: E402
 
 _USERS = [f"verify_b{i}@example.com" for i in range(12)]
-_real_writer = sheet_status.SheetWriter
 _real_path = cfg.get_profile_path
-
-
-class _NoWriter:
-    on = False
-    error = ""
-
-    def mark_in_progress(self, username):
-        return False
 
 
 try:
@@ -41,7 +31,6 @@ try:
         db.upsert_account(900 + i, f"B{i}", u, password="x")
         db.link_account(u, f"VerifyProfile{i}")
 
-    sheet_status.SheetWriter = lambda *a, **k: _NoWriter()
     # Every VerifyProfile* resolves; anything else (the 'Profile 7' case) does not.
     cfg.get_profile_path = lambda name: ("C:/verify/" + name) if name.startswith("VerifyProfile") else None
 
@@ -122,9 +111,8 @@ try:
         failures.append("unregistered profile must not open a browser")  # noqa: F821
     # An account already logged in is skipped, not driven again: opening a
     # browser for it costs a minute and risks a fresh checkpoint on a session
-    # that was working. Both spellings count - the database's own 'ok' and
-    # the sheet's "LOGGED IN" cell - but never "NOT LOGGED IN", which
-    # contains the same words.
+    # that was working. The database's own 'ok' is the only thing that skips
+    # one; a row with no recorded verdict is still attempted.
     pauses.clear(); attempts.clear()
     while True:
         try:
@@ -133,10 +121,6 @@ try:
             break
     db.link_account(_USERS[1], "VerifyProfile1")
     db.set_account_status(_USERS[1], "ok")
-    conn = db._get_conn()
-    conn.execute("UPDATE accounts SET sheet_status='LOGGED IN' WHERE username=?", (_USERS[2],))
-    conn.execute("UPDATE accounts SET sheet_status='NOT LOGGED IN' WHERE username=?", (_USERS[3],))
-    conn.commit()
     asyncio.run(m._do_login_accounts({"type": "login_accounts",
                                       "usernames": [_USERS[1], _USERS[2], _USERS[3]]}))
     tail2 = []
@@ -149,15 +133,14 @@ try:
     skipped_users = [u for u, _ in res2.get("skipped", [])]
     if _USERS[1] not in skipped_users:
         failures.append(f"login batches: status 'ok' must be skipped, got {res2.get('skipped')}")  # noqa: F821
-    if _USERS[2] not in skipped_users:
-        failures.append(f"login batches: sheet 'LOGGED IN' must be skipped, got {res2.get('skipped')}")  # noqa: F821
+    if _USERS[2] in skipped_users:
+        failures.append("login batches: a row with no verdict must still be attempted")  # noqa: F821
     if _USERS[3] in skipped_users:
-        failures.append("login batches: 'NOT LOGGED IN' must still be attempted")  # noqa: F821
+        failures.append("login batches: a row with no verdict must still be attempted")  # noqa: F821
     if _USERS[3] not in [u for u, _ in res2.get("logged_in", [])]:
         failures.append(f"login batches: the not-logged-in account was not attempted: {res2}")  # noqa: F821
 
 finally:
-    sheet_status.SheetWriter = _real_writer
     cfg.get_profile_path = _real_path
     conn = db._get_conn()
     conn.execute("DELETE FROM accounts WHERE username LIKE 'verify_b%@example.com'")

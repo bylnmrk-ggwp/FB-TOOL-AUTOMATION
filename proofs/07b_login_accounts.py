@@ -2,10 +2,9 @@
 _do_login_accounts walks the roster one account at a time.
 
 Runs under verify.py with globals `failures`, `step` and `ROOT`. The handler
-is driven with a stubbed re-login (no browser), a stubbed Brave preflight
-and a SheetWriter replaced by an inert stand-in, so nothing here touches
-Playwright or the network. The verify_*@example.com rows it inserts are
-deleted in a finally block, and the real SheetWriter is put back.
+is driven with a stubbed re-login (no browser) and a stubbed Brave
+preflight, so nothing here touches Playwright or the network. The
+verify_*@example.com rows it inserts are deleted in a finally block.
 """
 import sys
 
@@ -17,7 +16,6 @@ import queue as _q  # noqa: E402
 
 from src.core.driver_manager import DriverManager as _DM  # noqa: E402
 from src.storage import database as _db  # noqa: E402
-import src.storage.sheet_status as _ss  # noqa: E402
 from src.storage import config_manager as _cfg  # noqa: E402
 
 _m = _DM()
@@ -42,7 +40,7 @@ def _drain():
             return out
 
 
-# Stubs: no browser, no Brave check, no sheet.
+# Stubs: no browser, no Brave check.
 _calls = []
 
 
@@ -51,19 +49,9 @@ async def _fake_relogin(profile_name, **kwargs):
     return profile_name == "P-ok"
 
 
-class _NoWriter:
-    on = False
-    error = "stubbed"
-
-    def mark_in_progress(self, _username):
-        return False
-
-
 _m._relogin_profile = _fake_relogin
 _m._brave_running = lambda: False
 _m._watch_autos = {}
-_real_writer = _ss.SheetWriter
-_ss.SheetWriter = lambda *a, **k: _NoWriter()
 _run = {"type": "login_accounts",
         "usernames": ["verify_ok@example.com", "verify_np@example.com",
                       "ghost@example.com"]}
@@ -87,7 +75,6 @@ try:
     _aio.run(_m._do_login_accounts({"type": "login_accounts", "usernames": []}))
     _refused_empty = _drain()
 finally:
-    _ss.SheetWriter = _real_writer
     _db._get_conn().execute(
         "DELETE FROM accounts WHERE username LIKE 'verify_%@example.com'")
     _db._get_conn().commit()

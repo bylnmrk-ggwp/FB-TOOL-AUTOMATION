@@ -1,6 +1,6 @@
 """Pure reads behind /api/state and /api/accounts.
 
-Nothing here touches the manager, the sheet or a browser. These are the
+Nothing here touches the manager or a browser. These are the
 database and config reads the Tk tabs made piecemeal (ProfilesTab's roster
 count and "logged in only" filter, the dashboard's pending count), gathered
 in one place so a route, the event bridge and a proof all get the same
@@ -74,7 +74,6 @@ def accounts_rows() -> list[dict]:
             "linked_profile": profile,
             "status": acct.get("status") or "",
             "status_reason": acct.get("status_reason") or "",
-            "sheet_status": acct.get("sheet_status") or "",
             "logged_in": acct.get("status") == "ok",
             "restricted": profile in paused,
         })
@@ -89,7 +88,6 @@ def accounts_rows() -> list[dict]:
             "linked_profile": name,
             "status": "",
             "status_reason": "",
-            "sheet_status": "",
             "logged_in": False,
             "restricted": name in paused,
         })

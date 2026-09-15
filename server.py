@@ -1,4 +1,4 @@
-"""Web entry point: the same DriverManager + SheetWatcher src/app.py builds,
+"""Web entry point: the same DriverManager src/app.py builds,
 driven from a phone through FastAPI instead of a Tk window.
 
     python server.py [--host 127.0.0.1] [--port 8000] [--dev]
@@ -25,7 +25,6 @@ from src.server.app import create_app  # noqa: E402
 from src.server.events import EventBridge  # noqa: E402
 from src.server.logbuf import LogRing  # noqa: E402
 from src.server.state import AppState  # noqa: E402
-from src.storage.roster_sheet import SheetWatcher  # noqa: E402
 
 NO_PASSWORD_EXIT = 2
 
@@ -61,16 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     manager = DriverManager()
     state = AppState(version=_version())
     logring = LogRing()
-    watcher = SheetWatcher()
-    bridge = EventBridge(manager, watcher, state, logring)
+    bridge = EventBridge(manager, state, logring)
     # Every worker line goes to the ring, the daily file and every phone -
     # what manager.log = log_tab.write did for the window.
     manager.log = lambda message: bridge.broadcast({"type": "log", **logring.write(message)})
-    app = create_app(manager, watcher, state=state, logring=logring,
+    app = create_app(manager, state=state, logring=logring,
                      bridge=bridge, dev=args.dev)
 
     manager.start()
-    watcher.start()
     bridge.start()
     logring.write("✓ FB Tool web server started")
     logring.write(f"Log file: {logring.log_path}")
@@ -79,10 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     finally:
-        # Reverse order of start: no more results to forward, no more
-        # sheet polls, then the worker closes its browser, then the file.
+        # Reverse order of start: no more results to forward, then the
+        # worker closes its browser, then the file.
         bridge.stop()
-        watcher.stop()
         manager.stop()
         logring.close()
     return 0

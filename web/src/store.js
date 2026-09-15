@@ -34,7 +34,7 @@ function initialPage() {
 export const initialState = {
   auth: 'unknown',            // 'unknown' | 'in' | 'out'
   connected: false,           // websocket open
-  server: null,               // AppState dict from GET /api/state: run, last_run_summary, pending_input, login_run_active, scan_active, sheet_last_ok, system, bridge_alive, version
+  server: null,               // AppState dict from GET /api/state: run, last_run_summary, pending_input, login_run_active, scan_active, system, bridge_alive, version
   counts: null,               // {total, logged_in, pending, pending_unlinked, disabled, profiles, active}
   accounts: [],               // rows from GET /api/accounts (data.accounts_rows keys) + client-only `live` (true/false/undefined from login_scan_progress / login_accounts_progress)
   selected: new Set(),        // usernames (or 'profile:<name>' for unlinked profiles)
@@ -230,7 +230,7 @@ export const actions = {
   async refreshAccounts() {
     let rows
     try { rows = (await api.get('/api/accounts')).rows ?? [] } catch { return }
-    // Keep the client-only live verdicts across a refetch: a sheet sync
+    // Keep the client-only live verdicts across a refetch: a refresh
     // mid-run must not blank the rows the run already reported.
     const live = new Map(state.accounts.filter(a => a.live !== undefined).map(a => [rowKey(a), a.live]))
     const accounts = live.size ? rows.map(r => live.has(rowKey(r)) ? { ...r, live: live.get(rowKey(r)) } : r) : rows

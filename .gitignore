@@ -35,3 +35,9 @@ tools/frp/*.zip
 
 # Exported Facebook sessions - plaintext, never commit
 transfer/
+
+# Windows folder metadata, MCP scratch, dead parallel-login output
+desktop.ini
+.playwright-mcp/
+.parallel-backup/
+checkpoint_probe.png

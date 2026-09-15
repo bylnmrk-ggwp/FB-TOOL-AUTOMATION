@@ -91,7 +91,7 @@ const items = [{ id: 'q1', profile_name: 'P1', action_type: 'group',
                  post_url: 'http://example.com/p', group_name: 'G' }]
 const ev = { type: 'state', run: null, last_run_summary: '', queue: items,
              pending_input: null, login_run_active: false, scan_active: false,
-             sheet_last_ok: 0, system: {}, bridge_alive: true, version: 'dev',
+             system: {}, bridge_alive: true, version: 'dev',
              counts: { total: 1 } }
 const s1 = reduce(initialState, ev)
 ok(s1.queue.length === 1 && s1.queue[0].id === 'q1',

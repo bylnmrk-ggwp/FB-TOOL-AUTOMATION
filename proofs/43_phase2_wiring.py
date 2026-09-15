@@ -157,8 +157,8 @@ try:
     _evmod.cfg.save_setting = lambda *_a, **_k: None
     _uploads.UPLOAD_DIR = _tmp / "uploads"
     _state = _AppState()
-    _bridge = _EventBridge(_m, None, _state, _ring)
-    _app = _appmod.create_app(_m, None, state=_state, logring=_ring,
+    _bridge = _EventBridge(_m, _state, _ring)
+    _app = _appmod.create_app(_m, state=_state, logring=_ring,
                               bridge=_bridge, dev=False,
                               web_dist=_tmp / "no-such-dist")
 

@@ -35,19 +35,18 @@ _OK, _PEND, _DIS = ("verify_s1_ok@example.com", "verify_s1_pending@example.com",
                     "verify_s1_disabled@example.com")
 _PROFILE = "verify-s1-profile"       # linked, but not a saved Brave profile
 _ROW_KEYS = {"sheet_no", "facebook_name", "username", "gmail", "linked_profile",
-             "status", "status_reason", "sheet_status", "logged_in", "restricted"}
+             "status", "status_reason", "logged_in", "restricted"}
 _STATE_KEYS = {"run", "last_run_summary", "queue", "pending_input",
                "login_run_active", "scan_active", "provision_active",
-               "sheet_last_ok", "system",
+               "system",
                "bridge_alive", "version"}
 
 # -- data.py ---------------------------------------------------------------
 _before = _data.counts()
 try:
-    # The logged-in one carries the sheet's LOGGED IN verdict: a blank
-    # sheet_status is what makes a row pending, so without it the ok row
-    # would be counted twice (logged in and pending).
-    _db.upsert_account(9001, "S1 OK", _OK, password="x", sheet_status="LOGGED IN")
+    # set_account_status below fills status, which is what makes the row
+    # stop counting as pending: a blank status is the pending set.
+    _db.upsert_account(9001, "S1 OK", _OK, password="x")
     _db.link_account(_OK, _PROFILE)
     _db.set_account_status(_OK, "ok")
     _db.upsert_account(9002, "S1 PENDING", _PEND, password="x")

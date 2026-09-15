@@ -116,11 +116,10 @@ Full reference: [docs/delay-settings.md](docs/delay-settings.md).
 
 ## Account roster
 
-The roster lives in a Google Sheet (id in `src/storage/sheets_api.py`,
-override with `SHEETS_SHEET_ID`). The app reads it through a service account
-whose key sits at `.secrets/sheets-service-account.json` (gitignored; override
-with `SHEETS_SERVICE_ACCOUNT`). Columns are matched by **header label**, never
-by position, so the sheet can be reordered:
+The roster lives in the local SQLite database. It is filled from an `.xlsx`
+workbook by `scripts/import_accounts.py`, and thereafter the database is the
+source of truth. Columns are matched by **header label**, never by position,
+so the workbook can be reordered:
 
 | header | database column |
 |---|---|
@@ -131,29 +130,26 @@ by position, so the sheet can be reordered:
 | `GMAIL` | `gmail` |
 | `PASS FOR GMAIL` | `gmail_password` |
 | `NUMBER` | `number` |
-| `STATUS` | written *to* the sheet from `status` / `status_reason`; never imported |
 
-`linked_profile`, `status` and `status_reason` are owned by this machine and a
-sync never touches them.
-
-While the app runs it polls the sheet every 20 s and applies any change to the
-local database; the Log reports `Roster synced from sheet: N new, M refreshed`.
-Google offers no push channel to a desktop app, so "live" means within one poll.
+`linked_profile`, `status` and `status_reason` are owned by this machine and an
+import never touches them. A blank `status` is the "pending" set the dashboard
+counts; `record_login_check()` is the only thing that fills it.
 
 The database stores the two password columns in plaintext at the operator's
 request. Treat `~/.autoshare/autoshare.db` and its `.bak-*` copies as
 credentials.
 
 ```bat
-IMPORT_ACCOUNTS.bat                              one-shot sync, sheet -> database
-python scripts/import_accounts.py --dry-run      show what a sync would do
-python scripts/import_accounts.py --xlsx FILE    import from a local .xlsx instead
+python scripts/import_accounts.py --xlsx FILE    import a workbook into the database
+python scripts/import_accounts.py --xlsx FILE --dry-run
+                                                 show what an import would do
 python scripts/provision_profiles.py --dry-run   plan Brave profiles, then run without --dry-run
 python scripts/login_accounts.py                 assisted login, one visible browser at a time
 python scripts/login_accounts.py --unattended --batch 10 --pause 20
                                                  same, no prompts: skips any checkpoint, pauses between batches
 python scripts/provision_profiles.py --rename-from-roster
-python scripts/sync_sheet_status.py              rewrite the sheet's STATUS column from the database
+python scripts/export_sessions.py --out transfer  export signed-in sessions for another PC
+python scripts/import_sessions.py --in transfer   inject them into this PC's Brave profiles
 ```
 
 Accounts Facebook has disabled are marked during login and skipped afterwards;
@@ -171,7 +167,8 @@ Accounts Facebook has disabled are marked during login and skipped afterwards;
 | `INSTALL.bat` | `scripts/diagnose_and_fix.py` | Install or repair dependencies; `--check` only reports |
 | `SERVER.bat` | `server.py` | Web app server on `127.0.0.1:8000`, plus the `frpc` tunnel when `tools/frp/frpc.toml` exists |
 | | `scripts/set_web_password.py` | Set the web app password; `--check` reports whether one exists |
-| | `scripts/sync_sheet_status.py` | Rewrite the sheet's STATUS column (located by header) from the database |
+| | `scripts/export_sessions.py` | Export each profile's Facebook session as portable JSON |
+| | `scripts/import_sessions.py` | Inject exported sessions into this PC's Brave profiles |
 | | `verify.py` | Proof harness: compiles every module, imports all of them, builds the window and asserts the callback wiring |
 
 ## Layout
@@ -193,7 +190,7 @@ src/core/            DriverManager (one asyncio worker behind a command queue)
                      FacebookAutomation (Playwright driving)
                      memory_tracker
 src/storage/         config_manager, SQLite database, storage_state cache,
-                     sheets_api (Google Sheets REST), roster_sheet (sheet -> accounts sync)
+                     roster_import (workbook rows -> accounts)
 src/server/          FastAPI app: auth, routes, EventBridge (worker results -> WebSocket),
                      AppState, log ring; serves web/dist
 src/ui/              two-tab window over five tab classes, theme, effects

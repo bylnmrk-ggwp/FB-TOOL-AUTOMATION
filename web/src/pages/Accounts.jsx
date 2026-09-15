@@ -7,19 +7,18 @@ const LS = { search: 'fbtool.accountsSearch', filter: 'fbtool.accountsFilter' }
 const read = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v } catch { return d } }
 const write = (k, v) => { try { localStorage.setItem(k, v) } catch { /* private window: nothing to persist to */ } }
 
-// Same precedence as mockup/react/src/data.js statusOf (and the Tk
-// AccountsPage): the sheet-owned STATUS cell first, then the share
-// restriction, then the live verdict of a running scan/login, then the
-// stored verdict. A Brave profile no roster row links to has no account
-// to be logged in as, so it is its own kind.
+// Same precedence as the Tk AccountsPage: a disabled account first, then
+// the share restriction, then the live verdict of a running scan/login,
+// then the stored verdict. A row with no recorded status has never been
+// attempted, which is what 'Pending' means. A Brave profile no roster row
+// links to has no account to be logged in as, so it is its own kind.
 export function statusOf(a) {
-  if (a.sheet_status === 'DISABLED') return { kind: 'disabled', text: '✕ Disabled' }
-  if (a.sheet_status === 'LOGGING IN') return { kind: 'running', text: '◌ Logging in…' }
+  if (a.status === 'disabled') return { kind: 'disabled', text: '✕ Disabled' }
   if (a.restricted) return { kind: 'warn', text: '⚠ Restricted' }
   const loggedIn = a.live === undefined ? a.logged_in : a.live
   if (loggedIn) return { kind: 'ok', text: '● Logged in' }
   if (a.username === null || a.username === undefined) return { kind: 'off', text: '○ No account' }
-  if (!a.sheet_status) return { kind: 'pending', text: '○ Pending' }
+  if (!a.status) return { kind: 'pending', text: '○ Pending' }
   return { kind: 'off', text: '○ Not logged in' }
 }
 
@@ -105,7 +104,7 @@ export default function Accounts() {
   }
 
   const loginSelected = () => {
-    const usernames = checked.filter(a => a.username && a.linked_profile && a.sheet_status !== 'DISABLED').map(a => a.username)
+    const usernames = checked.filter(a => a.username && a.linked_profile && a.status !== 'disabled').map(a => a.username)
     if (usernames.length === 0) { say('None of the checked rows has a Brave profile to log in with'); return }
     const skipped = checked.length - usernames.length
     const note = skipped ? `\n${plural(skipped, 'row')} skipped (no Brave profile or disabled).` : ''

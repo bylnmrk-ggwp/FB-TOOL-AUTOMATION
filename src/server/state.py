@@ -44,7 +44,6 @@ class AppState:
     # command - it is scripts/provision_profiles.py run in a thread - so it
     # needs its own flag rather than riding on `run`.
     provision_active: bool = False
-    sheet_last_ok: float = 0.0          # SheetWatcher.last_ok; 0.0 before the first poll
     system: dict = field(default_factory=dict)   # from manager.get_memory_stats()
     bridge_alive: bool = True
     version: str = "dev"

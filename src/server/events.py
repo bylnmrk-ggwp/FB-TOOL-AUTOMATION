@@ -4,7 +4,7 @@ The desktop app learns what the worker did by polling manager.poll_result()
 every 100 ms on the Tk thread and switching on each result's "type" in
 MainWindow._handle_result. Most of that method paints widgets; the rest -
 the log lines, the batch summary, the "a run is on" state the buttons
-expressed, answering the worker's image prompt, applying sheet rows to the
+expressed, answering the worker's image prompt, applying results to the
 database - is what a phone needs as well. This thread does exactly that
 remaining part, branch for branch (the _on_<rtype> methods below follow
 _handle_result's order so the two can be read side by side), and hands every
@@ -12,7 +12,7 @@ result on to the WebSocket subscribers verbatim so the frontend switches on
 the same rtype strings. DriverManager's contract is untouched: this reads
 result dicts and calls the helpers the window already called.
 
-Threads: results and sheet rows are handled on this thread; routes call
+Threads: results are handled on this thread; routes call
 answer_input() from the event loop; the fan-out delivers into asyncio queues
 through the loop's call_soon_threadsafe. One re-entrant lock guards every
 AppState mutation so a route's answer and the timeout's cancel never race.
@@ -29,7 +29,6 @@ from src.server import data
 from src.server.logbuf import LogRing
 from src.server.state import LAST_RUN_SUMMARY_KEY, AppState, RunState
 from src.storage import config_manager as cfg
-from src.storage import roster_sheet
 
 # Every rtype MainWindow._handle_result switches on (24, in its order), plus
 # the two the login run emits that the Tk window never grew a branch for.
@@ -96,11 +95,10 @@ def _run_kind(rtype: str) -> str:
 
 
 class EventBridge(threading.Thread):
-    def __init__(self, manager, watcher, state: AppState, logring: LogRing,
+    def __init__(self, manager, state: AppState, logring: LogRing,
                  poll_ms: int = 100):
         super().__init__(name="EventBridge", daemon=True)
         self.manager = manager
-        self.watcher = watcher
         self.state = state
         self.logring = logring
         self._poll_s = max(poll_ms, 1) / 1000.0
@@ -516,49 +514,18 @@ class EventBridge(threading.Thread):
         else:
             self._log(f"Login run failed: {r.get('error', 'Unknown error')}")
 
-    # ── Sheet events ──────────────────────────────────────
-
-    def handle_sheet_event(self, kind: str, payload) -> None:
-        """_drain_sheet_events, one event at a time: the watcher only fetches
-        and parses; the database write happens here, on this thread."""
-        with self._lock:
-            if kind == "rows":
-                try:
-                    inserted, updated = roster_sheet.apply(payload)
-                except Exception as e:
-                    self._log(f"Roster sync failed to apply: {e}")
-                    return
-                self._log(f"Roster synced from sheet: {inserted} new, "
-                          f"{updated} refreshed ({len(payload)} rows)")
-                self._read_sheet_last_ok()
-                self.broadcast({"type": "accounts_changed"})
-                self._broadcast_state()
-            elif kind == "error":
-                self._log(f"Sheet sync error: {payload}")
-
-    def _read_sheet_last_ok(self) -> None:
-        if self.watcher is None:
-            return
-        try:
-            self.state.sheet_last_ok = float(getattr(self.watcher, "last_ok", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            pass
-
     # ── System readout ────────────────────────────────────
 
     def refresh_system(self) -> None:
-        """manager.get_memory_stats() -> state.system, plus the watcher's
-        last_ok - it advances on every successful poll, changed rows or not,
-        and the dashboard shows it as "synced N s ago"."""
+        """manager.get_memory_stats() -> state.system."""
         with self._lock:
             before = self.state.to_dict()
             try:
                 stats = self.manager.get_memory_stats() or {}
                 self._system_error = None
             except Exception as e:
-                # Once per distinct failure, as SheetWatcher does: this runs
-                # every two seconds and a log line each time would bury the
-                # run's own lines.
+                # Once per distinct failure: this runs every two seconds
+                # and a log line each time would bury the run's own lines.
                 stats = {}
                 msg = f"{type(e).__name__}: {e}"
                 if msg != self._system_error:
@@ -572,7 +539,6 @@ class EventBridge(threading.Thread):
                 "process_count": stats.get("process_count", 0),
                 "peak_browser_mb": stats.get("peak_browser_mb", 0),
             }
-            self._read_sheet_last_ok()
             if self.state.to_dict() != before:
                 self._broadcast_state()
 
@@ -629,19 +595,6 @@ class EventBridge(threading.Thread):
                           f"{type(e).__name__}: {e}")
                 self._trace_to_file()
             result = self.manager.poll_result()
-
-        events = getattr(self.watcher, "events", None) if self.watcher is not None else None
-        while events is not None:
-            try:
-                kind, payload = events.get_nowait()
-            except Exception:
-                break
-            try:
-                self.handle_sheet_event(kind, payload)
-            except Exception as e:
-                self._log(f"{_CROSS} bridge error in sheet {kind}: "
-                          f"{type(e).__name__}: {e}")
-                self._trace_to_file()
 
         now = time.monotonic()
         if now - self._system_at >= SYSTEM_EVERY_S:

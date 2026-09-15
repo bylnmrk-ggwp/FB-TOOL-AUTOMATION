@@ -181,7 +181,7 @@ async def _attempt(pw, wid: int, account: dict, password: str,
 
 
 async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
-                  twofa_timeout: float, retries: int, live, results: list,
+                  twofa_timeout: float, retries: int, results: list,
                   lock: asyncio.Lock):
     while True:
         try:
@@ -191,7 +191,6 @@ async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
         label = account.get("facebook_name") or account["username"]
         started = time.strftime("%H:%M:%S")
         print(f"[w{wid} {started}] start {label}")
-        live.mark_in_progress(account["username"])
 
         def log(m, _l=label, _w=wid):
             print(f"    [w{_w}] {m}")
@@ -233,7 +232,6 @@ async def _worker(wid: int, q: asyncio.Queue, pw, creds: dict, workroot: Path,
             db.set_account_status(account["username"], "", la.short_reason(msg))
         elif msg == la.DISABLED:
             db.set_account_status(account["username"], "disabled")
-        live.mark_result(account["username"], ok, msg)
 
         print(f"[w{wid} {time.strftime('%H:%M:%S')}] {'OK' if ok else 'FAIL'} "
               f"{label}: {msg}")
@@ -285,9 +283,6 @@ async def run(args) -> int:
     workroot = Path(args.work_dir)
     workroot.mkdir(parents=True, exist_ok=True)
 
-    live = la.Live(not args.no_live_sheet)
-    if live.on:
-        print(f"Live sheet updates: {live.rows} row(s) matched.")
 
     results: list = []
     q: asyncio.Queue = asyncio.Queue()
@@ -300,7 +295,7 @@ async def run(args) -> int:
         lock = asyncio.Lock()
         await asyncio.gather(*[
             _worker(i + 1, q, pw, creds, workroot, args.twofa_timeout,
-                    args.retries, live, results, lock)
+                    args.retries, results, lock)
             for i in range(min(args.workers, len(todo)))])
     finally:
         await pw.stop()
@@ -327,13 +322,6 @@ async def run(args) -> int:
             print(f"Integrity: none of the {len(todo)} targeted profiles lost "
                   f"anything it had before the run.")
 
-    if live.on:
-        try:
-            import sync_sheet_status as sync
-            sync.main([])
-            print("Sheet reconciled with the database.")
-        except Exception as e:
-            print(f"(sheet reconcile skipped: {e})")
     return 0
 
 

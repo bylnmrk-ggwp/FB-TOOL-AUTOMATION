@@ -6,19 +6,6 @@ import { useStore, actions } from '../store.js'
 const REFRESH_MS = 5000     // counts refetch while the page is on screen
 const MAX_ALERTS = 8
 
-// Age of the last successful sheet sync, ticking once a second.
-// `sheet_last_ok` is the PC's time.time(); 0 means the watcher has not
-// completed a poll yet. Clock skew between phone and PC is clamped at 0.
-function useSheetAge(lastOk) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-  if (!lastOk) return null
-  return Math.max(0, Math.round(now / 1000 - lastOk))
-}
-
 export default function Dashboard({ onNavigate }) {
   const counts = useStore(s => s.counts)
   const server = useStore(s => s.server)
@@ -35,7 +22,6 @@ export default function Dashboard({ onNavigate }) {
   const unlinked = counts?.pending_unlinked ?? 0
   const n = Math.max(0, pending - unlinked)
   const loginActive = !!server?.login_run_active
-  const sheetAge = useSheetAge(server?.sheet_last_ok ?? 0)
   const pct = run && run.total ? Math.min(100, Math.round((run.current / run.total) * 100)) : 0
 
   const alerts = []
@@ -57,7 +43,7 @@ export default function Dashboard({ onNavigate }) {
       <div className="stats">
         <StatCard title="Total accounts" value={counts?.total} hint="roster rows" />
         <StatCard title="Logged in" value={counts?.logged_in} hint="status ok" />
-        <StatCard title="Need login" value={counts?.pending} hint="blank STATUS on the sheet" />
+        <StatCard title="Need login" value={counts?.pending} hint="never attempted" />
         <StatCard title="Disabled" value={counts?.disabled} hint="by Facebook" />
       </div>
 
@@ -97,10 +83,6 @@ export default function Dashboard({ onNavigate }) {
             </div>
             <div className="kv"><span className="muted">Browser processes</span><span>{system.process_count ?? 0}</span></div>
             <div className="kv"><span className="muted">Active sessions</span><span>{counts?.active ?? 0}</span></div>
-            <div className="kv">
-              <span className="muted">Sheet sync</span>
-              <span>{sheetAge === null ? 'not started' : `${sheetAge} s ago`}</span>
-            </div>
           </div>
         </section>
 
