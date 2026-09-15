@@ -520,6 +520,30 @@ def link_account(username: str, profile_name: str) -> bool:
     return cur.rowcount > 0
 
 
+def adopt_profile(profile_name: str) -> bool:
+    """Register a browser profile that already holds a Facebook session.
+
+    Sessions arrive two ways. A login this tool ran always has an account row
+    behind it. A profile signed in by hand has none - and without a row it is
+    invisible to every roster query, so it is never counted as active, never
+    kept warm, and its session is left to expire on its own. Adoption gives
+    such a profile the one thing it lacks.
+
+    The profile name is the account key, because for a hand-made profile that
+    is the only identity there is. No password is stored, so an adopted
+    account can be kept warm and re-checked from here, never re-logged in.
+
+    Returns True when the profile gained a row it did not have.
+    """
+    if not profile_name or account_for_profile(profile_name):
+        return False
+    conn = _get_conn()
+    if not conn.execute("SELECT 1 FROM accounts WHERE username = ?",
+                        (profile_name,)).fetchone():
+        upsert_account(None, "", profile_name)
+    return link_account(profile_name, profile_name)
+
+
 def account_for_profile(profile_name: str) -> dict | None:
     """The roster account linked to a browser profile, or None if none is.
 

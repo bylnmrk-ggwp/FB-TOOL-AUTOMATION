@@ -4812,6 +4812,20 @@ class DriverManager:
             except Exception as e:
                 self.log(f"Session sweep failed: {str(e)[:120]}")
 
+    # A pass that visited every profile would run for the best part of an
+    # hour on a fleet of a hundred and twenty, and the sweep must never be
+    # the reason the machine is busy. Each pass takes a slice and remembers
+    # where it stopped, so successive passes walk the whole fleet.
+    SWEEP_BATCH = 12
+
+    def _sweep_slice(self, names: list) -> list:
+        """The next few profiles to visit, rotating so none is starved."""
+        if len(names) <= self.SWEEP_BATCH:
+            return names
+        start = getattr(self, "_sweep_cursor", 0) % len(names)
+        self._sweep_cursor = (start + self.SWEEP_BATCH) % len(names)
+        return (names + names)[start:start + self.SWEEP_BATCH]
+
     async def _session_sweep(self):
         """One pass: warm the live sessions, then recover the lost ones."""
         from src.core.facebook_automation import (FacebookAutomation,
@@ -4819,8 +4833,16 @@ class DriverManager:
         from src.storage import state_cache
 
         ok = db.logged_in_profiles()
-        active = [p for p in cfg.list_profiles()
-                  if p in ok and state_cache.load_state(p) is not None]
+        # Two kinds of profile are worth a visit. One whose account is on
+        # record as logged in, and one that holds a session but has no account
+        # row at all - a profile signed in by hand, which no roster query has
+        # ever seen. Both are kept warm; the second is adopted the moment its
+        # session proves itself. Only this machine's share, so a split fleet
+        # does not have every PC warming the same accounts.
+        due = [p for p in cfg.list_profiles_for_browser()
+               if state_cache.load_state(p) is not None
+               and (p in ok or db.account_for_profile(p) is None)]
+        active = self._sweep_slice(due)
         warmed = expired = 0
         if active:
             pw = await async_playwright().start()
@@ -4870,6 +4892,14 @@ class DriverManager:
                                  wait_until="domcontentloaded", timeout=45000)
             await asyncio.sleep(random.uniform(2, 5))
             if await self._session_is_live(auto):
+                # A live session with no account row behind it is a profile
+                # somebody signed in by hand. Give it a row now, while the
+                # session is proven, so it counts as active from here on.
+                if db.account_for_profile(profile_name) is None:
+                    if db.adopt_profile(profile_name):
+                        self.log(f"  + adopted '{profile_name}': signed in, "
+                                 f"but the roster had no account for it")
+                await self._record_and_publish(profile_name, True, "logged_in")
                 # Facebook reissues cookies on use; storing them back is what
                 # actually pushes the expiry out rather than just reading it.
                 try:
