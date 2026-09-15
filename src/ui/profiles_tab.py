@@ -99,6 +99,27 @@ class ProfilesTab(ttk.Frame):
             command=self._on_create_chromium_profiles)
         self.make_profiles_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
 
+        # ── This PC's share of the fleet ──────────────────
+        # One machine holds about 37 watching pages. A larger fleet is split
+        # across PCs, and each one only ever sees and drives its own share.
+        from src.core import fleet
+        index, count = fleet.share()
+        share_row = ttk.Frame(inner)
+        share_row.pack(fill="x", padx=pad["padx"], pady=(6, 2))
+        ttk.Label(share_row, text="This PC is machine").pack(side="left")
+        self._machine_index_var = tk.StringVar(value=str(index))
+        ttk.Spinbox(share_row, from_=1, to=99, width=3, justify="center",
+                    textvariable=self._machine_index_var,
+                    command=self._on_share_change).pack(side="left", padx=4)
+        ttk.Label(share_row, text="of").pack(side="left")
+        self._machine_count_var = tk.StringVar(value=str(count))
+        ttk.Spinbox(share_row, from_=1, to=99, width=3, justify="center",
+                    textvariable=self._machine_count_var,
+                    command=self._on_share_change).pack(side="left", padx=4)
+        self._share_var = tk.StringVar(value="")
+        ttk.Label(share_row, textvariable=self._share_var,
+                  foreground=theme.get()["muted"]).pack(side="left", padx=(8, 0))
+
         # Status
         status_frame = ttk.Frame(inner)
         status_frame.pack(fill="x", **pad)
@@ -475,6 +496,7 @@ class ProfilesTab(ttk.Frame):
 
     def refresh_profiles(self):
         self._apply_browser_labels()
+        self._update_share_label()
         if hasattr(self, "_clear_profile_hover"):
             self._clear_profile_hover()
         # A refresh now also follows a login scan, which can run while the
@@ -831,6 +853,36 @@ class ProfilesTab(ttk.Frame):
         if hasattr(self, "_log_callback") and self._log_callback:
             for line in report_lines:
                 self._log_callback(line)
+
+    def _on_share_change(self):
+        """Store this PC's place in the fleet and redraw what it owns.
+
+        Everything downstream reads list_profiles_for_browser(), so changing
+        the share changes the queue, the watch and the login run with it -
+        there is no second list to keep in step.
+        """
+        from src.core import fleet
+        try:
+            index = int(self._machine_index_var.get() or 1)
+            count = int(self._machine_count_var.get() or 1)
+        except ValueError:
+            return
+        index, count = fleet.set_share(index, count)
+        self._machine_index_var.set(str(index))
+        self._machine_count_var.set(str(count))
+        self.refresh_profiles()
+        self.refresh_accounts()
+
+    def _update_share_label(self):
+        from src.core import fleet
+        from src.storage import config_manager as cfg
+        index, count = fleet.share()
+        mine = len(cfg.list_profiles_for_browser())
+        try:
+            self._share_var.set(f"drives {mine} account(s)" if count > 1
+                                else f"all {mine} account(s)")
+        except Exception:
+            pass
 
     def _browser_name(self) -> str:
         """Whichever browser the automation drives, for button and dialog text:

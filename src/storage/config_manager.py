@@ -363,17 +363,25 @@ def auto_sync_chromium_profiles() -> list[str]:
 
 
 def list_profiles_for_browser() -> list[str]:
-    """Saved profile names that belong to the selected browser.
+    """Saved profile names this machine drives, for the selected browser.
 
-    The saved map holds both: a Brave profile lives under Brave's User Data
-    and a Chromium one under CHROMIUM_USER_DATA. Neither browser can open the
-    other's, so a caller that drives one wants only its own.
+    Two filters, both about what this PC can actually open. The saved map
+    holds profiles of both browsers - a Brave profile lives under Brave's
+    User Data, a Chromium one under CHROMIUM_USER_DATA - and neither browser
+    can open the other's. And where a fleet is split across several PCs, this
+    machine owns its share of it; on a single-PC setup that share is all of
+    them, which is the default.
     """
     from src.core import browser_choice
     root = browser_choice.user_data_root()
     config = _load_config()
-    return [name for name, path in config.get("profiles", {}).items()
-            if _under(path, root)]
+    names = [name for name, path in config.get("profiles", {}).items()
+             if _under(path, root)]
+    try:
+        from src.core import fleet
+        return fleet.mine(names)
+    except Exception:
+        return names        # a broken share must not hide the whole fleet
 
 
 def auto_sync_profiles() -> list[str]:
