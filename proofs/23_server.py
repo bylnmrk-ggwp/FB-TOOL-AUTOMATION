@@ -126,7 +126,7 @@ _ring.write("verify line three")
 try:
     _cfg.save_setting(_auth.HASH_KEY, _auth.hash_password(_PASS))
     _state = _AppState()
-    _bridge = _EventBridge(_m, _state, _ring)
+    _bridge = _EventBridge(_m, None, _state, _ring)
 
     # ── module surface the plan names ─────────────────────────────────
     _expected_uses = ("login_accounts", "check_login_status", "auto_setup_profile",
@@ -142,11 +142,11 @@ try:
         if not callable(getattr(_DM, _name, None)):
             _fail(f"USES names {_name}, which DriverManager lacks")
 
-    _app = _appmod.create_app(_m, state=_state, logring=_ring,
+    _app = _appmod.create_app(_m, None, state=_state, logring=_ring,
                               bridge=_bridge, dev=False,
                               web_dist=_tmp / "no-such-dist")
     _st = _app.state
-    for _attr in ("manager", "appstate", "logring", "bridge",
+    for _attr in ("manager", "watcher", "appstate", "logring", "bridge",
                   "sessions", "limiter", "allowed_origins"):
         if not hasattr(_st, _attr):
             _fail(f"app.state lacks {_attr}")
@@ -181,7 +181,7 @@ try:
             _fail(f"route missing: {_want}")
 
     # Bare create_app builds its own (unstarted) bridge and state.
-    _app_bare = _appmod.create_app(_DM(), web_dist=_tmp / "no-such-dist")
+    _app_bare = _appmod.create_app(_DM(), None, web_dist=_tmp / "no-such-dist")
     if _app_bare.state.bridge is None or _app_bare.state.bridge.is_alive():
         _fail("bare create_app: bridge missing or started")
 
@@ -239,7 +239,7 @@ try:
         else:
             _body = _r.json()
             for _key in ("run", "last_run_summary", "pending_input", "login_run_active",
-                         "scan_active", "system", "bridge_alive",
+                         "scan_active", "sheet_last_ok", "system", "bridge_alive",
                          "version", "counts"):
                 if _key not in _body:
                     _fail(f"/api/state lacks {_key}")
@@ -432,7 +432,7 @@ try:
                                       encoding="utf-8")
     (_dist / "assets" / "verify.js").write_text("// verify asset", encoding="utf-8")
     (_dist / "manifest.webmanifest").write_text("{}", encoding="utf-8")
-    _app2 = _appmod.create_app(_DM(), web_dist=_dist)
+    _app2 = _appmod.create_app(_DM(), None, web_dist=_dist)
     with _TestClient(_app2) as _c2:
         for _path in ("/", "/accounts", "/log"):
             _r = _c2.get(_path)

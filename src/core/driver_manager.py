@@ -39,9 +39,19 @@ class DriverState(Enum):
     ERROR = "error"
 
 
+def sheet_reason(error: Exception) -> str:
+    """One short line for a failed sheet write.
+
+    The roster watcher already reduces the same urllib3 stack to "offline";
+    this is its counterpart on the write side, so both speak the same way.
+    """
+    from src.storage.roster_sheet import _reason
+    return _reason(error)
+
+
 def login_reason(message: str | None) -> str | None:
-    """Facebook's own words for a failed login, as a short reason - or None
-    when the message says nothing specific.
+    """Facebook's own words for a failed login, as a short sheet-friendly
+    reason - or None when the message says nothing specific.
 
     The URL classification (_classify_account_access) only ever sees where
     the browser ended up, so "Input Password is invalid." and an expired
@@ -314,8 +324,8 @@ class DriverManager:
     def login_accounts(self, usernames: list[str],
                        batch_size: int | None = None,
                        pause_minutes: float | None = None):
-        """Log the given roster accounts in, one at a time, recording each
-        verdict. Emits login_accounts_progress / _result."""
+        """Log the given roster accounts in, one at a time, and publish each
+        verdict to the sheet. Emits login_accounts_progress / _result."""
         self.cmd_queue.put({"type": "login_accounts",
                             "usernames": list(usernames),
                             "batch_size": batch_size,
@@ -2022,8 +2032,8 @@ class DriverManager:
 
         Sequential by necessity (Brave's singleton lock), inside each
         account's real profile so the session cookies stay decryptable.
-        Per account: _relogin_profile() (which records the verdict), then
-        a short pause.
+        Per account: LOGGING IN on the sheet, _relogin_profile() (which
+        records the verdict and pushes it), a short pause.
         """
         usernames = [u for u in (cmd.get("usernames") or []) if u]
         total = len(usernames)
@@ -2047,8 +2057,13 @@ class DriverManager:
                                    "try again.")
             return
 
+        from src.storage import sheet_status
         by_user = {(a.get("username") or "").strip().lower(): a
                    for a in db.list_accounts()}
+        writer = await asyncio.to_thread(sheet_status.SheetWriter)
+        if not writer.on:
+            self.log(f"  ⚠️  live sheet updates off: "
+                     f"{sheet_reason(Exception(writer.error))}")
         # A batch is the burst that runs before a pause. Sequentially that is
         # LOGIN_BATCH_SIZE logins; in a parallel wave the wave itself is the
         # burst, so the default batch is the wave width.
@@ -2082,10 +2097,12 @@ class DriverManager:
                 elif acct.get("status") == "disabled":
                     reason = "disabled"
                     skipped.append((username, reason))
-                elif acct.get("status") == "ok":
+                elif (acct.get("status") == "ok"
+                      or (acct.get("sheet_status") or "").strip().upper() == "LOGGED IN"):
                     # Already signed in. Opening a browser for it costs a
                     # minute and risks drawing a fresh checkpoint on a session
-                    # that was working.
+                    # that was working. Note the exact match: "NOT LOGGED IN"
+                    # contains the same two words and must still be attempted.
                     reason = "already logged in"
                     skipped.append((username, reason))
                 elif not profile:
@@ -2098,6 +2115,8 @@ class DriverManager:
                     reason = f"Brave profile '{profile}' is not registered on this PC"
                     skipped.append((username, reason))
                 else:
+                    if writer.on:
+                        await asyncio.to_thread(writer.mark_in_progress, username)
                     # The grid is sized for the windows actually open: a run
                     # of five tiles 3x2, not five cells of a 5x5 grid with
                     # twenty empty ones.
@@ -3395,11 +3414,15 @@ class DriverManager:
     def _session_recorded_live(profile_name: str) -> bool:
         """Whether the roster says this account is logged in.
 
-        The database's own verdict, written by a login run or by a login
-        check that saw the home page, and nothing else.
+        The database's own verdict first - it is written by a login run or a
+        login check that saw the home page. The sheet's LOGGED IN cell counts
+        too, and nothing else does: "NOT LOGGED IN / SESSION EXPIRED"
+        contains the same words, so the match is exact.
         """
         account = db.account_for_profile(profile_name) or {}
-        return (account.get("status") or "") == "ok"
+        if (account.get("status") or "") == "ok":
+            return True
+        return (account.get("sheet_status") or "").strip().upper() == "LOGGED IN"
 
     async def _do_batch(self, items: list[dict]):
         """Process queue items with all profile pages opened up front.
@@ -3865,8 +3888,8 @@ class DriverManager:
                     if needs_login:
                         # Self-healing: drop the cached state so the next
                         # run re-extracts this profile fresh, and clear the
-                        # 'ok' status so the count and the filter stop
-                        # calling this profile active.
+                        # 'ok' status so the count, the filter and the sheet
+                        # stop calling this profile active.
                         pname = result.get("profile_name", "")
                         state_cache.invalidate(pname)
                         await self._record_and_publish(pname, False,
@@ -4964,16 +4987,54 @@ class DriverManager:
 
     async def _record_and_publish(self, profile_name: str, logged_in: bool,
                                   reason: str = "") -> bool:
-        """Record a login verdict.
+        """Record a login verdict and mirror it to the sheet, together.
 
-        The one place that writes a verdict, so every caller - the batch
-        demotion included - goes through the same path and the database
-        cannot disagree with itself about which profiles are active.
+        The one place that writes a verdict. Recording and publishing were
+        separate, and one caller - the batch demotion - only ever did the
+        first, so a profile could go inactive in the database while the sheet
+        still showed it LOGGED IN. That is exactly how the app came to report
+        five active profiles against two on the sheet.
 
         Returns whether anything was recorded; an inconclusive check writes
-        nothing.
+        nothing and publishes nothing.
         """
-        return db.record_login_check(profile_name, logged_in, reason)
+        recorded = db.record_login_check(profile_name, logged_in, reason)
+        if recorded:
+            await self._push_sheet_status(profile_name)
+        return recorded
+
+    async def _push_sheet_status(self, profile_name: str):
+        """Mirror one profile's recorded account status to the roster sheet.
+
+        The database has just been written, so this only carries that verdict
+        across - the sheet cannot end up saying something the database does
+        not hold. Blocking network I/O, so it runs off the event loop, and it
+        is best-effort throughout: an unreachable or unconfigured sheet must
+        never stall or fail a watch.
+        """
+        from src.storage import sheet_status
+        account = db.account_for_profile(profile_name)
+        username = (account or {}).get("username") or ""
+        if not username:
+            return
+        try:
+            text = await asyncio.to_thread(
+                sheet_status.push_account_status, username)
+        except Exception as e:
+            # Offline is one fact about the PC, not one fact per account: a
+            # DNS failure printed urllib3's three nested exceptions for every
+            # profile in the run, hundreds of identical lines that said only
+            # "no network". Say it once per run, short, and carry on - the
+            # database already holds the verdict and the sheet is a mirror.
+            reason = sheet_reason(e)
+            if reason != getattr(self, "_sheet_push_error", None):
+                self._sheet_push_error = reason
+                self.log(f"  ⚠️  sheet not updated ({reason}) - "
+                         f"the verdicts are recorded locally")
+            return
+        self._sheet_push_error = None
+        if text:
+            self.log(f"  ✓ sheet updated: {username} → {text}")
 
     async def _verify_watching(self, auto, profile_name: str) -> str:
         """'playing', or the reason this page is not a viewer.

@@ -5,8 +5,9 @@ Runs under verify.py with globals `failures`, `step` and `ROOT`. The bridge
 is fed result dicts shaped exactly as DriverManager emits them (the manager
 thread is never started), its log lines land in a LogRing under a temp
 directory, and cfg.save_setting is replaced by a recorder so the operator's
-real config never receives a fake batch summary. No browser, no Brave
-directory.
+real config never receives a fake batch summary. The one verify_*@example.com
+row the sheet-event check inserts is deleted in the finally block. No
+browser, no Google, no Brave directory.
 """
 import sys
 
@@ -41,7 +42,7 @@ _m = _DM()
 _m.log = lambda _msg: None      # the driver logs non-ASCII; keep stdout clean
 _state = _AppState()
 _ring = _LogRing(log_dir=_tmp / "logs")
-_bridge = _ev.EventBridge(_m, _state, _ring)
+_bridge = _ev.EventBridge(_m, None, _state, _ring)
 
 
 def _types():
@@ -189,6 +190,28 @@ try:
     if _bridge.answer_input({"profile_pic": None, "cancel": True}) is not False:
         _fail("answer_input answered a prompt that is not open")
 
+    # ── sheet events: rows are applied here, on the bridge thread ──────
+    class _Watcher:
+        last_ok = 1234.5
+        events = _q.Queue()
+
+    _b2 = _ev.EventBridge(_m, _Watcher(), _state, _ring)
+    _b2.handle_sheet_event("rows", [{
+        "sheet_no": 999, "facebook_name": "Verify Events",
+        "username": "verify_events@example.com", "password": "", "gmail": "",
+        "gmail_password": "", "number": "", "sheet_status": ""}])
+    if not any(a["username"] == "verify_events@example.com"
+               for a in _db.list_accounts()):
+        _fail("sheet rows were not applied to the database")
+    if not _has_line("Roster synced from sheet: 1 new, 0 refreshed"):
+        _fail(f"roster sync line missing from {_texts()[-3:]}")
+    if _state.sheet_last_ok != 1234.5:
+        _fail(f"sheet_last_ok={_state.sheet_last_ok}")
+    if [e.get("type") for e in _b2.recent][-2:] != ["accounts_changed", "state"]:
+        _fail(f"sheet rows events: {[e.get('type') for e in _b2.recent]}")
+    _b2.handle_sheet_event("error", "HTTPError: 503")
+    if not _has_line("Sheet sync error: HTTPError: 503"):
+        _fail("sheet error line missing")
 
     # ── fan-out through a real loop, from another thread ───────────────
     async def _fanout():
@@ -214,7 +237,7 @@ try:
     _m.result_queue.put({"type": "auto_setup_images_preview",
                          "profile_name": "P", "images": [str(_tmp1)],
                          "needs_pic": False})
-    _b3 = _ev.EventBridge(_m, _state, _ring, poll_ms=20)
+    _b3 = _ev.EventBridge(_m, None, _state, _ring, poll_ms=20)
     _b3.start()
     _resp = None
     _deadline = _time.monotonic() + 5.0

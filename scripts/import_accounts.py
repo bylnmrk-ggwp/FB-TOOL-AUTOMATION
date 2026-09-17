@@ -1,16 +1,18 @@
-"""One-shot import of the account roster into the database.
+"""One-shot sync of the account roster into the database.
 
-Reads a local .xlsx through the header-mapped parser in
-src/storage/roster_import.py: labels, not column letters, decide where each
-cell lands, so a reordered workbook cannot import the wrong field.
+The roster lives in the Google Sheet; by default this pulls it through the
+same header-mapped parser the running app uses every 20 s
+(src/storage/roster_sheet.py). A local .xlsx can still be imported with
+--xlsx for an offline machine.
 
-Re-runnable: accounts are keyed by USERNAME, so editing the workbook and
-running this again refreshes the existing rows and adds the new ones.
-linked_profile, status and status_reason are never touched by an import.
+Re-runnable: accounts are keyed by USERNAME, so editing the sheet and running
+this again refreshes the existing rows and adds the new ones. linked_profile,
+status and status_reason are never touched by an import.
 
 Usage:
-    python scripts/import_accounts.py --xlsx FILE    # workbook -> database
-    python scripts/import_accounts.py --xlsx FILE --dry-run
+    python scripts/import_accounts.py                # Google Sheet -> database
+    python scripts/import_accounts.py --dry-run      # report, write nothing
+    python scripts/import_accounts.py --xlsx FILE    # a local workbook instead
 """
 import argparse
 import re
@@ -26,7 +28,7 @@ try:
 except Exception:
     pass
 
-from src.storage import roster_import  # noqa: E402
+from src.storage import roster_sheet  # noqa: E402
 
 
 # ── Local .xlsx fallback ────────────────────────────────────────────────────
@@ -63,9 +65,10 @@ def _col_index(letters: str) -> int:
 
 
 def read_xlsx_rows(xlsx: Path) -> list[list[str]]:
-    """The first worksheet as rows of cells, header first, in workbook order.
+    """The first worksheet as rows of cells, header first, in sheet order.
 
-    Produces the rows-of-cells shape the parser in roster_import expects.
+    Produces the same shape the Sheets API returns, so the one parser in
+    roster_sheet handles both sources.
     """
     with zipfile.ZipFile(xlsx) as z:
         shared = _shared_strings(z)
@@ -93,23 +96,27 @@ def read_xlsx_rows(xlsx: Path) -> list[list[str]]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--xlsx", type=Path, required=True,
-                    help="the workbook to import")
+    ap.add_argument("--xlsx", type=Path, help="import a local workbook instead of the sheet")
     ap.add_argument("--dry-run", action="store_true", help="report, write nothing")
     args = ap.parse_args(argv)
 
-    if not args.xlsx.exists():
-        print(f"Workbook not found: {args.xlsx}")
-        return 1
-    print(f"Reading {args.xlsx.name} ...")
-    rows = read_xlsx_rows(args.xlsx)
-    source = args.xlsx.name
+    if args.xlsx:
+        if not args.xlsx.exists():
+            print(f"Spreadsheet not found: {args.xlsx}")
+            return 1
+        print(f"Reading {args.xlsx.name} ...")
+        rows = read_xlsx_rows(args.xlsx)
+        source = args.xlsx.name
+    else:
+        print("Reading the Google Sheet ...")
+        rows = roster_sheet.fetch_rows()
+        source = "Google Sheet"
 
-    accounts = roster_import.parse_accounts(rows)
+    accounts = roster_sheet.parse_accounts(rows)
     header = [h.strip() for h in (rows[0] if rows else [])]
     print(f"  header: {header}")
     print(f"  {len(accounts)} row(s) with a username")
-    missing = [lbl for lbl in roster_import.HEADERS
+    missing = [lbl for lbl in roster_sheet.HEADERS
                if lbl not in {h.upper() for h in header}]
     if missing:
         print(f"  note: columns not present, importing as blank: {', '.join(missing)}")
@@ -130,7 +137,7 @@ def main(argv: list[str]) -> int:
     from src.storage import config_manager as cfg
     from src.storage import database as db
 
-    inserted, updated = roster_import.apply(accounts)
+    inserted, updated = roster_sheet.apply(accounts)
     total, linked = db.count_accounts()
     profiles = cfg.list_profiles()
     print(f"\nImported from {source}: {inserted} new, {updated} refreshed")

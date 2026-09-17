@@ -72,7 +72,7 @@ function schedule() {
 function handle(event) {
   dispatch(event)
   switch (event.type) {
-    case 'accounts_changed':        // roster changed on the PC
+    case 'accounts_changed':        // sheet sync applied on the PC
     case 'login_scan_result':
     case 'login_accounts_result':
       actions.refreshAccounts()

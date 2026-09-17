@@ -4,8 +4,8 @@ Walks the roster accounts that have a linked Brave profile, opens each profile
 in a VISIBLE browser, types the credentials, and hands control to you whenever
 Facebook raises a checkpoint or 2FA challenge. Nothing is retried unattended.
 
-Passwords are read from the local workbook at run time and never written
-anywhere: not to the database, not to the config, not to the log.
+Passwords are read from the spreadsheet at run time and never written anywhere:
+not to the database, not to the config, not to the log.
 
 Why it works one account at a time: Chromium's ProcessSingleton locks the
 shared Brave "User Data" directory, so two profiles cannot be driven at once.
@@ -44,14 +44,14 @@ try:
 except Exception:
     pass
 
-DEFAULT_WORKBOOK = "FB ACCOUNTS.xlsx"
+DEFAULT_SHEET = "FB ACCOUNTS.xlsx"
 
 
 def read_credentials(xlsx: Path) -> dict:
-    """username -> password, straight from the workbook.
+    """username -> password, straight from the spreadsheet.
 
     Held in memory for the length of the run only. Column letters are resolved
-    from the header labels so a reordered workbook cannot pair the wrong password
+    from the header labels so a reordered sheet cannot pair the wrong password
     with an account.
     """
     with zipfile.ZipFile(xlsx) as z:
@@ -106,6 +106,32 @@ def read_credentials(xlsx: Path) -> dict:
     return creds
 
 
+def read_credentials_from_sheet() -> dict:
+    """username -> password, straight from the Google Sheet via the API.
+
+    Used when no local .xlsx is present: the roster now lives in the sheet.
+    USERNAME and PASSWORD columns are located by their header labels, so a
+    reordered sheet cannot pair the wrong password with an account. Passwords
+    are held in memory for the run only.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))  # ensure scripts/ importable
+    from src.storage import sheets_api as api
+    tok = api.token()
+    rows = api.get_values(tok, api.DEFAULT_SHEET_ID, f"{api.DEFAULT_TAB}!A1:Z")
+    cols = api.header_columns(rows, "USERNAME", "PASSWORD")
+    if "USERNAME" not in cols or "PASSWORD" not in cols:
+        raise SystemExit("Sheet needs USERNAME and PASSWORD columns; found "
+                         f"{rows[0] if rows else '(empty)'}")
+    cu, cp = cols["USERNAME"], cols["PASSWORD"]
+    creds = {}
+    for row in rows[1:]:
+        u = row[cu].strip() if len(row) > cu else ""
+        p = row[cp].strip() if len(row) > cp else ""
+        if u and p:
+            creds[u.lower()] = p
+    return creds
+
+
 def ask(prompt: str) -> str:
     try:
         return input(prompt).strip().lower()
@@ -117,11 +143,11 @@ SESSION_COOKIES = ("c_user", "xs")
 
 
 def short_reason(msg: str) -> str:
-    """A brief detail for a failed login.
+    """A brief, sheet-friendly detail for a failed login.
 
     Technical/transient failures (a headless browser that closed, a login form
     that did not render) collapse to short tags rather than dumping a raw
-    Playwright stack line into a status field. These stay non-'ok' in the database,
+    Playwright stack line into the sheet. These stay non-'ok' in the database,
     so the next pass retries them.
     """
     if msg == DISABLED:
@@ -152,14 +178,88 @@ def short_reason(msg: str) -> str:
 
 
 # Outcomes worth telling apart, because the follow-up action differs:
-# a disabled account is dead, a wrong password is a workbook fix, and a
+# a disabled account is dead, a wrong password is a spreadsheet fix, and a
 # 2FA prompt means the credentials were accepted and only a code is missing.
 DISABLED = "ACCOUNT DISABLED by Facebook - no login possible"
 NEEDS_2FA = "credentials accepted, needs a 2FA code"
 NEEDS_EMAIL_CONFIRM = "credentials accepted, Facebook wants the email confirmed first"
 NO_HOME_PAGE = "signed in but Facebook never let the account reach its home page"
-BAD_PASSWORD = "wrong password in the workbook"
+BAD_PASSWORD = "wrong password in the spreadsheet"
 BAD_IDENTIFIER = "username is not a valid Facebook login"
+
+
+class Live:
+    """Pushes each account's status to the Google Sheet as the run works it.
+
+    Best-effort by design: a sheet write must never abort a login run, so every
+    call swallows its errors (and refreshes the token once, since a long batched
+    run can outlast the hour-long access token). When disabled, or when setup
+    fails, every method is a no-op.
+    """
+
+    def __init__(self, enabled: bool):
+        self.on = False
+        self.rows = 0
+        if not enabled:
+            return
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from src.storage import sheets_api as api
+            import sync_sheet_status as sync
+            self.api, self.sync = api, sync
+            self.sheet_id = api.DEFAULT_SHEET_ID
+            self.tab = api.DEFAULT_TAB
+            self.tok = api.token()
+            self.gid = sync.resolve_gid(self.tok, self.sheet_id, self.tab)
+            # Columns come from the header row, never a fixed letter.
+            cols = sync.resolve_columns(self.tok, self.sheet_id, self.tab)
+            self.status_col = cols["status"]
+            self.rowmap = sync.build_row_index(self.tok, self.sheet_id,
+                                               self.tab, cols["username"])
+            self.rows = len(self.rowmap)
+            self.on = self.gid is not None and self.rows > 0
+        except Exception as e:
+            print(f"  (live sheet updates off: {e})")
+
+    def _write(self, username: str, text: str):
+        if not self.on:
+            return
+        row = self.rowmap.get((username or "").strip().lower())
+        if not row:
+            return
+        for attempt in (1, 2):
+            try:
+                self.sync.write_status(self.tok, self.sheet_id, self.gid,
+                                       self.tab, row, text, self.status_col)
+                return
+            except Exception:
+                if attempt == 1:
+                    try:
+                        self.tok = self.api.token()   # token may have expired
+                    except Exception:
+                        return
+                # second failure: give up on this cell, keep the run going
+
+    def mark_in_progress(self, username: str):
+        self._write(username, self.sync.IN_PROGRESS if self.on else "")
+
+    def clear(self, username: str):
+        """Revert a row to plain NOT LOGGED IN (e.g. an aborted attempt)."""
+        if self.on:
+            self._write(username, self.sync.NOT_LOGGED_IN)
+
+    def mark_result(self, username: str, ok: bool, msg: str):
+        if not self.on:
+            return
+        if ok:
+            text = self.sync.LOGGED_IN
+        elif msg == DISABLED:
+            text = self.sync.DISABLED
+        else:
+            reason = short_reason(msg)
+            text = (f"{self.sync.NOT_LOGGED_IN} / {reason.upper()}"
+                    if reason else self.sync.NOT_LOGGED_IN)
+        self._write(username, text)
 
 
 def is_infra_error(msg: str) -> bool:
@@ -215,7 +315,7 @@ def auto_on_gate(auto) -> bool:
 
     Tells "the login produced no session at all" apart from "the login
     worked but Facebook is holding the account at a checkpoint / email
-    confirmation", which are different problems for whoever reads the roster.
+    confirmation", which are different problems for whoever reads the sheet.
     """
     try:
         return auto._is_gated_url(auto.page.url)
@@ -234,7 +334,7 @@ async def has_session(auto) -> bool:
 
     And the browser must be sitting on the Facebook HOME page - Facebook
     issues both cookies before a checkpoint or an email-confirmation gate,
-    so cookies alone marked gated accounts 'ok' and the roster said LOGGED
+    so cookies alone marked gated accounts 'ok' and the sheet said LOGGED
     IN for accounts that could not load their own feed.
     """
     try:
@@ -368,9 +468,11 @@ async def login_one(account: dict, password: str, log,
 async def run(args) -> int:
     from src.storage import database as db
 
-    # Credential source: an explicit --workbook path, else the default local
-    # xlsx beside the project.
-    xlsx = Path(args.workbook) if args.workbook else ROOT / DEFAULT_WORKBOOK
+    # Credential source: an explicit --sheet path, else the local xlsx if it
+    # is still there, else the Google Sheet over the API. The roster now lives
+    # in the sheet, so a missing xlsx is normal, not an error.
+    xlsx = Path(args.sheet) if args.sheet else ROOT / DEFAULT_SHEET
+    use_sheet = args.from_sheet or not xlsx.exists()
 
     # Disabled accounts are excluded: Facebook says the decision cannot be
     # appealed, so re-attempting them only adds failed logins.
@@ -396,18 +498,20 @@ async def run(args) -> int:
         return 0
 
     try:
-        creds = read_credentials(xlsx)
+        creds = read_credentials_from_sheet() if use_sheet else read_credentials(xlsx)
     except Exception as e:
-        print(f"Could not read credentials from {xlsx}: {e}")
+        src = "Google Sheet" if use_sheet else str(xlsx)
+        print(f"Could not read credentials from {src}: {e}")
         return 1
-    print(f"Credential source             : {xlsx.name}")
+    print(f"Credential source             : "
+          f"{'Google Sheet' if use_sheet else xlsx.name}")
     missing = [a["username"] for a in accounts
                if a["username"].lower() not in creds]
 
     print(f"Accounts with a Brave profile : {len(accounts)}")
-    print(f"Passwords found in workbook   : {len(accounts) - len(missing)}")
+    print(f"Passwords found in sheet      : {len(accounts) - len(missing)}")
     if missing:
-        print(f"No password in workbook       : {len(missing)}")
+        print(f"No password in sheet          : {len(missing)}")
         for u in missing[:5]:
             print(f"   {u}")
 
@@ -438,6 +542,10 @@ async def run(args) -> int:
     else:
         print("A visible window opens per account. Solve any checkpoint in it.\n")
 
+    live = Live(use_sheet and not args.no_live_sheet)
+    if live.on:
+        print(f"Live sheet updates: {live.rows} row(s) matched.\n")
+
     aborted = False
     results = {"ok": [], "failed": []}
     for i, a in enumerate(todo, 1):
@@ -451,6 +559,7 @@ async def run(args) -> int:
 
         label = a.get("facebook_name") or a["username"]
         print(f"[{i}/{len(todo)}] {label}  ->  profile '{a['linked_profile']}'")
+        live.mark_in_progress(a["username"])
 
         def log(msg, _i=i):
             print(f"    {msg}")
@@ -463,6 +572,7 @@ async def run(args) -> int:
         # later account would fail identically. Stop now, and do NOT record it
         # as an account verdict - the account was never really attempted.
         if not ok and is_infra_error(msg):
+            live.clear(a["username"])
             print(f"    ABORTED: {msg}")
             print("\nThe shared Brave profile is locked (an orphaned brave.exe "
                   "holds it).\nClose Brave / run: taskkill /F /IM brave.exe /T, "
@@ -471,11 +581,12 @@ async def run(args) -> int:
             aborted = True
             break
 
-        # Persist why it failed so the roster can show it. A
+        # Persist why it failed so the roster and the sheet can show it. A
         # success already cleared the status inside login_one via _mark_ok,
         # and DISABLED was recorded there too; everything else lands here.
         if not ok and msg != DISABLED:
             db.set_account_status(a["username"], "", short_reason(msg))
+        live.mark_result(a["username"], ok, msg)
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 
@@ -503,6 +614,17 @@ async def run(args) -> int:
             print(f"     ... {len(who) - 12} more")
     print("\nPasswords were held in memory only; nothing was written.")
 
+    # Final reconcile: live cell writes are best-effort, so a dropped one could
+    # leave the sheet a step behind the database. Rewrite every STATUS cell from
+    # the database once at the end so the sheet always matches when a run ends.
+    if live.on:
+        try:
+            import sync_sheet_status as sync
+            sync.main([])
+            print("Sheet reconciled with the database.")
+        except Exception as e:
+            print(f"(sheet reconcile skipped: {e})")
+
     if aborted:
         return 3
     return 0 if not results["failed"] else 2
@@ -510,8 +632,13 @@ async def run(args) -> int:
 
 def main(argv) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workbook",
-                    help=f"path to the credential xlsx (default: {DEFAULT_WORKBOOK})")
+    ap.add_argument("--sheet", help=f"path to a local xlsx (default: {DEFAULT_SHEET})")
+    ap.add_argument("--from-sheet", action="store_true",
+                    help="read credentials from the Google Sheet API even if a "
+                         "local xlsx exists (default when no xlsx is present)")
+    ap.add_argument("--no-live-sheet", action="store_true",
+                    help="do not update the Google Sheet STATUS column live as "
+                         "the run works each account (on by default with the sheet)")
     ap.add_argument("--headless", action="store_true",
                     help="run with no visible browser window (background run); "
                          "implies --unattended and cannot hand off a 2FA prompt")

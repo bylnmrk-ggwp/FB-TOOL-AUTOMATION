@@ -46,7 +46,7 @@ export default function Log() {
       </div>
       <div className="log-view" ref={view} role="log" aria-live={paused ? 'off' : 'polite'}>
         {lines.length === 0
-          ? <div className="muted">{needle ? 'No lines match the filter.' : 'Log is empty. Runs and errors appear here.'}</div>
+          ? <div className="muted">{needle ? 'No lines match the filter.' : 'Log is empty. Runs, sheet syncs and errors appear here.'}</div>
           : lines.map((l, i) => (
             <div key={start + i} className={'log-line ' + (l.level || 'info')}><span className="t">[{l.stamp}]</span> {l.text}</div>
           ))}
