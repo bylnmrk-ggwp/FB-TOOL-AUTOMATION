@@ -41,3 +41,6 @@ desktop.ini
 .playwright-mcp/
 .parallel-backup/
 checkpoint_probe.png
+
+# Fleet transfer bundle - plaintext sessions, never commit
+fleet-transfer.zip
