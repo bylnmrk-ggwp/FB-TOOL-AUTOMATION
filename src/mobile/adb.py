@@ -379,6 +379,50 @@ class Device:
         m = re.search(r"(\d+)", out)
         return int(m.group(1)) if m else 0
 
+    def clone_display_works(self, user: int) -> bool:
+        """Whether a secondary user actually gets a usable screen.
+
+        On LDPlayer it does not. The data side of Android multi-user works
+        perfectly - separate directories, separate sessions, and the cap lifts
+        with fw.max_users - but the emulator's display pipeline is bound to
+        user 0. Switch to a clone and the foreground user changes while the
+        screen stays black: mCurrentFocus sits on "u0 StatusBar", no launcher
+        appears even though com.ldmnq.launcher3 is installed for that user,
+        and uiautomator returns nothing. Taps and dumps therefore cannot drive
+        a clone at all.
+
+        Checked rather than assumed, because another emulator or a real device
+        may well render secondary users properly.
+        """
+        self.start_user(user)
+        self.switch_user(user)
+        time.sleep(10)
+        try:
+            focus = self.shell("dumpsys window | grep mCurrentFocus")
+            nodes = self.screen()
+        except Exception:  # noqa: BLE001 - a wedged clone is a broken clone
+            focus, nodes = "", []
+        finally:
+            self.switch_user(0)
+            self.stop_user(user)
+        return bool(nodes) and "StatusBar" not in focus
+
+    def stop_user(self, user: int) -> None:
+        """Put a user back to sleep, keeping its data.
+
+        This is the half that was missing. `am start-user` leaves a user
+        RESIDENT: every one of them keeps a system_server user state, a
+        launcher and whatever else it runs. Eight started at once on a 6 GB
+        device wedged the emulator so hard that `am get-current-user` timed
+        out after 60 seconds and every login reported "no username field on
+        screen" - not a Facebook problem, an out-of-memory one.
+
+        A stopped user keeps its data directory, so the session it holds
+        survives. Start one, drive it, stop it: memory then stays flat however
+        many clones exist, and the only ceiling is disk.
+        """
+        self.shell(f"am stop-user -f {user}", timeout=180)
+
     def remove_user(self, user: int) -> None:
         self.shell(f"pm remove-user {user}", timeout=120)
 

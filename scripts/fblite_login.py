@@ -133,7 +133,10 @@ def ensure_clones(dev: Device, wanted: int, log=print) -> list[int]:
     rather than an exception: logging four accounts is better than logging
     none because the fifth would not fit.
     """
-    ceiling = dev.max_users()
+    # Android's default cap is 4 on this image, which is a build resource and
+    # not a licence; root moves it by setting fw.max_users. Ask for room
+    # first, then take whatever the device really allows.
+    ceiling = dev.raise_user_limit(wanted)
     if wanted > ceiling:
         log(f"    device allows {ceiling} sessions in total "
             f"(pm get-max-users); {wanted} were asked for")
@@ -142,6 +145,28 @@ def ensure_clones(dev: Device, wanted: int, log=print) -> list[int]:
     slots = [0]                                   # Owner is always slot one
     existing = {name: uid for uid, name in dev.users()
                 if name.startswith(CLONE_PREFIX)}
+
+    # Clones are only worth making if they can be SEEN. On LDPlayer they
+    # cannot: the display is bound to user 0, so a clone switches into a black
+    # screen and every login there reports "no username field" - which reads
+    # as a Facebook problem and is an emulator one. Probe once with a real
+    # clone and say so plainly rather than producing a column of false
+    # failures.
+    if wanted > 1:
+        probe = existing.get(f"{CLONE_PREFIX}1")
+        if probe is None:
+            probe = dev.create_user(f"{CLONE_PREFIX}1")
+            existing[f"{CLONE_PREFIX}1"] = probe
+            dev.start_user(probe)
+            dev.install_existing_for_user(PACKAGE, probe)
+            dev.stop_user(probe)
+        if not dev.clone_display_works(probe):
+            log("    this emulator does not render secondary users: a clone "
+                "switches into a black screen, so it cannot be driven.")
+            log("    falling back to one session (Owner). For several live "
+                "sessions use separate LDPlayer instances: "
+                "ldconsole copy --name fb2 --from LDPlayer")
+            return [0]
     for n in range(1, wanted):
         name = f"{CLONE_PREFIX}{n}"
         uid = existing.get(name)
@@ -162,14 +187,24 @@ def login_one(dev: Device, username: str, password: str, log=print,
     if not dev.can_type(password):
         return "skipped", "the password holds characters adb cannot type"
 
-    # The display belongs to one user at a time, and every tap and dump goes
-    # to whoever is in front. Driving a clone without switching to it types
-    # this account's password into whatever session IS in front.
-    if user is not None:
+    # One clone awake at a time. Starting every clone up front left them all
+    # resident and wedged a 6 GB device - `am get-current-user` timed out at
+    # 60s and every account reported "no username field", which looked like a
+    # Facebook problem and was an out-of-memory one. A stopped user keeps its
+    # data, so the session survives being put back to sleep.
+    #
+    # The display also belongs to one user at a time, and every tap and dump
+    # goes to whoever is in front: driving a clone without switching to it
+    # types this account's password into whatever session IS in front.
+    # Slot 0 is Owner: already running, already in front, and it cannot be
+    # started or stopped - "Can't stop system user 0".
+    if user:
+        dev.start_user(user)
         dev.switch_user(user)
+        time.sleep(10)          # the user's launcher has to come up first
     dev.stop(PACKAGE, user=user)
     dev.launch(PACKAGE, user=user)
-    time.sleep(8)
+    time.sleep(10)
 
     user_field = None
     for hint in USERNAME_HINTS:
@@ -223,7 +258,15 @@ def login_one(dev: Device, username: str, password: str, log=print,
     # shows no text at all, so "unknown" and "ok" are indistinguishable by
     # reading the screen.
     log("    backing out of the setup screens (accepting nothing)")
-    if leave_onboarding(dev, user=user, log=log):
+    took = leave_onboarding(dev, user=user, log=log)
+
+    # Hand the device back: Owner in front, this clone asleep. Its data - and
+    # so its session - stays put.
+    if user:                    # never Owner: it cannot be stopped
+        dev.switch_user(0)
+        dev.stop_user(user)
+
+    if took:
         return "ok", "signed in"
     return "rejected", "still on the login form - the credentials did not take"
 
@@ -238,6 +281,9 @@ def main(argv) -> int:
     ap.add_argument("--clear", action="store_true",
                     help="wipe Facebook Lite between accounts - DESTROYS the "
                          "session already on the device")
+    ap.add_argument("--not-logged-in", action="store_true",
+                    help="only the roster rows the sheet does not already "
+                         "call LOGGED IN")
     ap.add_argument("--clones", type=int, default=1, metavar="N",
                     help="hold N sessions at once, one per Android user "
                          "(Owner counts as the first). The device caps this: "
@@ -246,8 +292,16 @@ def main(argv) -> int:
 
     from src.storage import database as db
 
-    accounts = [a for a in db.list_accounts(include_disabled=False)
-                if a.get("linked_profile")]
+    # A Brave profile is a BROWSER concept: it names a directory the browser
+    # fleet drives. Facebook Lite has neither, and needs only the username and
+    # the password - so requiring a linked profile here excluded 993 of the
+    # 1030 roster rows for no reason. Accounts are taken straight off the
+    # roster; --not-logged-in narrows to the ones the sheet still calls out.
+    accounts = list(db.list_accounts(include_disabled=False))
+    if args.not_logged_in:
+        accounts = [a for a in accounts
+                    if (a.get("sheet_status") or "").strip().upper()
+                    != "LOGGED IN"]
     if args.only:
         wanted = {u.strip().lower() for u in args.only if u.strip()}
         accounts = [a for a in accounts if a["username"].lower() in wanted]
@@ -284,9 +338,13 @@ def main(argv) -> int:
         slots = list(ensure_clones(dev, args.clones))
         for uid in slots:
             if uid:                      # Owner already holds the app
+                # Share the app, then put the user straight back to sleep.
+                # A stopped user resolves no components, so it is started
+                # again for the few minutes its account is being driven - not
+                # left running, which is what exhausted the device.
+                dev.start_user(uid)
                 dev.install_existing_for_user(PACKAGE, uid)
-                dev.start_user(uid)      # a stopped user resolves nothing
-        time.sleep(8)
+                dev.stop_user(uid)
         print(f"    sessions available: {len(slots)} (user ids {slots})")
         if len(slots) < len(accounts):
             print(f"    {len(accounts)} accounts for {len(slots)} sessions - "
@@ -297,7 +355,8 @@ def main(argv) -> int:
     for i, a in enumerate(accounts, 1):
         username = a["username"]
         slot = slots[(i - 1) % len(slots)]
-        creds = db.credentials_for_profile(a.get("linked_profile") or "")
+        password = db.password_for_username(username)
+        creds = (username, password) if password else None
         if not creds:
             print(f"\n[{i}/{len(accounts)}] {username}: no password on the roster row")
             results.setdefault("no password", []).append(username)
