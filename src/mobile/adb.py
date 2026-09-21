@@ -379,6 +379,25 @@ class Device:
         m = re.search(r"(\d+)", out)
         return int(m.group(1)) if m else 0
 
+    def fblite_user_id(self, package: str = "com.facebook.lite") -> str | None:
+        """The Facebook account id Facebook Lite has a live session for.
+
+        This is ground truth, and it is why root was worth having. The screen
+        cannot be trusted to say whether a login worked: Facebook Lite renders
+        its feed on a canvas that uiautomator reads as blank, so "the login
+        form is gone" passes for a working feed AND for an error page that
+        merely is not the form. current_user_id in the app's own preferences
+        is set to a real 15-digit id only when a session exists, and it names
+        WHICH account - so a login can be checked against the account that was
+        supposed to sign in, not just "something is signed in".
+
+        None when there is no session or the app cannot be read (no root).
+        """
+        path = f"/data/data/{package}/shared_prefs/{package}.xml"
+        out = self.su(f'cat {path}', timeout=30)
+        m = re.search(r'current_user_id"\s+value="(\d{6,})"', out)
+        return m.group(1) if m else None
+
     def clone_display_works(self, user: int) -> bool:
         """Whether a secondary user actually gets a usable screen.
 

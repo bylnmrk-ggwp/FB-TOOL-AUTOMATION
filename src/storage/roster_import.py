@@ -1,14 +1,18 @@
-"""Workbook rows, mapped by header label, into `accounts`.
+"""Roster rows, mapped by header label, into `accounts`.
 
-Header labels, not column letters, decide where a cell lands, so the workbook
+Header labels, not column letters, decide where a cell lands, so the roster
 can be reordered or gain columns without importing the wrong field. The
 columns an import owns are rewritten every time; linked_profile, status and
-status_reason belong to this machine and are never touched here.
+status_reason belong to this machine and are never touched here. STATUS ->
+sheet_status is the one exception in spirit: it is the roster's own verdict
+cell read back, so an import overwrites it every time and only
+src/storage/sheet_status.py ever writes it upstream.
 
-One entry point, scripts/import_accounts.py, reads a local .xlsx and hands
-the rows here. The parser takes rows of cells and nothing else, so any reader
-that produces that shape can feed it.
+The parser takes rows of cells and nothing else, so any reader that produces
+that shape can feed it. Two do: scripts/import_accounts.py reads a local
+.xlsx, and src/storage/roster_sheet.py reads the live Google Sheet.
 """
+import decimal
 import hashlib
 import json
 import re
@@ -23,6 +27,10 @@ HEADERS = {
     "GMAIL": "gmail",
     "PASS FOR GMAIL": "gmail_password",
     "NUMBER": "number",
+    # Read-only mirror of the cell the login runs write through
+    # src/storage/sheet_status.py. "" means the row has never been given a
+    # verdict - the "pending" set the dashboard counts.
+    "STATUS": "sheet_status",
 }
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -44,6 +52,9 @@ def header_columns(rows: list[list[str]], *labels: str) -> dict[str, int]:
     return out
 
 
+_SCIENTIFIC_RE = re.compile(r"\d+(?:\.\d+)?[Ee][+-]?\d+")
+
+
 def clean_username(raw: str) -> str:
     """The account identifier inside a USERNAME cell, without the notes.
 
@@ -53,7 +64,29 @@ def clean_username(raw: str) -> str:
     """
     text = "".join(ch for ch in (raw or "") if unicodedata.category(ch) != "Cf")
     found = _EMAIL_RE.search(text)
-    return found.group(0) if found else text.strip()
+    if found:
+        return found.group(0)
+    text = text.strip()
+
+    # A phone number typed into a spreadsheet is stored as a NUMBER, and the
+    # workbook hands it back in scientific notation: "9.283402278E9". Left
+    # alone that reaches Facebook as those literal characters, and every
+    # attempt fails as an invalid username - a failed login charged to an
+    # account that was never really tried. 15 of 1030 roster rows arrived
+    # this way.
+    #
+    # The roster itself shows the right answer: 9283402278 is stored plainly
+    # for one account and logs in, while 9.283402278E9 is the same number
+    # mangled. So expanding to plain digits restores the identifier exactly -
+    # no leading zero, which is the form already proven to work.
+    if _SCIENTIFIC_RE.fullmatch(text):
+        try:
+            number = decimal.Decimal(text)
+        except decimal.InvalidOperation:
+            return text
+        if number == number.to_integral_value():
+            return str(int(number))
+    return text
 
 
 def parse_accounts(rows: list[list[str]]) -> list[dict]:

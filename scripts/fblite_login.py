@@ -258,7 +258,15 @@ def login_one(dev: Device, username: str, password: str, log=print,
     # shows no text at all, so "unknown" and "ok" are indistinguishable by
     # reading the screen.
     log("    backing out of the setup screens (accepting nothing)")
-    took = leave_onboarding(dev, user=user, log=log)
+    leave_onboarding(dev, user=user, log=log)
+
+    # Ground truth, not pixels. The feed is a blank canvas to uiautomator, so
+    # "the login form is gone" is true for a working session AND for any error
+    # page that is not the form - which is how a mangled username like
+    # 9.709293808E9 was once reported "signed in". The app writes a real
+    # Facebook id into current_user_id only when it actually has a session, so
+    # that is what decides the verdict.
+    fbid = dev.fblite_user_id(PACKAGE)
 
     # Hand the device back: Owner in front, this clone asleep. Its data - and
     # so its session - stays put.
@@ -266,9 +274,11 @@ def login_one(dev: Device, username: str, password: str, log=print,
         dev.switch_user(0)
         dev.stop_user(user)
 
-    if took:
-        return "ok", "signed in"
-    return "rejected", "still on the login form - the credentials did not take"
+    if fbid:
+        return "ok", f"signed in (fb id {fbid})"
+    if on_login_form(dev):
+        return "rejected", "still on the login form - the credentials did not take"
+    return "no session", "no Facebook session was created (challenge, or a bad identifier)"
 
 
 def main(argv) -> int:
