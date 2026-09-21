@@ -22,6 +22,7 @@ Usage:
     python scripts/fblite_login.py --count 5 --clear  # five, wiping between
 """
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -44,11 +45,63 @@ PACKAGE = "com.facebook.lite"
 USERNAME_HINTS = ("email", "phone", "mobile", "username")
 LOGIN_HINTS = ("log in", "login", "log-in", "sign in")
 
-# What the screen says once it is no longer the login form.
-GOOD = ("what's on your mind", "home", "news feed", "marketplace",
-        "notifications")
-CHALLENGE = ("not a robot", "captcha", "confirm", "security check",
-             "two-factor", "authentication", "verify", "checkpoint")
+# What the screen says once it is no longer the login form. Facebook Lite 529
+# labels almost nothing - uiautomator returns bare nodes with empty text for
+# the whole onboarding run - but the feed's search box is labelled, so it is
+# the one reliable "we are in" marker.
+GOOD = ("search...", "what's on your mind", "news feed", "marketplace",
+        "your liked posts", "people you may know")
+
+# After a successful login Facebook Lite walks a chain of setup screens, and
+# Google adds one of its own on top. Measured on 529.0.0.7.105, in order:
+# Google "Save login info?", "Access to contacts" (plus an "are you sure"
+# confirm), "Add email", a language offer, "Add friends", "Access to location".
+#
+# Facebook Lite 529 renders its feed on a canvas: uiautomator returns nodes
+# with NO text for the whole signed-in app, so "what does the screen say" can
+# not tell a live session from a dead one. What it CAN see is the login form,
+# because EditText fields are real views. So the test is the absence of that
+# form, not the presence of a feed.
+#
+# The onboarding chain after a login is answered with BACK, never with taps at
+# remembered coordinates. Blind taps were tried first and pressed "Upload
+# contacts" on an account, because that screen's layout differs from the one
+# the coordinates were measured on. BACK can only ever go backwards: it cannot
+# press Upload, Continue, or Add friend. Backing out drops to the launcher and
+# the session stays saved, which is all that is wanted.
+
+
+def on_login_form(dev: Device) -> bool:
+    """Whether the login form is up - the one thing uiautomator can see."""
+    nodes = dev.screen()
+    if find(nodes, password=True):
+        return True
+    blob = " ".join((n.text or n.desc).lower() for n in nodes)
+    return "mobile number or email" in blob
+
+
+def leave_onboarding(dev: Device, user: int | None = None,
+                     rounds: int = 10, log=print) -> bool:
+    """Back out of the post-login setup screens, accepting nothing.
+
+    Returns True when the app is no longer showing the login form, i.e. the
+    session took.
+    """
+    for _ in range(rounds):
+        dev.key("KEYCODE_BACK")
+        time.sleep(3)
+        foc = dev.shell("dumpsys window | grep mCurrentFocus")
+        if PACKAGE not in foc:                  # dropped out to the launcher
+            break
+    dev.stop(PACKAGE, user=user)
+    time.sleep(2)
+    dev.launch(PACKAGE, user=user)
+    time.sleep(12)
+    return not on_login_form(dev)
+
+
+CHALLENGE = ("not a robot", "captcha", "security check",
+             "two-factor", "authentication", "checkpoint")
 REJECTED = ("incorrect", "wrong password", "invalid", "didn't match",
             "isn't connected", "couldn't find")
 
@@ -109,9 +162,14 @@ def login_one(dev: Device, username: str, password: str, log=print,
     if not dev.can_type(password):
         return "skipped", "the password holds characters adb cannot type"
 
+    # The display belongs to one user at a time, and every tap and dump goes
+    # to whoever is in front. Driving a clone without switching to it types
+    # this account's password into whatever session IS in front.
+    if user is not None:
+        dev.switch_user(user)
     dev.stop(PACKAGE, user=user)
     dev.launch(PACKAGE, user=user)
-    time.sleep(6)
+    time.sleep(8)
 
     user_field = None
     for hint in USERNAME_HINTS:
@@ -137,12 +195,17 @@ def login_one(dev: Device, username: str, password: str, log=print,
     dev.clear_field()
     dev.type_text(password)
 
+    # Facebook Lite 529 ships NO resource ids at all, and puts every label in
+    # content-desc with text left empty. It also nests a View inside the
+    # Button carrying the same label, so a plain text match finds the inner
+    # View: its centre happens to fall inside the Button, but that is luck,
+    # not a contract. Prefer a real Button, on either field.
     nodes = dev.screen()
     button = None
     for hint in LOGIN_HINTS:
-        hits = find(nodes, text=hint)
+        hits = find(nodes, text=hint) + find(nodes, desc=hint)
         if hits:
-            button = hits[0]
+            button = next((n for n in hits if n.cls.endswith("Button")), hits[0])
             break
     if button is None:
         log("    no Log In button found - submitting with the keyboard")
@@ -152,7 +215,17 @@ def login_one(dev: Device, username: str, password: str, log=print,
 
     time.sleep(10)
     labels = [(n.text or n.desc) for n in dev.screen() if (n.text or n.desc)]
-    return classify(labels)
+    verdict, detail = classify(labels)
+    if verdict in ("rejected", "challenge"):
+        return verdict, detail
+
+    # Anything else needs the form test, not the labels: a working session
+    # shows no text at all, so "unknown" and "ok" are indistinguishable by
+    # reading the screen.
+    log("    backing out of the setup screens (accepting nothing)")
+    if leave_onboarding(dev, user=user, log=log):
+        return "ok", "signed in"
+    return "rejected", "still on the login form - the credentials did not take"
 
 
 def main(argv) -> int:
@@ -212,6 +285,8 @@ def main(argv) -> int:
         for uid in slots:
             if uid:                      # Owner already holds the app
                 dev.install_existing_for_user(PACKAGE, uid)
+                dev.start_user(uid)      # a stopped user resolves nothing
+        time.sleep(8)
         print(f"    sessions available: {len(slots)} (user ids {slots})")
         if len(slots) < len(accounts):
             print(f"    {len(accounts)} accounts for {len(slots)} sessions - "

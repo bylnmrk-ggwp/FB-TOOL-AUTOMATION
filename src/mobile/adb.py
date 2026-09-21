@@ -254,10 +254,20 @@ class Device:
                 f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
                 timeout=60)
             return
-        # monkey has no --user, so a clone is started through its launcher
-        # intent instead.
-        self.shell(f"monkey --user {user} -p {package} "
-                   f"-c android.intent.category.LAUNCHER 1", timeout=60)
+        # monkey rejects --user on this image ("args: [--user, 12, -p, ...]"),
+        # so a clone is started by resolving its launcher component and asking
+        # am to start that component as the given user.
+        brief = self.shell(
+            f"cmd package resolve-activity --brief --user {user} {package}")
+        component = next((ln.strip() for ln in brief.splitlines()
+                          if "/" in ln and ln.strip().startswith(package)), "")
+        if not component:
+            raise RuntimeError(
+                f"no launcher activity for {package} as user {user}: "
+                f"{brief.strip()[:160]}")
+        self.shell(f"am start --user {user} -a android.intent.action.MAIN "
+                   f"-c android.intent.category.LAUNCHER -n {component}",
+                   timeout=60)
 
     def stop(self, package: str, user: int | None = None) -> None:
         scope = f"--user {user} " if user is not None else ""
@@ -281,6 +291,36 @@ class Device:
     # each user has its own data directory, so one installed Facebook Lite
     # holds one SEPARATE session per user. The ceiling is the device's, not
     # ours: `pm get-max-users` reports 4 on this image, Owner included.
+
+    def su(self, command: str, timeout: float = 60) -> str:
+        """Run a command as root. Empty output when the device is not rooted."""
+        return self.shell(f'su -c "{command}"', timeout=timeout)
+
+    def rooted(self) -> bool:
+        return "uid=0" in self.su("id")
+
+    def raise_user_limit(self, wanted: int) -> int:
+        """Lift Android's cap on how many users - i.e. clones - can exist.
+
+        The cap is not a licence or a paid feature: UserManager reads it from
+        the fw.max_users property, falling back to a build resource that
+        happens to be 4 on this image. Root can set the property, and
+        UserManager re-reads it per call, so it takes effect at once with no
+        framework restart. Measured: `pm get-max-users` went 4 -> 32.
+
+        Not persisted into /system/build.prop on purpose. Re-applying it on
+        each run is one shell call and leaves the emulator image untouched, so
+        nothing has to be undone later.
+
+        Returns the cap actually in force afterwards.
+        """
+        if wanted > self.max_users():
+            if not self.rooted():
+                self.log("  cannot raise the clone limit: the device is not "
+                         "rooted (LDPlayer: Settings > Other > Root)")
+                return self.max_users()
+            self.su(f"setprop fw.max_users {int(wanted)}")
+        return self.max_users()
 
     def max_users(self) -> int:
         out = self.shell("pm get-max-users")
@@ -310,6 +350,34 @@ class Device:
                 f"could not create user {name!r}: {out.strip()[:160]} "
                 f"(max users on this device: {self.max_users()})")
         return int(m.group(1))
+
+    def start_user(self, user: int) -> None:
+        """Bring a user up so its packages resolve.
+
+        A user created with pm create-user exists but is STOPPED, and a
+        stopped user's components do not resolve: resolve-activity answers
+        "No activity found" for an app that pm says is installed for it. Every
+        clone therefore has to be started before it can be driven.
+        """
+        self.shell(f"am start-user {user}", timeout=120)
+
+    def switch_user(self, user: int) -> None:
+        """Bring a user to the FOREGROUND.
+
+        This is not optional for a clone. `uiautomator dump`, `input tap` and
+        `input text` all act on whatever user owns the display, so starting an
+        app with `am start --user 12` while user 0 is in front drives nothing:
+        the app runs, unseen, and the taps land in the wrong session - which
+        on a login screen means typing one account's password into another
+        account's form.
+        """
+        self.shell(f"am switch-user {user}", timeout=120)
+        time.sleep(6)
+
+    def current_user(self) -> int:
+        out = self.shell("am get-current-user")
+        m = re.search(r"(\d+)", out)
+        return int(m.group(1)) if m else 0
 
     def remove_user(self, user: int) -> None:
         self.shell(f"pm remove-user {user}", timeout=120)
