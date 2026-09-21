@@ -68,7 +68,39 @@ def classify(labels: list[str]) -> tuple[str, str]:
     return "unknown", "the screen matched nothing known"
 
 
-def login_one(dev: Device, username: str, password: str, log=print) -> tuple[str, str]:
+CLONE_PREFIX = "fbclone"
+
+
+def ensure_clones(dev: Device, wanted: int, log=print) -> list[int]:
+    """User ids that can each hold their own Facebook Lite session.
+
+    Owner counts as the first slot, so `wanted` sessions need wanted-1 extra
+    users. The device decides the ceiling - `pm get-max-users` is 4 on this
+    image - and asking for more than it allows is answered with what exists
+    rather than an exception: logging four accounts is better than logging
+    none because the fifth would not fit.
+    """
+    ceiling = dev.max_users()
+    if wanted > ceiling:
+        log(f"    device allows {ceiling} sessions in total "
+            f"(pm get-max-users); {wanted} were asked for")
+    wanted = max(1, min(wanted, ceiling))
+
+    slots = [0]                                   # Owner is always slot one
+    existing = {name: uid for uid, name in dev.users()
+                if name.startswith(CLONE_PREFIX)}
+    for n in range(1, wanted):
+        name = f"{CLONE_PREFIX}{n}"
+        uid = existing.get(name)
+        if uid is None:
+            uid = dev.create_user(name)
+            log(f"    created clone {name} (user {uid})")
+        slots.append(uid)
+    return slots
+
+
+def login_one(dev: Device, username: str, password: str, log=print,
+              user: int | None = None) -> tuple[str, str]:
     """Drive one login. Returns (verdict, detail)."""
     # Refuse BEFORE touching the app: a password adb cannot type exactly would
     # otherwise be half-entered and charged to the account as a failed login.
@@ -77,8 +109,8 @@ def login_one(dev: Device, username: str, password: str, log=print) -> tuple[str
     if not dev.can_type(password):
         return "skipped", "the password holds characters adb cannot type"
 
-    dev.stop(PACKAGE)
-    dev.launch(PACKAGE)
+    dev.stop(PACKAGE, user=user)
+    dev.launch(PACKAGE, user=user)
     time.sleep(6)
 
     user_field = None
@@ -133,6 +165,10 @@ def main(argv) -> int:
     ap.add_argument("--clear", action="store_true",
                     help="wipe Facebook Lite between accounts - DESTROYS the "
                          "session already on the device")
+    ap.add_argument("--clones", type=int, default=1, metavar="N",
+                    help="hold N sessions at once, one per Android user "
+                         "(Owner counts as the first). The device caps this: "
+                         "pm get-max-users is 4 on this image")
     args = ap.parse_args(argv)
 
     from src.storage import database as db
@@ -169,30 +205,53 @@ def main(argv) -> int:
               "an APK you trust. This script will not fetch one.")
         return 1
 
+    slots: list[int | None] = [None]
+    if args.clones > 1:
+        print(f"\nProvisioning up to {args.clones} sessions...")
+        slots = list(ensure_clones(dev, args.clones))
+        for uid in slots:
+            if uid:                      # Owner already holds the app
+                dev.install_existing_for_user(PACKAGE, uid)
+        print(f"    sessions available: {len(slots)} (user ids {slots})")
+        if len(slots) < len(accounts):
+            print(f"    {len(accounts)} accounts for {len(slots)} sessions - "
+                  f"later accounts reuse a slot, which needs --clear")
+
     results: dict[str, list[str]] = {}
+    placed: list[tuple[str, int | None]] = []
     for i, a in enumerate(accounts, 1):
         username = a["username"]
+        slot = slots[(i - 1) % len(slots)]
         creds = db.credentials_for_profile(a.get("linked_profile") or "")
         if not creds:
             print(f"\n[{i}/{len(accounts)}] {username}: no password on the roster row")
             results.setdefault("no password", []).append(username)
             continue
-        print(f"\n[{i}/{len(accounts)}] {username}")
+        where = "Owner" if slot in (None, 0) else f"clone user {slot}"
+        print(f"\n[{i}/{len(accounts)}] {username}  ->  {where}")
         if args.clear:
-            print("    wiping Facebook Lite (destroys the session on the device)")
-            dev.clear_app_data(PACKAGE)
+            print("    wiping Facebook Lite (destroys the session in this slot)")
+            dev.clear_app_data(PACKAGE, user=slot)
         try:
-            verdict, detail = login_one(dev, username, creds[1], log=print)
+            verdict, detail = login_one(dev, username, creds[1], log=print,
+                                        user=slot)
         except Exception as e:  # noqa: BLE001 - one account must not end the run
             verdict, detail = "error", f"{type(e).__name__}: {e}"
         print(f"    {verdict}: {detail}")
         results.setdefault(verdict, []).append(username)
+        if verdict == "ok":
+            placed.append((username, slot))
 
     print("\n" + "=" * 60)
     for verdict, names in sorted(results.items()):
         print(f"  {verdict}: {len(names)}")
         for n in names:
             print(f"     {n}")
+    if placed:
+        print("\n  signed in, and which session each one lives in:")
+        for username, slot in placed:
+            where = "Owner" if slot in (None, 0) else f"clone user {slot}"
+            print(f"     {username}  ->  {where}")
     print("\nThe roster was not modified: these are app sessions, and "
           "accounts.status means the BROWSER session.")
     return 0

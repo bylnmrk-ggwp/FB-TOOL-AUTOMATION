@@ -242,24 +242,87 @@ class Device:
 
     # -- apps -------------------------------------------------------------
 
-    def installed(self, package: str) -> bool:
-        listed = self.shell(f"pm list packages {package}")
+    def installed(self, package: str, user: int | None = None) -> bool:
+        scope = f"--user {user} " if user is not None else ""
+        listed = self.shell(f"pm list packages {scope}{package}")
         return any(line.strip() == f"package:{package}"
                    for line in listed.splitlines())
 
-    def launch(self, package: str) -> None:
-        self.shell(f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
-                   timeout=60)
+    def launch(self, package: str, user: int | None = None) -> None:
+        if user is None:
+            self.shell(
+                f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
+                timeout=60)
+            return
+        # monkey has no --user, so a clone is started through its launcher
+        # intent instead.
+        self.shell(f"monkey --user {user} -p {package} "
+                   f"-c android.intent.category.LAUNCHER 1", timeout=60)
 
-    def stop(self, package: str) -> None:
-        self.shell(f"am force-stop {package}")
+    def stop(self, package: str, user: int | None = None) -> None:
+        scope = f"--user {user} " if user is not None else ""
+        self.shell(f"am force-stop {scope}{package}")
 
-    def clear_app_data(self, package: str) -> None:
+    def clear_app_data(self, package: str, user: int | None = None) -> None:
         """Wipe an app back to first-run state.
 
-        This is how one device logs a SECOND account in: Facebook Lite keeps
-        its session in app storage, so clearing it is the only way back to the
-        login form without the account switcher. It destroys the session that
-        is there - the caller decides, never this module.
+        Facebook Lite keeps its session in app storage, so clearing it is the
+        way back to the login form. It DESTROYS the session that is there -
+        the caller decides, never this module.
         """
-        self.shell(f"pm clear {package}", timeout=120)
+        scope = f"--user {user} " if user is not None else ""
+        self.shell(f"pm clear {scope}{package}", timeout=120)
+
+    # -- clones -----------------------------------------------------------
+    #
+    # LDPlayer's "App Clone" is a button in the host GUI: no package on the
+    # device, and no ldconsole command, so it cannot be driven from here.
+    # Android's own multi-user support can be, and gives the same thing -
+    # each user has its own data directory, so one installed Facebook Lite
+    # holds one SEPARATE session per user. The ceiling is the device's, not
+    # ours: `pm get-max-users` reports 4 on this image, Owner included.
+
+    def max_users(self) -> int:
+        out = self.shell("pm get-max-users")
+        m = re.search(r"(\d+)", out)
+        return int(m.group(1)) if m else 1
+
+    def users(self) -> list[tuple[int, str]]:
+        """(id, name) for every Android user, Owner first."""
+        found = []
+        for line in self.shell("pm list users").splitlines():
+            m = re.search(r"UserInfo\{(\d+):([^:]*):", line)
+            if m:
+                found.append((int(m.group(1)), m.group(2)))
+        return found
+
+    def create_user(self, name: str) -> int:
+        """A new Android user, i.e. one more independent app session.
+
+        Raises when the device is full rather than returning a user that does
+        not exist - a caller that ploughs on would install into user -1 and
+        report a login against a session nobody can open.
+        """
+        out = self.shell(f"pm create-user {name}", timeout=120)
+        m = re.search(r"created user id (\d+)", out)
+        if not m:
+            raise RuntimeError(
+                f"could not create user {name!r}: {out.strip()[:160]} "
+                f"(max users on this device: {self.max_users()})")
+        return int(m.group(1))
+
+    def remove_user(self, user: int) -> None:
+        self.shell(f"pm remove-user {user}", timeout=120)
+
+    def install_existing_for_user(self, package: str, user: int) -> None:
+        """Give an already-installed app to another user.
+
+        The APK is installed once and shared; only the data directory is per
+        user. That is what makes this cheap enough to be worth doing at all -
+        a full install per clone would not fit.
+        """
+        out = self.shell(f"pm install-existing --user {user} {package}",
+                         timeout=180)
+        if "installed for user" not in out.lower() and "success" not in out.lower():
+            raise RuntimeError(
+                f"could not give {package} to user {user}: {out.strip()[:160]}")
