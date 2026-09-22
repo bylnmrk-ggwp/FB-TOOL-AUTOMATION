@@ -313,7 +313,7 @@ label.check input { accent-color: var(--accent); margin: 0; }
 .status.pending, .status.warn { color: var(--warning); }
 .status.off { color: var(--muted); }
 .status.disabled { color: var(--error); }
-.status.running { color: var(--accent); }
+.status.running { color: var(--accent-text); }
 
 /* Dashboard -------------------------------------------------------------- */
 .dash { display: flex; flex-direction: column; gap: var(--s-lg); min-height: 100%; padding: var(--s-lg); }
@@ -706,7 +706,7 @@ label.check input { accent-color: var(--accent); margin: 0; }
 /* F2 pages (Dashboard, Accounts, Log) ----------------------------------- */
 /* Only additions: the shell, table and phone rules above are untouched. */
 .input.search { width: 240px; max-width: 100%; }
-.btn.toggled { background: var(--secondary-active); border-color: var(--accent); color: var(--accent); }
+.btn.toggled { background: var(--secondary-active); border-color: var(--accent); color: var(--accent-text); }
 .card.stat { display: flex; flex-direction: column; justify-content: center; min-height: 92px; }
 .dash-action .btn.accent { min-width: 200px; justify-content: center; }
 .card.alerts:focus-visible { outline: 2px solid var(--accent); }
