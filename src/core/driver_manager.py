@@ -412,6 +412,7 @@ class DriverManager:
         # Keeps live sessions warm and recovers lost ones, on its own, for as
         # long as the app runs. Cancelled with the worker.
         self._sweep_task = asyncio.create_task(self._session_sweep_loop())
+        self._sweep_task.add_done_callback(self._report_task_death("Session sweep"))
 
         # Track when we last collected JS heaps (every ~2s)
         last_js_heap_collection = 0.0
@@ -4747,6 +4748,7 @@ class DriverManager:
             deadline = asyncio.get_running_loop().time() + minutes * 60
         self._watch_keeper = asyncio.create_task(
             self._keep_watching(url, deadline))
+        self._watch_keeper.add_done_callback(self._report_task_death("Watch keeper"))
         for name, why in broken.items():
             self.log(f"  ⚠️  '{name}' opened but is NOT watching: {why}")
         # "at open" matters: this is one snapshot taken as the pages loaded,
@@ -4807,6 +4809,44 @@ class DriverManager:
     RECHECK_GATED_HOURS = 6
     GATED_REASONS = ("checkpoint or verification required",
                      "email confirmation required")
+
+    def _report_task_death(self, what: str):
+        """A done-callback that says when a background task ended on an error.
+
+        `asyncio.create_task` drops the exception of a task nobody awaits: the
+        coroutine stops, every attribute it set stays exactly as it was, and
+        the only trace is "Task exception was never retrieved" written to
+        stderr whenever the task is finally collected - which the operator
+        never sees, because the desktop app has no console and the server runs
+        detached.
+
+        The watch keeper is why this exists. `_keep_watching` is the whole
+        reason a watch lasts: it resumes paused pages, kicks stalled ones back
+        to the live edge and rebuilds watchers that died mid-broadcast. When
+        the keeper itself dies, none of that happens again, the pages sit there
+        decoding whatever they last had, and `_watch_autos` still lists them -
+        so the app reports a healthy fleet with nobody keeping it alive.
+        Measured on a 24-page live watch: the keeper stopped and the log went
+        quiet for an hour while the app still said 22/24 playing.
+
+        That is the same silence `_keep_watching` was written to prevent, one
+        level up: a check that only looks at `paused` calls a frozen page
+        healthy forever, and a task nobody watches calls a dead keeper healthy
+        forever.
+        """
+        def done(task) -> None:
+            # A cancelled task is the normal way both of these end - the worker
+            # is shutting down - and asking a cancelled task for its exception
+            # raises CancelledError rather than answering.
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is None:
+                return
+            self.log(f"⚠️  {what} stopped on an error and is no longer running: "
+                     f"{type(exc).__name__}: {str(exc)[:200]}")
+
+        return done
 
     async def _session_sweep_loop(self):
         """Keep sessions warm and recover lost ones, forever."""

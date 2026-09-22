@@ -80,9 +80,14 @@ except Exception:
     traceback.print_exc()
     failures.append("tkinter smoke test")
 
-step("proofs/*.py")
+step("proofs/**/*.py")
 import runpy
-_PROOFS = sorted((ROOT / "proofs").glob("*.py"))
+# Proofs live in topic folders (proofs/login/, proofs/watch/, ...), but the
+# NN_ prefix is still the run order: it is chronological, so a later proof
+# may rely on what an earlier one set up. Sorting by file name rather than
+# by path keeps that order across folders - by path, every proofs/actions/
+# file would run before every proofs/watch/ file.
+_PROOFS = sorted((ROOT / "proofs").rglob("*.py"), key=lambda p: p.name)
 for _proof in _PROOFS:
     # Collect on THIS thread before every proof. Several proofs build and
     # destroy a Tk root of their own; a widget left unreachable but not yet
