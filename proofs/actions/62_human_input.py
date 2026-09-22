@@ -154,10 +154,17 @@ if "human_input.type_text" not in src:
     failures.append("human input: the login form does not type its fields")  # noqa: F821
 if "human_input.click" not in src:
     failures.append("human input: the Log In button is still pressed without a pointer")  # noqa: F821
-if "--disable-blink-features=AutomationControlled" not in LOGIN_FLAGS:
-    failures.append("human input: the browser still advertises Blink automation")  # noqa: F821
-if "webdriver" not in inspect.getsource(FacebookAutomation.start_browser):
-    failures.append("human input: navigator.webdriver is left set, which is the first "  # noqa: F821
-                    "thing a bot check reads")
+# Blink automation and navigator.webdriver used to be answered here, with a
+# --disable-blink-features flag in LOGIN_FLAGS and an init script in
+# start_browser. Patchright owns both now: it adds that flag to every launch,
+# strips the --enable-automation switch no flag of ours could remove, and
+# reports navigator.webdriver false natively. So the thing to assert is that
+# the automation really is Patchright - a silent fall back to plain
+# Playwright would put all three signals back.
+import src.core.facebook_automation as _fa  # noqa: E402
+if not _fa.async_playwright.__module__.startswith("patchright"):
+    failures.append("human input: the browser is driven by "  # noqa: F821
+                    f"{_fa.async_playwright.__module__}, not patchright, so it "
+                    "advertises Blink automation and navigator.webdriver again")
 
 print("FAILED" if [f for f in failures if "human input" in f] else "ok")  # noqa: F821

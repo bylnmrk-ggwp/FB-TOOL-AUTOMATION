@@ -1,18 +1,24 @@
-"""One-shot sync of the account roster into the database.
+"""One-shot import of the account roster into the database.
 
-The roster lives in the Google Sheet; by default this pulls it through the
-same header-mapped parser the running app uses every 20 s
-(src/storage/roster_sheet.py). A local .xlsx can still be imported with
---xlsx for an offline machine.
+Reads a local .xlsx through the header-mapped parser in
+src/storage/roster_import.py: labels, not column letters, decide where each
+cell lands, so a reordered workbook cannot import the wrong field.
 
-Re-runnable: accounts are keyed by USERNAME, so editing the sheet and running
-this again refreshes the existing rows and adds the new ones. linked_profile,
-status and status_reason are never touched by an import.
+Re-runnable: accounts are keyed by USERNAME, so editing the workbook and
+running this again refreshes the existing rows and adds the new ones.
+linked_profile, status and status_reason are never touched by an import.
+
+A --sheet import reads the live Google Sheet instead, taking each cell as the
+sheet DISPLAYS it. That matters for more than convenience: half this roster's
+usernames are phone numbers, which Sheets stores as numbers and every .xlsx
+export renders "9.709293808E9" - not an address Facebook will accept.
 
 Usage:
-    python scripts/import_accounts.py                # Google Sheet -> database
-    python scripts/import_accounts.py --dry-run      # report, write nothing
-    python scripts/import_accounts.py --xlsx FILE    # a local workbook instead
+    python scripts/import_accounts.py --xlsx FILE    # workbook -> database
+    python scripts/import_accounts.py --xlsx FILE --dry-run
+    python scripts/import_accounts.py --sheet        # the project's roster sheet
+    python scripts/import_accounts.py --sheet URL    # any other sheet
+    python scripts/import_accounts.py --sheet URL --dry-run
 """
 import argparse
 import re
@@ -28,6 +34,7 @@ try:
 except Exception:
     pass
 
+from src.storage import roster_import  # noqa: E402
 from src.storage import roster_sheet  # noqa: E402
 
 
@@ -65,10 +72,9 @@ def _col_index(letters: str) -> int:
 
 
 def read_xlsx_rows(xlsx: Path) -> list[list[str]]:
-    """The first worksheet as rows of cells, header first, in sheet order.
+    """The first worksheet as rows of cells, header first, in workbook order.
 
-    Produces the same shape the Sheets API returns, so the one parser in
-    roster_sheet handles both sources.
+    Produces the rows-of-cells shape the parser in roster_import expects.
     """
     with zipfile.ZipFile(xlsx) as z:
         shared = _shared_strings(z)
@@ -92,31 +98,47 @@ def read_xlsx_rows(xlsx: Path) -> list[list[str]]:
     return rows
 
 
+# ── Google Sheet ───────────────────────────────────────────────────────────────
+
+# The sheet reader lives in src/storage/roster_sheet.py, because the running
+# app polls the same sheet through it every 20 s. Both paths there return the
+# cell as the sheet DISPLAYS it, which is what keeps a phone-number username
+# from arriving as "9.709293808E9".
+sheet_id_and_gid = roster_sheet.sheet_id_and_gid
+read_sheet_rows = roster_sheet.fetch_rows
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--xlsx", type=Path, help="import a local workbook instead of the sheet")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--xlsx", type=Path, help="the workbook to import")
+    src.add_argument("--sheet", metavar="URL_OR_ID", nargs="?",
+                     const=roster_sheet.api.DEFAULT_SHEET_ID,
+                     help="import straight from a Google Sheet; bare --sheet "
+                          "uses the project's own roster sheet")
     ap.add_argument("--dry-run", action="store_true", help="report, write nothing")
     args = ap.parse_args(argv)
 
-    if args.xlsx:
+    if args.sheet:
+        sid, gid = sheet_id_and_gid(args.sheet)
+        print(f"Reading sheet {sid} (gid {gid}) ...")
+        rows = read_sheet_rows(sheet_id=sid, gid=gid)
+        source = f"sheet:{sid}"
+    else:
         if not args.xlsx.exists():
-            print(f"Spreadsheet not found: {args.xlsx}")
+            print(f"Workbook not found: {args.xlsx}")
             return 1
         print(f"Reading {args.xlsx.name} ...")
         rows = read_xlsx_rows(args.xlsx)
         source = args.xlsx.name
-    else:
-        print("Reading the Google Sheet ...")
-        rows = roster_sheet.fetch_rows()
-        source = "Google Sheet"
 
-    accounts = roster_sheet.parse_accounts(rows)
+    accounts = roster_import.parse_accounts(rows)
     header = [h.strip() for h in (rows[0] if rows else [])]
     print(f"  header: {header}")
     print(f"  {len(accounts)} row(s) with a username")
-    missing = [lbl for lbl in roster_sheet.HEADERS
+    missing = [lbl for lbl in roster_import.HEADERS
                if lbl not in {h.upper() for h in header}]
     if missing:
         print(f"  note: columns not present, importing as blank: {', '.join(missing)}")
@@ -137,7 +159,7 @@ def main(argv: list[str]) -> int:
     from src.storage import config_manager as cfg
     from src.storage import database as db
 
-    inserted, updated = roster_sheet.apply(accounts)
+    inserted, updated = roster_import.apply(accounts)
     total, linked = db.count_accounts()
     profiles = cfg.list_profiles()
     print(f"\nImported from {source}: {inserted} new, {updated} refreshed")

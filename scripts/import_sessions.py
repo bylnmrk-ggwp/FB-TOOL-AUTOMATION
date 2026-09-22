@@ -42,7 +42,7 @@ try:
 except Exception:
     pass
 
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 from src.core import browser_choice
 from src.storage import config_manager as cfg
@@ -90,10 +90,14 @@ async def inject(pw, profile_path: str, state: dict, verify: bool) -> tuple[bool
     context would hold them in memory and lose them on exit.
     """
     user_data_dir, profile_dir_name = _profile_layout(profile_path)
+    # Hidden, not headless. --verify loads a real facebook.com page in this
+    # context, and Chromium's headless modes put "HeadlessChrome" in the
+    # User-Agent of that request. The window is minimised below instead; see
+    # FacebookAutomation.hide_window.
     ctx = await pw.chromium.launch_persistent_context(
         user_data_dir=user_data_dir,
         executable_path=browser_choice.executable_path(),
-        headless=True,
+        headless=False,
         args=[*([f"--profile-directory={profile_dir_name}"] if profile_dir_name else [])],
     )
     try:
@@ -107,12 +111,13 @@ async def inject(pw, profile_path: str, state: dict, verify: bool) -> tuple[bool
 
         from src.core.facebook_automation import FacebookAutomation
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto("https://www.facebook.com/",
-                        timeout=30000, wait_until="domcontentloaded")
-        await asyncio.sleep(3)
         auto = FacebookAutomation(log_callback=lambda m: None)
         auto.page = page
         auto.context = ctx
+        await auto.hide_window()
+        await page.goto("https://www.facebook.com/",
+                        timeout=30000, wait_until="domcontentloaded")
+        await asyncio.sleep(3)
         signed_in = await auto._is_logged_in(timeout=15)
         return signed_in, (f"{len(cookies)} cookies, signed in" if signed_in
                            else f"{len(cookies)} cookies, NOT signed in")

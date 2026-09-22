@@ -7,6 +7,7 @@ Usage:
     python cli.py launch-profile <name>
     python cli.py share <post_url> <group_name> [options]
     python cli.py share-timeline <post_url> [options]
+    python cli.py comment <post_url> --text "..." [--profile NAME]
     python cli.py login <email> <password>
     python cli.py batch <file.json>
 
@@ -26,11 +27,22 @@ Examples:
 import argparse
 import asyncio
 import json
+import random
 import sys
 import os
 
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Every line this prints carries a status emoji, and a Windows console is
+# cp1252 by default: without this the first "OK" raises UnicodeEncodeError and
+# the traceback's own error print raises it again, burying the real result.
+# The other scripts in scripts/ all do this; cli.py was the one that did not.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 from src.core.facebook_automation import FacebookAutomation
 from src.storage import config_manager as cfg
@@ -195,6 +207,46 @@ async def cmd_share_timeline(args):
         await auto.quit()
 
 
+async def cmd_comment(args):
+    """Post a comment on one post, without sharing it anywhere.
+
+    The queue has commented on a post since it grew an action_type of
+    "comment", but only through the app: the CLI could reach the same
+    automation for a group share and a timeline share and not for a plain
+    comment, so testing one meant starting the server. This is that gap,
+    over the same _auto_comment() the queue runs.
+
+    Several lines in --text means one of them is chosen at random, which is
+    what the automation does with a multi-line comment everywhere else.
+    """
+    auto = FacebookAutomation(log_callback=_log, debug=getattr(args, "debug", False))
+    try:
+        profile_name, _ = await _ensure_profile(auto, args.profile, auto_launch=True)
+
+        logged_in = await auto._is_logged_in(timeout=15)
+        if not logged_in:
+            print(f"  \u274c Profile '{profile_name}' is not logged in to Facebook.")
+            print("   Log it in first: python scripts/login_accounts.py --only <username>")
+            await auto.quit()
+            return
+
+        ok = await auto._auto_comment(args.post_url, args.text)
+        if ok:
+            print(f"  \u2705 {profile_name}: comment posted")
+        else:
+            reason = getattr(auto, "last_comment_error", "") or "Failed to comment"
+            print(f"  \u274c {profile_name}: {reason}")
+
+        await auto.cleanup()
+
+    except KeyboardInterrupt:
+        print("\n  Interrupted. Closing browser...")
+        await auto.quit()
+    except Exception as e:
+        print(f"  \u274c Error: {e}")
+        await auto.quit()
+
+
 async def cmd_login(args):
     """Login with email and password, handling 2FA if needed."""
     auto = FacebookAutomation(log_callback=_log)
@@ -252,7 +304,7 @@ async def cmd_batch(args):
             "profile_name": "MyProfile",
             "post_url": "https://facebook.com/post/123",
             "group_name": "My Group",        // for group shares
-            "action_type": "group|timeline",  // default: "group"
+            "action_type": "group|timeline|comment",  // default: "group"
             "comment_text": "optional comment",
             "reaction": "like|love|etc"
         }
@@ -273,6 +325,7 @@ async def cmd_batch(args):
     total = len(items)
     print(f"  📋 Batch loaded: {total} item(s)\n")
 
+    delays = cfg.get_comment_delays()
     auto = FacebookAutomation(log_callback=_log)
     try:
         for i, item in enumerate(items, 1):
@@ -306,7 +359,18 @@ async def cmd_batch(args):
                 continue
 
             # Perform action
-            if action_type == "timeline":
+            if action_type == "comment":
+                # A comment needs no group and shares nothing: the queue
+                # has had this action for a while and the batch runner had
+                # not, so a multi-account comment test meant the server.
+                if not comment_text:
+                    print(f"  [{i}/{total}] \u274c No comment_text. Skipping.")
+                    await auto.cleanup()
+                    continue
+                ok = await auto._auto_comment(post_url, comment_text)
+                msg = "Commented" if ok else (getattr(
+                    auto, "last_comment_error", "") or "Failed to comment")
+            elif action_type == "timeline":
                 ok, msg = await auto.share_post_to_timeline(
                     post_url,
                     comment_text=comment_text or None,
@@ -328,6 +392,17 @@ async def cmd_batch(args):
 
             # Cleanup after each item
             await auto.cleanup()
+
+            # Space the accounts out. Several accounts commenting on one
+            # post back to back is the pattern Facebook rate-limits, and
+            # the operator already configured this spacing for it. Only an
+            # account that actually acted is paced: a skipped profile did
+            # nothing Facebook saw, so waiting on its behalf buys nothing.
+            if i < total:
+                wait = random.uniform(delays["between_comments_min"],
+                                      delays["between_comments_max"])
+                print(f"  waiting {wait:.0f}s before the next account...")
+                await asyncio.sleep(wait)
 
         print(f"\n  📋 Batch complete: {total} item(s) processed")
 
@@ -387,6 +462,16 @@ Examples:
     p_timeline.add_argument("--debug", action="store_true",
                             help="Dump page HTML for debugging")
 
+    # comment
+    p_comment = sub.add_parser("comment", help="Post a comment on a post")
+    p_comment.add_argument("post_url", help="URL of the post to comment on")
+    p_comment.add_argument("--text", required=True,
+                           help="comment text; several lines means one is "
+                                "picked at random")
+    p_comment.add_argument("--profile", help="Profile to use (default: first saved)")
+    p_comment.add_argument("--debug", action="store_true",
+                           help="Dump page HTML for debugging")
+
     # login
     p_login = sub.add_parser("login", help="Login to Facebook with email/password")
     p_login.add_argument("email", help="Facebook email or phone")
@@ -408,6 +493,7 @@ def main():
         "launch-profile": cmd_launch_profile,
         "share": cmd_share,
         "share-timeline": cmd_share_timeline,
+        "comment": cmd_comment,
         "login": cmd_login,
         "batch": cmd_batch,
     }

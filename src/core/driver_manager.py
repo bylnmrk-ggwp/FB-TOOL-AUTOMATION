@@ -10,7 +10,7 @@ from queue import Empty, Queue
 from typing import Callable
 
 from groq import Groq
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 from src.storage import config_manager as cfg
 from src.storage import database as db
@@ -881,7 +881,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -1120,7 +1123,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -1349,7 +1355,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -4081,12 +4090,18 @@ class DriverManager:
             # autoplay; a queue run does not and must not stream video.
             args.append("--autoplay-policy=no-user-gesture-required")
         if mode == "headless_new":
-            # Playwright must not add its own --headless: our flag selects the
-            # new engine, which is what actually hides the window.
-            args.append("--headless=new")
+            # No --headless flag of any kind. Both --headless and
+            # --headless=new report "HeadlessChrome/<version>" in the
+            # User-Agent of every request the fleet sends, and with the GPU
+            # switches on top the page had no WebGL context at all. The
+            # windows are real and each one is minimised as its context opens
+            # - see FacebookAutomation.hide_window.
             return mode, False, args
         if mode == "visible":
             return mode, False, args
+        # Legacy "headless" is still honoured for a PC that needs the last
+        # megabyte, and it is the one mode that still advertises
+        # HeadlessChrome to Facebook.
         return mode, True, args
 
     async def _launch_browser(self, pw, headless: bool, args: list,
@@ -4382,7 +4397,8 @@ class DriverManager:
         try:
             await auto.init_from_storage(browser, state, viewport=SMALL_VIEWPORT,
                                          block_resources=False,
-                                         no_viewport=(mode == "visible"))
+                                         no_viewport=(mode == "visible"),
+                                         hidden=(mode != "visible"))
             await auto.page.goto(url, wait_until="domcontentloaded", timeout=45000)
         except Exception:
             return False
@@ -4688,7 +4704,8 @@ class DriverManager:
                                              states[profile_name],
                                              viewport=SMALL_VIEWPORT,
                                              block_resources=False,
-                                             no_viewport=(mode == "visible"))
+                                             no_viewport=(mode == "visible"),
+                                             hidden=(mode != "visible"))
                 self._watch_autos[profile_name] = auto
                 self._watch_urls[profile_name] = url
                 self._watch_states[profile_name] = states[profile_name]
@@ -4888,9 +4905,10 @@ class DriverManager:
             pw = await async_playwright().start()
             browser = None
             try:
+                # No --headless=new here either: the keepalive opens real
+                # Facebook pages, and they must not announce HeadlessChrome.
                 browser = await self._launch_browser(
-                    pw, False, ["--window-size=1024,768", *WATCH_FLAGS,
-                                "--headless=new"])
+                    pw, False, ["--window-size=1024,768", *WATCH_FLAGS])
                 for name in active:
                     result = await self._keepalive_profile(
                         browser, name, state_cache)

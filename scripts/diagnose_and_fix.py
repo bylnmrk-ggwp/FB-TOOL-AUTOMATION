@@ -32,8 +32,8 @@ def check_python_version():
     print_header("Checking Python Version")
     version = sys.version_info
     print_status(f"Python {version.major}.{version.minor}.{version.micro}", "ok")
-    if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print_status("Python 3.8 or higher is required!", "fail")
+    if version.major < 3 or (version.major == 3 and version.minor < 10):
+        print_status("Python 3.10 or higher is required (patchright)!", "fail")
         return False
     return True
 
@@ -60,15 +60,17 @@ def install_package(package):
 # Import name for each distribution in requirements.txt whose module name
 # differs from the package name. requirements.txt is the single source of truth
 # for what gets installed; this only maps it to what gets imported.
-IMPORT_NAMES = {"Pillow": "PIL"}
+IMPORT_NAMES = {"Pillow": "PIL", "python-multipart": "multipart"}
 
 
 def read_requirements():
     """(import_name, requirement_spec) for every line in requirements.txt."""
     reqs = []
     for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+        # A trailing "# comment" is part of the line, not of the requirement;
+        # pip rejects the whole string if it is left attached.
+        line = line.split("#", 1)[0].strip()
+        if not line:
             continue
         dist = re.split(r"[<>=!~;\s\[]", line, 1)[0]
         reqs.append((IMPORT_NAMES.get(dist, dist), line))
@@ -104,17 +106,17 @@ def check_and_install_dependencies():
     
     return True
 
-def install_playwright_browsers():
-    print_header("Installing Playwright Browsers")
+def install_patchright_browsers():
+    print_header("Installing Patchright Browsers")
     
-    if not check_module("playwright"):
-        print_status("Playwright not installed yet", "fail")
+    if not check_module("patchright"):
+        print_status("Patchright not installed yet", "fail")
         return False
     
     try:
         print_status("Installing Chromium browser (this may take a few minutes)...", "info")
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
+            [sys.executable, "-m", "patchright", "install", "chromium"],
             capture_output=True,
             text=True
         )
@@ -127,14 +129,14 @@ def install_playwright_browsers():
             print(f"   Error: {result.stderr}")
             return False
     except Exception as e:
-        print_status(f"Failed to install playwright browsers: {e}", "fail")
+        print_status(f"Failed to install patchright browsers: {e}", "fail")
         return False
 
 def test_imports():
     print_header("Testing All Imports")
     
     test_modules = [
-        ("playwright.async_api", "Playwright"),
+        ("patchright.async_api", "Patchright"),
         ("PIL", "Pillow (PIL)"),
         ("groq", "Groq"),
         ("tkinter", "Tkinter (GUI)"),
@@ -186,10 +188,10 @@ def main():
         input("\nPress Enter to exit...")
         return 1
     
-    # Step 3: Install Playwright browsers
-    if not install_playwright_browsers():
-        print_status("\nFailed to install Playwright browsers", "fail")
-        print_status("You may need to run: python -m playwright install chromium", "info")
+    # Step 3: Install Patchright browsers
+    if not install_patchright_browsers():
+        print_status("\nFailed to install Patchright browsers", "fail")
+        print_status("You may need to run: python -m patchright install chromium", "info")
         input("\nPress Enter to exit...")
         return 1
     

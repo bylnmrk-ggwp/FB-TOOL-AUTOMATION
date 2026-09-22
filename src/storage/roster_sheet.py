@@ -1,139 +1,112 @@
-"""Roster rows from the Google Sheet, mapped by header label, into `accounts`.
+"""Reading the roster Google Sheet, one shot or on a poll.
 
-Header labels, not column letters, decide where a cell lands, so the sheet can
-be reordered or gain columns without importing the wrong field. The columns
-the sheet owns are rewritten on every sync; linked_profile, status and
-status_reason belong to this machine and are never touched here. STATUS
--> sheet_status is a mirror only: the app reads the verdict cell back so
-it can count blank rows as pending, and writes it solely through
-src/storage/sheet_status.py.
+The sheet is where the operator edits the roster; the database is where the
+roster lives. This module owns the sheet -> database direction. The parsing
+belongs to src/storage/roster_import.py, which takes rows of cells and nothing
+else, so a workbook import and a sheet sync map headers to columns the same
+way and cannot disagree about what a row means. STATUS -> sheet_status is a
+mirror only: it is read back so a blank cell can be counted as pending, and it
+is written solely through src/storage/sheet_status.py.
 
-Two entry points share the parser:
+Two ways to read the sheet, picked by whether a service-account key is present:
+
+    CSV export      no credentials, works for any link-shared sheet
+    Sheets v4 API   a service-account token; what a private sheet needs, and
+                    the same credential the STATUS write-back uses
+
+Both ask for the cell as the sheet DISPLAYS it. That matters for more than
+convenience: many USERNAME cells hold phone numbers, which Sheets stores as
+numbers and every .xlsx export renders "9.709293808E9" - not an address
+Facebook will accept.
+
+Two entry points share the reader:
 
     sync()          one shot - scripts/import_accounts.py
     SheetWatcher    a daemon thread that polls the sheet and hands changed
-                    rows to the UI thread through a queue; the UI thread does
-                    the database writes, so SQLite is only ever written from
-                    the thread that also reads it.
+                    rows to the consuming thread through a queue; that thread
+                    does the database writes, so SQLite is only ever written
+                    from the thread that also reads it.
 
 Google offers no push channel to a desktop app without a public HTTPS
 endpoint, so "live" here means within one poll interval. POLL_SECONDS = 20 is
-two reads a minute against a 300-a-minute project quota.
+two reads a minute, well inside any quota and free on the CSV path.
 """
-import hashlib
-import re
-import unicodedata
+import csv
+import io
 import json
+import os
 import queue
+import re
 import threading
 import time
+import urllib.request
+from pathlib import Path
 
-from src.storage import database as db
+from src.storage import roster_import
 from src.storage import sheets_api as api
 
-# Sheet header (upper-cased, stripped) -> accounts column. Every entry is a
-# column the sheet owns. The first column carries the row number under a
-# blank or "NO" header and is handled separately.
-HEADERS = {
-    "FACEBOOK NAME": "facebook_name",
-    "USERNAME": "username",
-    "PASSWORD": "password",
-    "GMAIL": "gmail",
-    "PASS FOR GMAIL": "gmail_password",
-    "NUMBER": "number",
-    # Read-only mirror of the cell the login runs write. "" means the row
-    # has never been given a verdict - the "pending" set the dashboard counts.
-    "STATUS": "sheet_status",
-}
+# The parser and its header map live in roster_import; re-exported here so a
+# caller that already imports roster_sheet does not need both.
+HEADERS = roster_import.HEADERS
+clean_username = roster_import.clean_username
+parse_accounts = roster_import.parse_accounts
+fingerprint = roster_import.fingerprint
+apply = roster_import.apply
 
 POLL_SECONDS = 20
 
+_SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
+
+
+def sheet_id_and_gid(url_or_id: str) -> tuple[str, str]:
+    """(spreadsheet id, gid) from a full edit URL or a bare id."""
+    m = _SHEET_ID_RE.search(url_or_id or "")
+    sid = m.group(1) if m else (url_or_id or "").strip()
+    g = re.search(r"[#&?]gid=(\d+)", url_or_id or "")
+    return sid, (g.group(1) if g else "0")
+
+
+def read_csv_export(sheet_id: str, gid: str = "0") -> list[list[str]]:
+    """Rows from the sheet's CSV export - displayed text, no credentials.
+
+    Works for any sheet shared by link. A private sheet answers with Google's
+    sign-in HTML instead, which the caller sees as a header without USERNAME.
+    """
+    url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+           f"/export?format=csv&gid={gid}")
+    with urllib.request.urlopen(url, timeout=60) as r:
+        text = r.read().decode("utf-8", "replace")
+    return list(csv.reader(io.StringIO(text)))
+
+
+def read_api_key(sheet_id: str, api_key: str, tab: str = api.DEFAULT_TAB
+                 ) -> list[list[str]]:
+    """Rows through the v4 API with a plain API key (read-only, public sheet)."""
+    url = (f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+           f"/values/{tab}!A:Z?key={api_key}&valueRenderOption=FORMATTED_VALUE")
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return json.loads(r.read().decode("utf-8")).get("values", [])
+
 
 def fetch_rows(tok: str | None = None, sheet_id: str = api.DEFAULT_SHEET_ID,
-               tab: str = api.DEFAULT_TAB) -> list[list[str]]:
-    """Every row of the tab, header first. Trailing empty cells are absent."""
-    tok = tok or api.token()
-    return api.get_values(tok, sheet_id, f"{tab}!A1:Z")
+               tab: str = api.DEFAULT_TAB, gid: str = "0") -> list[list[str]]:
+    """Every row of the tab, header first, by whichever path is available.
 
-
-# The roster is edited by hand and operators annotate the USERNAME cell
-# itself - a tick when an account is done, "(Na oopen)" beside one that would
-# not open, an invisible left-to-right mark pasted in from elsewhere. Taken
-# literally, those notes make a second account out of one address (the twin
-# carries no password) and get typed into Facebook, which answers "Input
-# Email or mobile number is invalid". The address is the account; the note is
-# not part of it.
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-
-
-def clean_username(raw: str) -> str:
-    """The account identifier inside a USERNAME cell, without the notes.
-
-    An email anywhere in the cell wins, since that is what Facebook is given.
-    Otherwise the cell keeps its own text (names and phone numbers are valid
-    identifiers) minus invisible formatting characters and outer whitespace.
+    An explicit service-account token wins, then GOOGLE_API_KEY, then the
+    credential-free CSV export. Trailing empty cells are absent on every path.
     """
-    text = "".join(ch for ch in (raw or "") if unicodedata.category(ch) != "Cf")
-    found = _EMAIL_RE.search(text)
-    return found.group(0) if found else text.strip()
-
-
-def parse_accounts(rows: list[list[str]]) -> list[dict]:
-    """Sheet rows -> upsert_account kwargs. Rows without a USERNAME are skipped.
-
-    sheet_no is the numeric first column when its header is blank or "NO",
-    else the row's 1-based position under the header - which is what the
-    sheet's own row numbers show.
-    """
-    if not rows:
-        return []
-    cols = api.header_columns(rows, *HEADERS)
-    if "USERNAME" not in cols:
-        raise ValueError(f"sheet has no USERNAME column; header is {rows[0]!r}")
-    first = (rows[0][0] if rows[0] else "").strip().upper()
-    no_col = 0 if first in ("", "NO") else None
-
-    out = []
-    for i, row in enumerate(rows[1:], start=1):
-        def cell(idx):
-            return row[idx].strip() if idx is not None and idx < len(row) else ""
-        username = clean_username(cell(cols["USERNAME"]))
-        if not username:
-            continue
-        raw_no = cell(no_col)
-        try:
-            sheet_no = int(float(raw_no)) if raw_no else i
-        except ValueError:
-            sheet_no = i
-        acct = {"sheet_no": sheet_no, "username": username}
-        for label, column in HEADERS.items():
-            if column != "username":
-                acct[column] = cell(cols.get(label))
-        out.append(acct)
-    return out
-
-
-def fingerprint(rows: list[list[str]]) -> str:
-    """Stable digest of the sheet contents, for change detection."""
-    blob = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def apply(accounts: list[dict]) -> tuple[int, int]:
-    """Upsert parsed rows. Returns (inserted, updated). Call on the DB thread."""
-    inserted = updated = 0
-    for acct in accounts:
-        if db.upsert_account(**acct) == "inserted":
-            inserted += 1
-        else:
-            updated += 1
-    return inserted, updated
+    if tok:
+        return api.get_values(tok, sheet_id, f"{tab}!A1:Z")
+    key = os.environ.get("GOOGLE_API_KEY") or ""
+    if key:
+        return read_api_key(sheet_id, key, tab)
+    return read_csv_export(sheet_id, gid)
 
 
 def sync(sheet_id: str = api.DEFAULT_SHEET_ID, tab: str = api.DEFAULT_TAB,
-         dry_run: bool = False) -> dict:
+         dry_run: bool = False, gid: str = "0") -> dict:
     """One fetch-parse-apply pass. dry_run parses and counts, writes nothing."""
-    rows = fetch_rows(sheet_id=sheet_id, tab=tab)
+    rows = fetch_rows(sheet_id=sheet_id, tab=tab, gid=gid)
     accounts = parse_accounts(rows)
     result = {"rows": max(len(rows) - 1, 0), "accounts": len(accounts),
               "header": rows[0] if rows else [], "inserted": 0, "updated": 0}
@@ -147,7 +120,7 @@ def sync(sheet_id: str = api.DEFAULT_SHEET_ID, tab: str = api.DEFAULT_TAB,
 _OFFLINE_MARKERS = ("nameresolutionerror", "failed to resolve", "getaddrinfo",
                     "temporary failure in name resolution", "max retries exceeded",
                     "connection refused", "network is unreachable",
-                    "connection aborted", "timed out")
+                    "connection aborted", "timed out", "urlopen error")
 
 
 def _reason(error: Exception) -> str:
@@ -163,18 +136,26 @@ class SheetWatcher(threading.Thread):
 
     Also queues ("error", message) once per distinct failure and keeps
     polling, so a dropped connection is visible but never fatal. Consumers
-    drain `events` on the UI thread and call apply() there.
+    drain `events` on the thread that owns the database and call apply() there.
+
+    The poll uses a service-account token when a key file is present and the
+    credential-free CSV export otherwise, so a link-shared sheet needs no
+    setup at all to stay in sync.
     """
 
     def __init__(self, interval: float = POLL_SECONDS,
                  sheet_id: str = api.DEFAULT_SHEET_ID,
-                 tab: str = api.DEFAULT_TAB):
+                 tab: str = api.DEFAULT_TAB, gid: str = "0"):
         super().__init__(name="SheetWatcher", daemon=True)
         self.interval = interval
         self.sheet_id = sheet_id
         self.tab = tab
+        self.gid = gid
         self.events: queue.Queue = queue.Queue()
-        self._stop = threading.Event()
+        # Not _stop: threading.Thread already has a private _stop() method,
+        # and shadowing it makes Thread.join() raise "'Event' object is not
+        # callable" the moment the thread has finished.
+        self._stopped = threading.Event()
         self._creds = None
         self._last_fingerprint = None
         self._last_error = None
@@ -196,22 +177,27 @@ class SheetWatcher(threading.Thread):
             return self.interval
         return min(self.MAX_BACKOFF, self.interval * (2 ** min(self._failures, 8)))
 
+    def _token(self) -> str | None:
+        """A service-account token, or None to fall back to the keyless read."""
+        if not Path(api.DEFAULT_KEY).exists():
+            return None
+        if self._creds is None:
+            self._creds = api.credentials()
+        return api.refresh(self._creds)
+
     def run(self):
         from src.storage.sheet_status import sheet_enabled
         if not sheet_enabled():
             # Nothing to watch: the roster is the local database, and the
             # accounts are the browser profiles on this PC.
             return
-        while not self._stop.is_set():
+        while not self._stopped.is_set():
             self._poll_once()
-            self._stop.wait(self._retry_wait())
+            self._stopped.wait(self._retry_wait())
 
     def _poll_once(self):
         try:
-            if self._creds is None:
-                self._creds = api.credentials()
-            tok = api.refresh(self._creds)
-            rows = fetch_rows(tok, self.sheet_id, self.tab)
+            rows = fetch_rows(self._token(), self.sheet_id, self.tab, self.gid)
             fp = fingerprint(rows)
             if fp != self._last_fingerprint:
                 self._last_fingerprint = fp
@@ -230,4 +216,4 @@ class SheetWatcher(threading.Thread):
                 self.events.put(("error", f"{msg} - retrying every {wait:.0f}s"))
 
     def stop(self):
-        self._stop.set()
+        self._stopped.set()
