@@ -36,11 +36,11 @@ tools/frp/*.zip
 # Exported Facebook sessions - plaintext, never commit
 transfer/
 
-# Windows folder metadata, MCP scratch, dead parallel-login output
+# Windows folder metadata, MCP scratch, diagnostic screenshots
 desktop.ini
 .playwright-mcp/
-.parallel-backup/
 checkpoint_probe.png
+watch_diagnose.png
 
 # Fleet transfer bundle - plaintext sessions, never commit
 fleet-transfer.zip
