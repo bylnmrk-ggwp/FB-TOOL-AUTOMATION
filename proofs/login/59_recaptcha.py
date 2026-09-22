@@ -132,6 +132,28 @@ if asyncio.run(_answer_arkose()) != "solved":
 if not page.raised:
     failures.append("recaptcha: the window was not raised for the Facebook challenge")  # noqa: F821
 
+# A hidden login is a MINIMISED real window, not an absent one, so an
+# assisted run can still hand a picture challenge to the operator. The
+# default above must stay unattended - it is what an unattended caller gets -
+# so the knowledge that somebody is waiting has to arrive as wait_s from the
+# caller. login_with_credentials is the only place that knows: it holds
+# wait_for_2fa. Without this, an operator watching a --headless run was never
+# offered the puzzle, and the account failed for want of a click.
+page = _Page(frames=[(ANCHOR, False), (BFRAME, False)])
+auto = _auto(page, tile=None)
+if asyncio.run(auto.handle_recaptcha(wait_s=2)) != "needs human":
+    failures.append("recaptcha: an unanswered picture challenge is not 'needs human'")  # noqa: F821
+if not page.raised:
+    failures.append("recaptcha: a watched run with a minimised window never "  # noqa: F821
+                    "raised it, so the operator could not answer the puzzle")
+
+import inspect  # noqa: E402
+_login_src = inspect.getsource(FacebookAutomation.login_with_credentials)
+if "wait_s=self.CAPTCHA_WAIT_S if wait_for_2fa else 0" not in _login_src:
+    failures.append("recaptcha: login_with_credentials no longer tells "  # noqa: F821
+                    "handle_recaptcha whether a human is waiting, so the "
+                    "hand-off depends on the tile again")
+
 # The sheet reason says captcha, not "wrong password".
 if login_reason("captcha - solve it in the window") != "captcha":
     failures.append("recaptcha: the recorded reason does not say captcha")  # noqa: F821

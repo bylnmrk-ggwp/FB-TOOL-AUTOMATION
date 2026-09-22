@@ -11,7 +11,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Callable
 
-from playwright.async_api import async_playwright, Locator, Page, BrowserContext
+from patchright.async_api import async_playwright, Locator, Page, BrowserContext
 from src.storage import config_manager as cfg
 
 from src.core import browser_choice
@@ -93,7 +93,7 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
         pw = None
         context = None
         try:
-            from playwright.async_api import async_playwright
+            from patchright.async_api import async_playwright
             _log("Starting Playwright...")
             pw = await async_playwright().start()
             
@@ -106,7 +106,9 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             context = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless - this opens a real Facebook page and
+                # must not announce HeadlessChrome. See hide_window.
+                headless=False,
                 viewport=SMALL_VIEWPORT,
                 args=[*([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
                       *MEMORY_FLAGS],
@@ -114,6 +116,17 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             
             page = context.pages[0] if context.pages else await context.new_page()
             
+            # The window is real now, so put it out of sight. Inline rather
+            # than through hide_window: there is no FacebookAutomation here.
+            try:
+                cdp = await context.new_cdp_session(page)
+                wid = (await cdp.send("Browser.getWindowForTarget"))["windowId"]
+                await cdp.send("Browser.setWindowBounds",
+                               {"windowId": wid,
+                                "bounds": {"windowState": "minimized"}})
+            except Exception as e:  # noqa: BLE001 - cosmetic only
+                _log(f"Could not minimise the window: {type(e).__name__}: {e}")
+
             # Enable console logging for debugging
             page.on("console", lambda msg: _log(f"Browser console: {msg.text}"))
             
@@ -296,10 +309,17 @@ LOGIN_GATE_JS = """() => {
 }"""
 
 
+# The three --disable-gpu* switches that used to head this list are gone.
+# They saved a little memory and cost the fleet its fingerprint: with them on
+# a page reports NO WebGL context at all, and every real browser has one.
+# Without them the same page reports the real card, e.g.
+# "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 ...)". Measured cost of putting
+# them back, summed over every brave.exe with 12 contexts loaded:
+# 1147.1 MB -> 1162.2 MB, i.e. about 15 MB for the whole fleet.
+# --disable-gpu-sandbox and --disable-software-rasterizer stay. Neither turns
+# the GPU off; the second one matters BECAUSE it keeps Chromium from falling
+# back to SwiftShader, which is its own bot signature.
 MEMORY_FLAGS = [
-    "--disable-gpu",
-    "--disable-gpu-compositing",
-    "--disable-gpu-rasterization",
     "--disable-gpu-sandbox",
     "--disable-software-rasterizer",
     "--disable-dev-shm-usage",
@@ -364,18 +384,30 @@ WATCH_FLAGS = [f for f in MEMORY_FLAGS
 # --disable-background-networking plus the 256MB JS heap cap leave the widget
 # reporting "Cannot contact reCAPTCHA". One human-driven browser makes the RAM
 # savings irrelevant, so keep only the flags that aid stability.
+# --disable-blink-features=AutomationControlled used to be the first entry
+# here. Patchright now adds it to every launch itself, and also strips the
+# --enable-automation switch that plain Playwright passed and no flag of ours
+# could remove, so listing it again would only be noise.
+#
+# --disable-gpu used to be the second entry, and it was the reason a login
+# looked like a virtual machine. With it on, WEBGL_debug_renderer_info
+# reports "ANGLE (Microsoft, Microsoft Basic Render Driver ...)" - the
+# software rasteriser, which no ordinary PC reports. With it off the same
+# profile reports the real card ("ANGLE (NVIDIA, NVIDIA GeForce RTX 4060
+# ...)"). One login browser makes the GPU memory irrelevant, and the honest
+# fingerprint is worth far more than the saving.
 LOGIN_FLAGS = [
-    # Chromium otherwise ships a "Blink automation" fingerprint that scores
-    # the session as a bot before a single key is pressed, which is what puts
-    # an "I am not a robot" box on the login form.
-    "--disable-blink-features=AutomationControlled",
-    "--disable-gpu",
     "--disable-dev-shm-usage",
     "--no-first-run",
     "--disable-extensions",
     "--disable-default-apps",
     "--disable-sync",
     "--disable-translate",
+    # A hidden login window is minimised, not headless (see start_browser).
+    # Chromium throttles a minimised window's renderer and its timers unless
+    # told otherwise, and a login that stalls mid-challenge is a failed login.
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
 ]
 
 
@@ -408,6 +440,12 @@ class FacebookAutomation:
     # picture challenge. Only a person can answer one, so a headless run
     # skips the wait entirely.
     CAPTCHA_WAIT_S = 180
+    # Seconds to let a captcha turn up on a gate page before deciding there
+    # is none. reCAPTCHA arrives in iframes the gate page loads afterwards,
+    # so asking once, the instant the page settles, answers "no captcha" for
+    # an account that is about to show one - and the run then reports a
+    # picture puzzle as a missing 2FA code.
+    CAPTCHA_APPEAR_S = 8
 
 
     LOGIN_URL = "https://www.facebook.com/"
@@ -421,6 +459,9 @@ class FacebookAutomation:
         self._browser = None  # browser instance for concurrent mode
         self._post_url_before_share: str | None = None  # URL before sharing, for verifying redirects
         self._tile: tuple[int, int] | None = None  # this window's grid cell, if tiled
+        # A hidden login is a real window that has been minimised, so it can
+        # be raised for a human and must go back down afterwards.
+        self._hidden = False
 
     # ── Concurrent profile support ─────────────────────────
 
@@ -466,13 +507,25 @@ class FacebookAutomation:
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless - this opens a real Facebook page and
+                # must not announce HeadlessChrome. See hide_window.
+                headless=False,
                 viewport=SMALL_VIEWPORT,
                 args=[*([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
                       *MEMORY_FLAGS],
             )
             pages = ctx.pages
             page = pages[0] if pages else await ctx.new_page()
+            # The window is real now, so put it out of sight. Inline rather
+            # than through hide_window: there is no FacebookAutomation here.
+            try:
+                cdp = await ctx.new_cdp_session(page)
+                wid = (await cdp.send("Browser.getWindowForTarget"))["windowId"]
+                await cdp.send("Browser.setWindowBounds",
+                               {"windowId": wid,
+                                "bounds": {"windowState": "minimized"}})
+            except Exception as e:  # noqa: BLE001 - cosmetic only
+                self.log(f"Could not minimise the window: {type(e).__name__}: {e}")
             # Block resources during extraction to keep RAM low
             try:
                 await page.route("**/*", lambda route: route.abort()
@@ -596,7 +649,8 @@ class FacebookAutomation:
     async def init_from_storage(self, browser, storage_state: dict,
                                 viewport: dict | None = None,
                                 block_resources: bool = True,
-                                no_viewport: bool = False):
+                                no_viewport: bool = False,
+                                hidden: bool = True):
         """Initialize automation with a context in a given browser using saved storage state.
 
         Creates an isolated incognito context with the profile's cookies
@@ -620,6 +674,14 @@ class FacebookAutomation:
             no_viewport=no_viewport,
         )
         self.page = await self.context.new_page()
+        # A context on a shared browser opens its own window. The fleet used
+        # to keep those off the screen by launching the browser headless,
+        # which put "HeadlessChrome" in the User-Agent of every like, comment
+        # and share the app sent. Minimising each window costs nothing and
+        # says nothing; see hide_window.
+        self._hidden = hidden
+        if hidden:
+            await self.hide_window()
         if block_resources:
             await self._enable_resource_blocking(self.page)
         else:
@@ -678,6 +740,23 @@ class FacebookAutomation:
         on. Pass headless=False when a human has to interact with the page,
         e.g. clearing a Facebook login checkpoint.
 
+        headless here means HIDDEN, and it is not Chromium's headless mode.
+        Neither --headless nor --headless=new can be used for a login:
+        measured on Brave/Chromium 153, both report
+        "HeadlessChrome/153.0.0.0" in navigator.userAgent and in the
+        User-Agent request header, and that string alone is what puts an
+        "I am not a robot" box on the login form. The two ways out that look
+        obvious are both worse:
+          * --user-agent=<clean string> fixes the UA and sends sec-ch-ua
+            EMPTY, so a Chrome user agent arrives with no Client Hints at
+            all - a sharper mismatch than the one it hides.
+          * an off-screen --window-position is clamped back onto the desktop
+            by Windows, so the window is visible anyway.
+        A real window that is minimised through CDP reports the ordinary
+        "Chrome/153.0.0.0", sends the matching sec-ch-ua, and never appears
+        on screen. document.visibilityState stays "visible" while minimised,
+        so nothing on the page is throttled.
+
         flags defaults to MEMORY_FLAGS. Pass LOGIN_FLAGS for interactive
         login, where reCAPTCHA has to work and RAM tuning does not matter.
 
@@ -714,6 +793,10 @@ class FacebookAutomation:
         self.log(f"Using profile directory: {profile_dir_name}")
         self.log(f"User Data dir: {user_data_dir}")
 
+        # A hidden window has no cell in a grid; the two are exclusive and
+        # every caller already passes them that way.
+        hidden = headless and not tile
+
         launch = {"viewport": SMALL_VIEWPORT}
         if tile:
             # The page has to follow the small tiled window, not sit inside it
@@ -723,7 +806,9 @@ class FacebookAutomation:
         self.context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             executable_path=browser_choice.executable_path(),
-            headless=headless,  # background by default; False shows a window
+            # Always a real browser: see the docstring on why Chromium's own
+            # headless modes cannot be used for a login.
+            headless=False,
             args=[
                 *([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
                 # Shrinking the browser's own unit is what makes a tile
@@ -734,8 +819,8 @@ class FacebookAutomation:
             ],
             **launch,
         )
-        
-        self.log("Browser started in background mode" if headless
+
+        self.log("Browser started in background mode" if hidden
                  else "Browser started in a visible window")
 
         # Use first restored tab as main page, close extras
@@ -747,15 +832,19 @@ class FacebookAutomation:
                 await p.close()
             except Exception:
                 pass
-        try:
-            # Chromium sets navigator.webdriver=true whatever the flags say,
-            # and it is the first thing a bot check reads.
-            # false, not undefined: an ordinary Chrome reports false, and a
-            # missing property is its own anomaly.
-            await self.context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => false});")
-        except Exception:
-            pass
+        # navigator.webdriver was patched here with an init script, because
+        # Playwright set it true whatever the flags said. Patchright reports
+        # false natively, so the script is not needed - and an init script is
+        # itself installed through Page.addScriptToEvaluateOnNewDocument,
+        # which is one of the things a bot check looks for. Removing it takes
+        # away a signal instead of adding one.
+
+        self._hidden = hidden
+        if hidden:
+            # Minimised, not headless. A window that fails to minimise is a
+            # cosmetic problem on the operator's desktop; it must never cost
+            # the login, so this is logged and the login goes ahead.
+            await self.hide_window()
 
         self._tile = tile
         if tile:
@@ -786,6 +875,25 @@ class FacebookAutomation:
                             "bounds": {"left": x, "top": y, "width": w, "height": h}})
         except Exception as e:  # noqa: BLE001 - a misplaced window never fails a login
             self.log(f"Could not tile the window: {type(e).__name__}: {e}")
+
+    async def hide_window(self) -> None:
+        """Take this page's window off the screen without going headless.
+
+        Chromium has no hidden mode that keeps a real browser's fingerprint:
+        --headless and --headless=new both report "HeadlessChrome/<version>"
+        in navigator.userAgent and in the User-Agent header. Minimising a
+        real window reports the ordinary "Chrome/<version>" instead, and
+        document.visibilityState stays "visible", so nothing on the page is
+        throttled. Every launch in the app that used to ask for headless
+        calls this instead.
+
+        A window that will not minimise is a blemish on the operator's
+        desktop and nothing more, so it is logged and the work goes on.
+        """
+        try:
+            await self._set_window_bounds({"windowState": "minimized"})
+        except Exception as e:  # noqa: BLE001 - cosmetic, never fails the work
+            self.log(f"Could not minimise the window: {type(e).__name__}: {e}")
 
     async def _set_window_bounds(self, bounds: dict) -> None:
         """Move/resize this window through CDP. Bounds are in the browser's
@@ -864,6 +972,26 @@ class FacebookAutomation:
             return False
         return bool(filled)
 
+    async def _captcha_appears(self, seconds: float | None = None) -> bool:
+        """Whether a captcha shows up on this page within `seconds`.
+
+        reCAPTCHA is not in the document that Facebook serves: the page loads
+        google.com iframes after it settles. A single check the moment the
+        gate URL appears therefore says "no captcha" for an account whose
+        screen is a second away from showing one, which is how a picture
+        puzzle came to be reported as a missing 2FA code.
+        """
+        if seconds is None:
+            seconds = self.CAPTCHA_APPEAR_S
+        deadline = max(1, int(seconds))
+        for _ in range(deadline):
+            if (await self._captcha_frame()) is not None:
+                return True
+            if await self._arkose_present():
+                return True
+            await asyncio.sleep(1)
+        return False
+
     async def handle_recaptcha(self, wait_s: float | None = None) -> str:
         """Deal with an "I'm not a robot" box. Returns "none", "solved" or
         "needs human".
@@ -883,6 +1011,11 @@ class FacebookAutomation:
             if await self._arkose_present():
                 self.log("Facebook picture challenge shown (Arkose)")
                 if wait_s is None:
+# The default is for a caller that did not say. A tile means a
+                    # visible wave, so somebody is watching; anything else is
+                    # assumed unattended and must not hang or pop a window.
+                    # A caller who KNOWS a human is waiting - an assisted run
+                    # whose window is merely minimised - passes wait_s itself.
                     wait_s = self.CAPTCHA_WAIT_S if self._tile is not None else 0
                 if wait_s <= 0:
                     return "needs human"
@@ -917,9 +1050,15 @@ class FacebookAutomation:
                 break
 
         if wait_s is None:
+            # See above: unattended by default, the caller overrides.
             wait_s = self.CAPTCHA_WAIT_S if self._tile is not None else 0
         if wait_s <= 0:
-            self.log("reCAPTCHA needs a picture challenge and no window is visible")
+            # The window exists - a hidden login is minimised, not headless -
+            # so it could be raised. What is missing is a person: this run was
+            # started unattended, and a picture challenge only ends when one
+            # is solved by hand.
+            self.log("reCAPTCHA needs a picture challenge and nobody is "
+                     "watching this run")
             return "needs human"
 
         self.log(f"reCAPTCHA picture challenge - solve it in this window "
@@ -952,7 +1091,16 @@ class FacebookAutomation:
             self.log(f"Could not raise the window: {type(e).__name__}: {e}")
 
     async def _back_to_tile(self) -> None:
-        """Return the window to its cell so the rest of the wave stays visible."""
+        """Put the window back where _focus_for_human found it.
+
+        Two cases, because a hidden login is now a real window: a tiled window
+        returns to its cell so the rest of the wave stays visible, and a hidden
+        one goes back down to the taskbar instead of being left open on the
+        operator's desktop.
+        """
+        if self._hidden:
+            await self.hide_window()
+            return
         if self._tile is None:
             return
         await self._tile_window(self._tile[0], self._tile[1])
@@ -990,7 +1138,10 @@ class FacebookAutomation:
             self.context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 executable_path=browser_choice.executable_path(),
-                headless=True,  # HEADLESS MODE!
+                # Hidden, not headless: Chromium's headless modes put
+                # "HeadlessChrome" in the User-Agent. The window is minimised
+                # below instead. See hide_window.
+                headless=False,
                 viewport=viewport or SMALL_VIEWPORT,
                 args=[
                     *([f"--profile-directory={profile_dir_name}"] if profile_dir_name else []),
@@ -1008,6 +1159,8 @@ class FacebookAutomation:
         # Use first tab
         pages = self.context.pages
         self.page = pages[0] if pages else await self.context.new_page()
+        self._hidden = True
+        await self.hide_window()
         await self._enable_resource_blocking(self.page)
         for p in pages[1:]:
             try:
@@ -1022,7 +1175,18 @@ class FacebookAutomation:
             try:
                 await self.page.goto(self.LOGIN_URL, timeout=60000,  # Increased to 60s
                                      wait_until="domcontentloaded")
-                await asyncio.sleep(2)
+
+                # Wait for what the next step actually needs - the login form,
+                # or the chrome of an already-signed-in session - rather than a
+                # fixed sleep sized for the slowest machine. This returns the
+                # moment either appears; the cap is the old fixed total, so a
+                # slow page is no worse off than before.
+                try:
+                    await self.page.wait_for_selector(
+                        'input[name="email"], [role="banner"], [role="navigation"]',
+                        timeout=4000)
+                except Exception:
+                    pass    # neither marker: the checks below decide what this is
 
                 # Verify we actually landed on facebook.com, not about:blank
                 current_url = (await self.page.evaluate("window.location.href") or "").lower()
@@ -1030,9 +1194,6 @@ class FacebookAutomation:
                     self.log(f"Navigation landed on '{current_url}', retrying...")
                     await asyncio.sleep(1)
                     continue
-
-                # Wait a bit more for the page to stabilize
-                await asyncio.sleep(2)
                 return
             except Exception as e:
                 if attempt == 2:
@@ -3157,7 +3318,13 @@ class FacebookAutomation:
         # "I'm not a robot" can come up on the form or right after submitting.
         # An unanswered one leaves the page sitting on the login screen, which
         # used to be reported as a wrong password.
-        captcha = await self.handle_recaptcha()
+        # wait_for_2fa is this run's "somebody is watching" flag, and it is
+        # the only thing that knows. The default keys on self._tile, so an
+        # assisted run with a minimised window - an operator, a window to
+        # raise, and a puzzle on screen - was never offered the chance to
+        # solve it.
+        captcha = await self.handle_recaptcha(
+            wait_s=self.CAPTCHA_WAIT_S if wait_for_2fa else 0)
         if captcha == "needs human":
             return False, "captcha - solve it in the window"
         if captcha == "solved":
@@ -3187,6 +3354,37 @@ class FacebookAutomation:
         # "CHECKPOINT OR VERIFICATION REQUIRED".
         checkpoint_keywords = ["checkpoint", "twofactor", "two_step_verification",
                                "approvals", "confirmemail"]
+
+        # A gate URL does not say which gate. Facebook serves its "I am not a
+        # robot" box ON the two_step_verification page, so naming the gate
+        # from the path alone reported those accounts as "needs a 2FA code" -
+        # a code that does not exist for them, and that would not clear a
+        # captcha if it did. The operator was then sent looking for an
+        # authenticator app for an account whose screen held a picture
+        # puzzle. Ask the page what it is actually showing, and try to clear
+        # it, before naming anything.
+        if any(kw in current_url for kw in checkpoint_keywords):
+            if await self._captcha_appears():
+                self.log("Gate page is showing a captcha, not a code box")
+                # A hidden login is a minimised real window, so it can still
+                # be raised for a picture challenge - but only when somebody
+                # is there to answer it. wait_for_2fa is that somebody.
+                verdict = await self.handle_recaptcha(
+                    wait_s=self.CAPTCHA_WAIT_S if wait_for_2fa else 0)
+                if verdict == "needs human":
+                    return False, "captcha - solve it in the window"
+                if verdict == "solved":
+                    await asyncio.sleep(random.uniform(2, 4))
+                    if await self._is_logged_in(timeout=5):
+                        self.log("Login completed after the captcha")
+                        return True, "Logged in (after captcha)"
+                    # The captcha may have been the only gate; re-read the
+                    # URL so the naming below judges where we are NOW.
+                    try:
+                        current_url = self.page.url.lower()
+                    except Exception:
+                        current_url = ""
+
         if any(kw in current_url for kw in checkpoint_keywords):
             # Name the gate. "two_step_verification" is an authenticator and
             # "confirmemail" is an inbox; recording both as CHECKPOINT told
