@@ -4,9 +4,9 @@ Live login-status scan for all saved Brave profiles.
 Reuses extract_storage_state(), whose verdict is "the profile reached its
 Facebook home page with no login UI": a checkpoint, an email-confirmation
 gate or a 'See more on Facebook' overlay all count as not logged in.
-Reports which profiles are still logged in and which need re-login, and
-records the verdict on each linked roster account (status 'ok' or the
-reason).
+Reports which profiles are still logged in and which need re-login, records
+the verdict on each linked roster account (status 'ok' or the reason) and
+reconciles the Google Sheet STATUS column with the database.
 
 Usage:
     python check_login_status.py
@@ -84,6 +84,15 @@ async def main(only: list[str] | None = None) -> int:
 
     logged_in_count = sum(1 for _, ok, _ in results if ok)
     needs = [(n, r) for n, ok, r in results if not ok]
+
+    # Best-effort: the sheet mirrors the statuses this scan just recorded.
+    try:
+        import sync_sheet_status as sync
+        rc = sync.main([])
+        print("Sheet reconciled with the database." if rc == 0
+              else "(sheet not reconciled - see the line above)")
+    except (SystemExit, Exception) as e:
+        print(f"(sheet reconcile skipped: {e})")
 
     print("=" * 70)
     print(f"SUMMARY — {logged_in_count}/{len(profiles)} logged in")

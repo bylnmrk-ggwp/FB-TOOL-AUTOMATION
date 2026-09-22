@@ -695,6 +695,12 @@ class ProfilesTab(ttk.Frame):
                 continue
             if (a.get("status") or "") in ("ok", "disabled"):
                 continue
+            sheet = (a.get("sheet_status") or "").strip().upper()
+            if sheet == "DISABLED":
+                continue
+            # Exact match: "NOT LOGGED IN" contains the same words.
+            if sheet == "LOGGED IN":
+                continue
             rows.append(a)
         return rows
 

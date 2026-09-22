@@ -3,7 +3,7 @@
 The window owned the manager, polled its results and wired buttons to its
 helpers; here the routes are the buttons, the EventBridge is the poll and
 /ws is the widget tree every phone repaints from. create_app builds none
-of the threads: server.py starts the manager and the bridge
+of the threads: server.py starts the manager, the watcher and the bridge
 after the app exists, and a proof builds the app with none of them
 running.
 
@@ -150,7 +150,7 @@ class _SharedQueue(QueueStore):
         self._mirror()
 
 
-def create_app(manager, *, state: AppState | None = None,
+def create_app(manager, watcher=None, *, state: AppState | None = None,
                logring: LogRing | None = None, bridge: EventBridge | None = None,
                dev: bool = False, web_dist: Path = ROOT / "web" / "dist") -> FastAPI:
     state = state if state is not None else AppState()
@@ -158,7 +158,7 @@ def create_app(manager, *, state: AppState | None = None,
     if bridge is None:
         # Never started here: routes need a bridge to answer prompts and
         # broadcast through, and whoever starts the manager starts it.
-        bridge = EventBridge(manager, state, logring)
+        bridge = EventBridge(manager, watcher, state, logring)
     web_dist = Path(web_dist)
 
     @asynccontextmanager
@@ -173,6 +173,7 @@ def create_app(manager, *, state: AppState | None = None,
                   openapi_url=None, lifespan=lifespan)
     st = app.state
     st.manager = manager
+    st.watcher = watcher
     st.appstate = state
     st.logring = logring
     st.bridge = bridge

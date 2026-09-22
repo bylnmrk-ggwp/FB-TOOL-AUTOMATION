@@ -21,16 +21,27 @@ from src.core import browser_choice as bc  # noqa: E402
 from src.core.driver_manager import DriverManager  # noqa: E402
 from src.storage import config_manager as cfg  # noqa: E402
 from src.storage import database as db  # noqa: E402
+import src.storage.sheet_status as sheet_status  # noqa: E402
 
 USERS = [f"verify_p{i}@example.com" for i in range(6)]
 _saved_browser = cfg.get_setting(bc.SETTING_KEY, None)
+_real_writer = sheet_status.SheetWriter
 _real_path = cfg.get_profile_path
+
+
+class _NoWriter:
+    on = False
+    error = ""
+
+    def mark_in_progress(self, username):
+        return False
 
 
 try:
     for i, u in enumerate(USERS):
         db.upsert_account(800 + i, f"P{i}", u, password="x")
         db.link_account(u, u)
+    sheet_status.SheetWriter = lambda *a, **k: _NoWriter()
     cfg.get_profile_path = lambda name: "C:/verify/" + str(name)
 
     width = getattr(DriverManager, "LOGIN_PARALLEL", None)
@@ -90,6 +101,7 @@ try:
         failures.append(f"parallel login: Brave must stay sequential - its cookie key is "  # noqa: F821
                         f"bound to one shared directory (peak {state['peak']})")
 finally:
+    sheet_status.SheetWriter = _real_writer
     cfg.get_profile_path = _real_path
     if _saved_browser is None:
         conf = cfg._load_config()

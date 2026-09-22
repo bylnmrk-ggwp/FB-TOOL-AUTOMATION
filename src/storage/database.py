@@ -97,11 +97,13 @@ def init_db():
             UNIQUE(profile_a, profile_b)
         );
 
-        -- Column names follow the imported workbook's headers (FACEBOOK
-        -- NAME, USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER) so an
-        -- import maps header to column by name. linked_profile, status and
-        -- status_reason are owned by this machine and never written by an
-        -- import.
+        -- Column names follow the roster's headers (FACEBOOK NAME,
+        -- USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER) so an import
+        -- or a sheet sync maps header to column by name. linked_profile,
+        -- status and status_reason are owned by this machine and are never
+        -- written by either. sheet_status mirrors the roster's STATUS cell
+        -- (roster-owned, written only by an import or a sync); '' there
+        -- means the row is still pending a login.
         --
         -- password and gmail_password hold plaintext credentials at the
         -- operator's explicit request (2026-09-11). They are excluded from
@@ -118,6 +120,7 @@ def init_db():
             linked_profile  TEXT    NOT NULL DEFAULT '',
             status          TEXT    NOT NULL DEFAULT '',
             status_reason   TEXT    NOT NULL DEFAULT '',
+            sheet_status    TEXT    NOT NULL DEFAULT '',
             imported_at     TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             UNIQUE(username)
         );
@@ -169,7 +172,8 @@ def _migrate(conn):
     if have_sr and "pause_hours" not in have_sr:
         conn.execute("ALTER TABLE share_restrictions ADD COLUMN "
                      "pause_hours REAL NOT NULL DEFAULT 12")
-    for col in ("status", "status_reason", "password", "gmail_password"):
+    for col in ("status", "status_reason", "password", "gmail_password",
+                "sheet_status"):
         if col not in have:
             conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} "
                          "TEXT NOT NULL DEFAULT ''")
@@ -432,13 +436,15 @@ def get_used_image_paths() -> set[str]:
 
 def upsert_account(sheet_no, facebook_name: str, username: str,
                    gmail: str = "", number: str = "",
-                   password: str = "", gmail_password: str = "") -> str:
+                   password: str = "", gmail_password: str = "",
+                   sheet_status: str = "") -> str:
     """Insert or refresh one account, keyed by username.
 
-    Writes exactly the imported columns. linked_profile, status and
-    status_reason are owned by this machine and are preserved across
-    re-imports. Returns "inserted" or "updated" so a caller can report
-    real counts.
+    Writes exactly the roster-owned columns, sheet_status included: it is
+    the roster's STATUS cell read back, so an import overwrites it every
+    time. linked_profile, status and status_reason are owned by this
+    machine and are preserved across re-imports. Returns "inserted" or
+    "updated" so a caller can report real counts.
     """
     conn = _get_conn()
     if conn.execute("SELECT 1 FROM accounts WHERE username = ?",
@@ -446,19 +452,19 @@ def upsert_account(sheet_no, facebook_name: str, username: str,
         conn.execute(
             """UPDATE accounts SET sheet_no = ?, facebook_name = ?,
                                    password = ?, gmail = ?, gmail_password = ?,
-                                   number = ?,
+                                   number = ?, sheet_status = ?,
                                    imported_at = datetime('now','localtime')
                WHERE username = ?""",
             (sheet_no, facebook_name, password, gmail, gmail_password,
-             number, username))
+             number, sheet_status, username))
         conn.commit()
         return "updated"
     conn.execute(
         """INSERT INTO accounts (sheet_no, facebook_name, username, password,
-                                 gmail, gmail_password, number)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                 gmail, gmail_password, number, sheet_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (sheet_no, facebook_name, username, password, gmail, gmail_password,
-         number))
+         number, sheet_status))
     conn.commit()
     return "inserted"
 
@@ -475,7 +481,7 @@ def list_accounts(linked_only: bool = False,
     # password / gmail_password are deliberately not selected: every roster
     # view, label and log line is built from these dicts.
     sql = ("SELECT sheet_no, facebook_name, username, gmail, number, "
-           "linked_profile, status, status_reason FROM accounts")
+           "linked_profile, status, status_reason, sheet_status FROM accounts")
     where, params = [], []
     if linked_only:
         where.append("linked_profile != ''")
@@ -542,15 +548,16 @@ def adopt_profile(profile_name: str) -> bool:
 def account_for_profile(profile_name: str) -> dict | None:
     """The roster account linked to a browser profile, or None if none is.
 
-    Carries the local verdict this PC recorded, which is the only thing a
-    caller deciding whether an account may be driven has to go on.
+    Carries sheet_status as well as the local verdict: a caller deciding
+    whether an account may be driven needs the roster's own LOGGED IN cell,
+    not only what this PC last recorded.
     """
     if not profile_name:
         return None
     conn = _get_conn()
     row = conn.execute(
         "SELECT sheet_no, facebook_name, username, gmail, number, "
-        "linked_profile, status, status_reason FROM accounts "
+        "linked_profile, status, status_reason, sheet_status FROM accounts "
         "WHERE linked_profile = ? ORDER BY sheet_no LIMIT 1",
         (profile_name,)).fetchone()
     return dict(row) if row else None
@@ -582,6 +589,28 @@ def record_login_check(profile_name: str, logged_in: bool,
         return set_account_status(acct["username"], "disabled")
     return set_account_status(acct["username"], "",
                               (reason or "").replace("_", " "))
+
+
+def password_for_username(username: str) -> str | None:
+    """The password for one account, looked up by its own name.
+
+    credentials_for_profile() keys on a BRAVE profile, because a browser login
+    drives a profile directory. A Facebook Lite login has no browser and no
+    profile: the app only needs the username and the password, so requiring a
+    linked profile would exclude every roster row that has never been given
+    one - 993 of 1030 here.
+
+    Same discipline as credentials_for_profile: its own function, never a
+    column on list_accounts(), so a password cannot ride along into a roster
+    view or a log line. One account per call.
+    """
+    if not username:
+        return None
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT password FROM accounts WHERE username = ? AND password != '' "
+        "LIMIT 1", (username,)).fetchone()
+    return row[0] if row else None
 
 
 def credentials_for_profile(profile_name: str) -> tuple[str, str] | None:
@@ -633,16 +662,15 @@ def count_disabled() -> int:
 
 
 def pending_accounts() -> list[dict]:
-    """Roster rows with no recorded verdict that are not disabled.
+    """Roster rows whose STATUS cell is blank and that are not disabled.
 
     These are the accounts nobody has ever logged in from this tool - the set
-    the dashboard's "Log in pending" button targets. A blank status is what
-    a row starts as; record_login_check() is the only thing that fills it.
+    the dashboard's "Log in pending" button targets.
     """
     conn = _get_conn()
     sql = ("SELECT sheet_no, facebook_name, username, gmail, number, "
-           "linked_profile, status, status_reason FROM accounts "
-           "WHERE status = '' "
+           "linked_profile, status, status_reason, sheet_status FROM accounts "
+           "WHERE sheet_status = '' AND status != 'disabled' "
            "ORDER BY CASE WHEN sheet_no IS NULL THEN 1 ELSE 0 END, sheet_no")
     return [dict(r) for r in conn.execute(sql)]
 
@@ -651,10 +679,11 @@ def count_pending() -> tuple[int, int]:
     """(pending accounts, pending accounts with no linked Brave profile)."""
     conn = _get_conn()
     total = conn.execute(
-        "SELECT COUNT(*) FROM accounts WHERE status = ''").fetchone()[0]
+        "SELECT COUNT(*) FROM accounts "
+        "WHERE sheet_status = '' AND status != 'disabled'").fetchone()[0]
     unlinked = conn.execute(
-        "SELECT COUNT(*) FROM accounts WHERE status = '' "
-        "AND linked_profile = ''").fetchone()[0]
+        "SELECT COUNT(*) FROM accounts WHERE sheet_status = '' "
+        "AND status != 'disabled' AND linked_profile = ''").fetchone()[0]
     return total, unlinked
 
 

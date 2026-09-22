@@ -36,6 +36,7 @@ except Exception:
     pass
 
 from src.mobile.adb import Device, find  # noqa: E402
+from src.mobile import session_bank  # noqa: E402
 
 PACKAGE = "com.facebook.lite"
 
@@ -178,7 +179,7 @@ def ensure_clones(dev: Device, wanted: int, log=print) -> list[int]:
 
 
 def login_one(dev: Device, username: str, password: str, log=print,
-              user: int | None = None) -> tuple[str, str]:
+              user: int | None = None, bank: bool = True) -> tuple[str, str]:
     """Drive one login. Returns (verdict, detail)."""
     # Refuse BEFORE touching the app: a password adb cannot type exactly would
     # otherwise be half-entered and charged to the account as a failed login.
@@ -204,20 +205,29 @@ def login_one(dev: Device, username: str, password: str, log=print,
         time.sleep(10)          # the user's launcher has to come up first
     dev.stop(PACKAGE, user=user)
     dev.launch(PACKAGE, user=user)
-    time.sleep(10)
 
-    user_field = None
-    for hint in USERNAME_HINTS:
-        user_field = dev.wait_for(timeout=8, desc=hint, cls="android.widget.EditText")
-        if user_field:
-            break
-    if user_field is None:
-        # Fall back to shape: the first non-password text box on the form.
+    # The FIRST launch after `pm clear` is a cold start: Facebook Lite rebuilds
+    # its dex and modules and sits on the "from Meta" splash (mCurrentFocus is
+    # null) for far longer than a warm launch - measured past 15s. Polling for
+    # a text field to actually exist, rather than sleeping a fixed time and
+    # reading once, is the difference between "no form" and a login.
+    def _login_field():
         boxes = [n for n in dev.screen()
                  if n.cls.endswith("EditText") and not n.password]
-        user_field = boxes[0] if boxes else None
+        return boxes[0] if boxes else None
+
+    user_field = None
+    deadline = time.time() + 75
+    while time.time() < deadline:
+        # Already signed in (a restored session) - no form will ever appear.
+        if dev.fblite_user_id(PACKAGE):
+            return "ok", f"already signed in (fb id {dev.fblite_user_id(PACKAGE)})"
+        user_field = _login_field()
+        if user_field:
+            break
+        time.sleep(3)
     if user_field is None:
-        return "no form", "no username field on screen - dump it and re-read"
+        return "no form", "login form never appeared (cold start too slow?)"
 
     dev.tap_node(user_field)
     dev.clear_field()
@@ -268,6 +278,18 @@ def login_one(dev: Device, username: str, password: str, log=print,
     # that is what decides the verdict.
     fbid = dev.fblite_user_id(PACKAGE)
 
+    # Bank the session before anything can clear it. One instance holds one
+    # session, so the next account's --clear would otherwise throw this one
+    # away; a banked copy survives, keyed by the account id, and can be put
+    # back on this or any other instance later.
+    if fbid and bank:
+        try:
+            path = session_bank.export_session(dev, username, PACKAGE)
+            if path:
+                log(f"    session banked -> {path.name}")
+        except Exception as e:  # noqa: BLE001 - a save must not fail the login
+            log(f"    (could not bank the session: {type(e).__name__}: {e})")
+
     # Hand the device back: Owner in front, this clone asleep. Its data - and
     # so its session - stays put.
     if user:                    # never Owner: it cannot be stopped
@@ -291,6 +313,10 @@ def main(argv) -> int:
     ap.add_argument("--clear", action="store_true",
                     help="wipe Facebook Lite between accounts - DESTROYS the "
                          "session already on the device")
+    ap.add_argument("--no-bank", action="store_true",
+                    help="do not save each session to ~/.autoshare/"
+                         "fblite-sessions; by default every signed-in session "
+                         "is banked so --clear does not lose it")
     ap.add_argument("--not-logged-in", action="store_true",
                     help="only the roster rows the sheet does not already "
                          "call LOGGED IN")
@@ -378,7 +404,7 @@ def main(argv) -> int:
             dev.clear_app_data(PACKAGE, user=slot)
         try:
             verdict, detail = login_one(dev, username, creds[1], log=print,
-                                        user=slot)
+                                        user=slot, bank=not args.no_bank)
         except Exception as e:  # noqa: BLE001 - one account must not end the run
             verdict, detail = "error", f"{type(e).__name__}: {e}"
         print(f"    {verdict}: {detail}")

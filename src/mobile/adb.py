@@ -394,7 +394,12 @@ class Device:
         None when there is no session or the app cannot be read (no root).
         """
         path = f"/data/data/{package}/shared_prefs/{package}.xml"
-        out = self.su(f'cat {path}', timeout=30)
+        try:
+            out = self.su(f'cat {path}', timeout=30)
+        except RuntimeError:
+            # No prefs file at all - a freshly cleared or never-run app. That
+            # is "no session", not an error to propagate.
+            return None
         m = re.search(r'current_user_id"\s+value="(\d{6,})"', out)
         return m.group(1) if m else None
 

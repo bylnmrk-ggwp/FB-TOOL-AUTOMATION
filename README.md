@@ -116,10 +116,12 @@ Full reference: [docs/delay-settings.md](docs/delay-settings.md).
 
 ## Account roster
 
-The roster lives in the local SQLite database. It is filled from an `.xlsx`
-workbook by `scripts/import_accounts.py`, and thereafter the database is the
-source of truth. Columns are matched by **header label**, never by position,
-so the workbook can be reordered:
+The roster is edited in a Google Sheet and lives in the local SQLite
+database. The sheet id is in `src/storage/sheets_api.py` (override with
+`SHEETS_SHEET_ID`); `scripts/import_accounts.py` fills the database from it,
+or from a local `.xlsx`, and the running app polls the sheet every 20 s.
+Columns are matched by **header label**, never by position, so the sheet can
+be reordered:
 
 | header | database column |
 |---|---|
@@ -130,18 +132,45 @@ so the workbook can be reordered:
 | `GMAIL` | `gmail` |
 | `PASS FOR GMAIL` | `gmail_password` |
 | `NUMBER` | `number` |
+| `STATUS` | `sheet_status` (read back as a mirror; written *to* the sheet from `status` / `status_reason`) |
 
-`linked_profile`, `status` and `status_reason` are owned by this machine and an
-import never touches them. A blank `status` is the "pending" set the dashboard
-counts; `record_login_check()` is the only thing that fills it.
+`linked_profile`, `status` and `status_reason` are owned by this machine and
+neither an import nor a sync touches them. A blank `STATUS` cell is the
+"pending" set the dashboard counts.
+
+### Reading the sheet
+
+No credentials are needed while the sheet is shared by link: the reader falls
+back to Google's CSV export. Set `GOOGLE_API_KEY` to read through the Sheets
+v4 API instead, and see below for a private sheet. Every path asks for the
+cell as the sheet *displays* it, which is what keeps a phone-number username
+from arriving as `9.709293808E9`.
+
+While the app runs it polls the sheet every 20 s and applies any change to the
+local database; the Log reports `Roster synced from sheet: N new, M refreshed`.
+Google offers no push channel to a desktop app, so "live" means within one poll.
+
+### Writing the STATUS column
+
+Writing back needs a Google service account, because an API key cannot write.
+Put its JSON key at `.secrets/sheets-service-account.json` (gitignored;
+override with `SHEETS_SERVICE_ACCOUNT`), share the sheet with the service
+account's email as **Editor**, and enable the Google Sheets API on its
+project. With no key the mirror simply stays off: every verdict is still
+recorded locally and nothing fails.
+
+Set the `sheet_sync` setting to `false` to turn the whole mirror off on a PC
+that has no business reaching Google. Off means off at the source - no token,
+no credentials, no socket.
 
 The database stores the two password columns in plaintext at the operator's
 request. Treat `~/.autoshare/autoshare.db` and its `.bak-*` copies as
 credentials.
 
 ```bat
-python scripts/import_accounts.py --xlsx FILE    import a workbook into the database
-python scripts/import_accounts.py --xlsx FILE --dry-run
+python scripts/import_accounts.py --sheet URL    import the live sheet into the database
+python scripts/import_accounts.py --xlsx FILE    import a local workbook instead
+python scripts/import_accounts.py --sheet URL --dry-run
                                                  show what an import would do
 python scripts/provision_profiles.py --dry-run   plan Brave profiles, then run without --dry-run
 python scripts/login_accounts.py                 assisted login, one visible browser at a time
@@ -151,6 +180,8 @@ python scripts/provision_profiles.py --rename-from-roster
 python scripts/export_sessions.py --out transfer  export signed-in sessions for another PC
 python scripts/import_sessions.py --in transfer   inject them into this PC's Brave profiles
 python scripts/setup_machine.py --xlsx FILE       a fresh clone -> a working fleet, in one command
+python scripts/sync_sheet_status.py              rewrite the sheet's STATUS column from the database
+python scripts/sync_sheet_status.py --dry-run    print the plan, write nothing
 ```
 
 Accounts Facebook has disabled are marked during login and skipped afterwards;
@@ -169,6 +200,7 @@ Accounts Facebook has disabled are marked during login and skipped afterwards;
 | `SERVER.bat` | `server.py` | Web app server on `127.0.0.1:8000`, plus the `frpc` tunnel when `tools/frp/frpc.toml` exists |
 | | `scripts/set_web_password.py` | Set the web app password; `--check` reports whether one exists |
 | | `scripts/setup_machine.py` | Import roster, provision profiles, inject sessions, check logins - in order |
+| | `scripts/sync_sheet_status.py` | Rewrite the sheet's STATUS column (located by header) from the database |
 | | `scripts/export_sessions.py` | Export each profile's Facebook session as portable JSON |
 | | `scripts/import_sessions.py` | Inject exported sessions into this PC's Brave profiles |
 | | `verify.py` | Proof harness: compiles every module, imports all of them, builds the window and asserts the callback wiring |
@@ -192,7 +224,9 @@ src/core/            DriverManager (one asyncio worker behind a command queue)
                      FacebookAutomation (Playwright driving)
                      memory_tracker
 src/storage/         config_manager, SQLite database, storage_state cache,
-                     roster_import (workbook rows -> accounts)
+                     roster_import (rows of cells -> accounts),
+                     roster_sheet (Google Sheet -> accounts, one shot or on a poll),
+                     sheets_api (Google Sheets REST), sheet_status (accounts -> STATUS column)
 src/server/          FastAPI app: auth, routes, EventBridge (worker results -> WebSocket),
                      AppState, log ring; serves web/dist
 src/ui/              two-tab window over five tab classes, theme, effects

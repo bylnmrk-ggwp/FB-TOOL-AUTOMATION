@@ -22,19 +22,28 @@ from src.storage import database as db  # noqa: E402
 
 LIVE = "verify_live@example.com"
 DEAD = "verify_dead@example.com"
+SHEET_LIVE = "verify_sheet@example.com"
 
 try:
-    for i, u in enumerate((LIVE, DEAD)):
+    for i, u in enumerate((LIVE, DEAD, SHEET_LIVE)):
         db.upsert_account(880 + i, f"L{i}", u, password="x")
         db.link_account(u, u)
     db.set_account_status(LIVE, "ok")
-    db.set_account_status(DEAD, "session expired")
+    conn = db._get_conn()
+    conn.execute("UPDATE accounts SET sheet_status='LOGGED IN' WHERE username=?", (SHEET_LIVE,))
+    # The exact string the operator asked never to be used again.
+    conn.execute("UPDATE accounts SET sheet_status='NOT LOGGED IN / SESSION EXPIRED' "
+                 "WHERE username=?", (DEAD,))
+    conn.commit()
 
     if not DriverManager._session_recorded_live(LIVE):
         failures.append("only logged in: an account the database calls 'ok' is not "  # noqa: F821
                         "recognised as logged in")
+    if not DriverManager._session_recorded_live(SHEET_LIVE):
+        failures.append("only logged in: the sheet's LOGGED IN cell is not recognised")  # noqa: F821
     if DriverManager._session_recorded_live(DEAD):
-        failures.append("only logged in: a non-'ok' status was read as logged in")  # noqa: F821
+        failures.append("only logged in: 'NOT LOGGED IN / SESSION EXPIRED' was read as "  # noqa: F821
+                        "logged in - the words overlap, so the match must be exact")
 
     # An account last seen signed out is still attempted: no pre-filter.
     import inspect

@@ -28,6 +28,9 @@ Usage:
         # 10 accounts, then a 20 minute pause, repeat
     python scripts/login_accounts.py --unattended --hand-off-2fa
         # unattended, but stop and ask you for the code on a 2FA prompt
+    python scripts/login_accounts.py --challenges --headless
+        # ONLY the accounts a previous run left waiting on a 2FA code or a
+        # captcha, back to back, each raising its window when it needs you
 """
 import argparse
 import asyncio
@@ -128,6 +131,8 @@ def short_reason(msg: str) -> str:
         return ""                       # the DISABLED status already says it
     if msg == NEEDS_2FA:
         return "needs 2FA"
+    if msg == NEEDS_CAPTCHA:
+        return "needs captcha"
     if msg == NEEDS_EMAIL_CONFIRM:
         return "needs email confirmation"
     if msg == NO_HOME_PAGE:
@@ -156,10 +161,88 @@ def short_reason(msg: str) -> str:
 # 2FA prompt means the credentials were accepted and only a code is missing.
 DISABLED = "ACCOUNT DISABLED by Facebook - no login possible"
 NEEDS_2FA = "credentials accepted, needs a 2FA code"
+NEEDS_CAPTCHA = "credentials accepted, a captcha has to be solved by hand"
 NEEDS_EMAIL_CONFIRM = "credentials accepted, Facebook wants the email confirmed first"
 NO_HOME_PAGE = "signed in but Facebook never let the account reach its home page"
 BAD_PASSWORD = "wrong password in the workbook"
 BAD_IDENTIFIER = "username is not a valid Facebook login"
+
+
+# The verdicts a person can personally clear, as short_reason() writes them
+# into accounts.status_reason. Derived rather than typed out: if the wording
+# of a reason ever changes, the queue follows it instead of quietly emptying.
+def challenge_reasons() -> set[str]:
+    return {short_reason(NEEDS_2FA).lower(),
+            short_reason(NEEDS_CAPTCHA).lower()}
+
+
+def challenge_queue(accounts: list[dict]) -> list[dict]:
+    """The accounts an earlier run left stuck on a challenge a person can clear.
+
+    A 2FA prompt and a captcha are the only two verdicts where the account is
+    fine, the password is right, and the single missing thing is a human -
+    Facebook has already accepted the credentials in both. Everything else in
+    a run's summary is either self-clearing (a timeout, a browser error) or
+    not fixable at the keyboard (a disabled account, a wrong password), so
+    walking the whole roster to reach the handful that need a person costs a
+    login attempt per account for nothing. Those attempts are not free: they
+    are exactly the repeated failed logins that make Facebook gate an account
+    harder.
+
+    The queue is read from accounts.status_reason, which the previous run
+    already wrote. Nothing new is stored.
+    """
+    wanted = challenge_reasons()
+    return [a for a in accounts
+            if (a.get("status_reason") or "").strip().lower() in wanted]
+
+
+class Live:
+    """Pushes each account's status to the Google Sheet as the run works it.
+
+    A thin shell over src/storage/sheet_status.SheetWriter, which resolves
+    the sheet once and holds the row map, so the run costs one write per
+    account rather than five. Best-effort by design: a sheet write must
+    never abort a login run, so a writer that could not start leaves every
+    method a no-op and the run goes on.
+    """
+
+    def __init__(self, enabled: bool):
+        self.on = False
+        self.rows = 0
+        self.error = "disabled" if not enabled else ""
+        if not enabled:
+            return
+        from src.storage import sheet_status
+        self.sheet = sheet_status
+        self.writer = sheet_status.SheetWriter()
+        self.on = self.writer.on
+        self.rows = len(getattr(self.writer, "_rows", {}) or {})
+        self.error = self.writer.error
+        if not self.on:
+            print(f"  (live sheet updates off: {self.error})")
+
+    def mark_in_progress(self, username: str):
+        if self.on:
+            self.writer.mark_in_progress(username)
+
+    def clear(self, username: str):
+        """Revert a row to plain NOT LOGGED IN (e.g. an aborted attempt)."""
+        if self.on:
+            self.writer.write(username, self.sheet.NOT_LOGGED_IN)
+
+    def mark_result(self, username: str, ok: bool, msg: str):
+        if not self.on:
+            return
+        if ok:
+            text = self.sheet.LOGGED_IN
+        elif msg == DISABLED:
+            text = self.sheet.DISABLED
+        else:
+            reason = short_reason(msg)
+            text = (f"{self.sheet.NOT_LOGGED_IN} / {reason.upper()}"
+                    if reason else self.sheet.NOT_LOGGED_IN)
+        self.writer.write(username, text)
 
 
 def is_infra_error(msg: str) -> bool:
@@ -192,6 +275,14 @@ def classify(url: str, msg: str) -> str | None:
     m = (msg or "").lower()
     if "checkpoint/disabled" in u or "account has been disabled" in m:
         return DISABLED
+    # The message says what was ON the page; the URL only says where the page
+    # lives. Facebook serves its "I am not a robot" box ON the
+    # two_step_verification path, so keying on the URL first reported every
+    # captcha as a missing 2FA code - and sent the operator looking for an
+    # authenticator app for an account that only needed a puzzle answered.
+    # The page's own verdict wins.
+    if "captcha" in m:
+        return NEEDS_CAPTCHA
     if "two_step_verification" in u or "twofactor" in u:
         return NEEDS_2FA
     if "confirmemail" in u:
@@ -266,10 +357,12 @@ async def login_one(account: dict, password: str, log,
     Assisted by default: a challenge waits for the operator. With
     `unattended` nothing ever waits - a challenge is recorded and skipped, so
     the run finishes on its own and the summary says who still needs a hand.
-    With `hand_off_2fa`, an unattended run still stops on a 2FA prompt (only
-    a 2FA prompt) so the operator can type the code, then continues on its own.
-    With `headless`, no browser window is shown (background run); a challenge
-    then cannot be solved by hand, so headless is only used unattended.
+    With `hand_off_2fa`, an unattended run still stops on the challenges an
+    operator can actually clear - a 2FA prompt, where they hold the code, and
+    a captcha, where they can answer the puzzle - so they settle it in the
+    browser and the run continues on its own.
+    With `headless`, the browser window is minimised rather than absent, so a
+    hand-off can still raise it; the run is otherwise unattended.
     """
     from src.core.facebook_automation import (FacebookAutomation,
                                               LOGIN_FLAGS)
@@ -329,17 +422,36 @@ async def login_one(account: dict, password: str, log,
             # 2FA is the one challenge the operator can actually clear (they
             # hold the code). With --hand-off-2fa an unattended run stops here
             # so they can enter it in the open browser, then continues.
-            if reason == NEEDS_2FA and hand_off_2fa:
+            if reason in (NEEDS_2FA, NEEDS_CAPTCHA) and hand_off_2fa:
                 label = account.get("facebook_name") or account["username"]
+                # The window is minimised, so "the open Brave window" is not
+                # on screen until this puts it there.
+                try:
+                    await auto._focus_for_human()
+                except Exception as e:  # noqa: BLE001 - never lose the login
+                    print(f"    (could not raise the window: "
+                          f"{type(e).__name__}: {e})")
                 print("\n" + "!" * 60)
-                print(f"  2FA NEEDED for {label}")
-                print(f"  Enter the code in the open Brave window for "
-                      f"profile '{account['linked_profile']}'.")
+                if reason == NEEDS_CAPTCHA:
+                    print(f"  CAPTCHA NEEDED for {label}")
+                    print(f"  Solve the picture challenge in the Brave window "
+                          f"for profile '{account['linked_profile']}'.")
+                    prompt = ("    [Enter] I solved it, re-check  /  "
+                              "[s] skip this account: ")
+                else:
+                    print(f"  2FA NEEDED for {label}")
+                    print(f"  Enter the code in the open Brave window for "
+                          f"profile '{account['linked_profile']}'.")
+                    prompt = ("    [Enter] I entered the code, re-check  /  "
+                              "[s] skip this account: ")
                 print("!" * 60)
-                choice = ask("    [Enter] I entered the code, re-check  /  "
-                             "[s] skip this account: ")
+                choice = ask(prompt)
+                try:
+                    await auto._back_to_tile()
+                except Exception:
+                    pass
                 if choice == "s":
-                    return False, NEEDS_2FA
+                    return False, reason
                 if await has_session(auto):
                     _mark_ok(account)
                     return True, "logged in after 2FA"
@@ -368,17 +480,39 @@ async def login_one(account: dict, password: str, log,
 async def run(args) -> int:
     from src.storage import database as db
 
-    # Credential source: an explicit --workbook path, else the default local
-    # xlsx beside the project.
-    xlsx = Path(args.workbook) if args.workbook else ROOT / DEFAULT_WORKBOOK
+    # Credential source: the database, which the roster import fills and which
+    # is the roster now. --workbook still reads an xlsx directly, for a machine
+    # whose database has not been imported yet.
+    xlsx = Path(args.workbook) if args.workbook else None
 
     # Disabled accounts are excluded: Facebook says the decision cannot be
     # appealed, so re-attempting them only adds failed logins.
     accounts = [a for a in db.list_accounts(include_disabled=args.include_disabled)
                 if a.get("linked_profile")]
-    if args.only:
+    # list_accounts() is ordered by sheet_no, so a floor on that number is
+    # "start at this roster row and keep going" - the same row the operator
+    # reads off the sheet.
+    if args.from_no is not None:
         accounts = [a for a in accounts
-                    if a["username"].lower() == args.only.lower()]
+                    if a.get("sheet_no") is not None
+                    and a["sheet_no"] >= args.from_no]
+    if args.only:
+        wanted = {u.strip().lower() for u in args.only if u.strip()}
+        accounts = [a for a in accounts
+                    if a["username"].lower() in wanted]
+
+    if args.challenges:
+        # One sitting, only the accounts that need a person. See
+        # challenge_queue for why this is not the same as re-running the
+        # roster and waiting for the blocked ones to come round again.
+        before = len(accounts)
+        accounts = challenge_queue(accounts)
+        print(f"Challenge queue: {len(accounts)} of {before} account(s) are "
+              f"waiting on a person ({', '.join(sorted(challenge_reasons()))})")
+        if not accounts:
+            print("Nothing is blocked on a challenge - run without "
+                  "--challenges to attempt the roster.")
+            return 0
 
     # Accounts already marked logged in (status 'ok') are skipped up front so a
     # re-run does not reopen a browser for them - the status the previous run
@@ -395,19 +529,31 @@ async def run(args) -> int:
               "logged in; use --relogin to force).")
         return 0
 
-    try:
-        creds = read_credentials(xlsx)
-    except Exception as e:
-        print(f"Could not read credentials from {xlsx}: {e}")
-        return 1
-    print(f"Credential source             : {xlsx.name}")
+    if xlsx is not None:
+        try:
+            creds = read_credentials(xlsx)
+        except Exception as e:
+            print(f"Could not read credentials from {xlsx}: {e}")
+            return 1
+        source = xlsx.name
+    else:
+        # credentials_for_profile() is the only way a password leaves the
+        # database: list_accounts() omits the column on purpose, so that no
+        # roster view or log line can carry one. Asked per account, as there.
+        creds = {}
+        for a in accounts:
+            got = db.credentials_for_profile(a.get("linked_profile") or "")
+            if got:
+                creds[a["username"].lower()] = got[1]
+        source = "database"
+    print(f"Credential source             : {source}")
     missing = [a["username"] for a in accounts
                if a["username"].lower() not in creds]
 
     print(f"Accounts with a Brave profile : {len(accounts)}")
-    print(f"Passwords found in workbook   : {len(accounts) - len(missing)}")
+    print(f"Passwords found               : {len(accounts) - len(missing)}")
     if missing:
-        print(f"No password in workbook       : {len(missing)}")
+        print(f"No password                   : {len(missing)}")
         for u in missing[:5]:
             print(f"   {u}")
 
@@ -439,6 +585,10 @@ async def run(args) -> int:
         print("A visible window opens per account. Solve any checkpoint in it.\n")
 
     aborted = False
+    live = Live(not args.no_live_sheet)
+    if live.on:
+        print(f"Live sheet updates: {live.rows} row(s) matched.\n")
+
     results = {"ok": [], "failed": []}
     for i, a in enumerate(todo, 1):
         # Batch pacing: a long run of fresh logins from one machine is the
@@ -451,6 +601,7 @@ async def run(args) -> int:
 
         label = a.get("facebook_name") or a["username"]
         print(f"[{i}/{len(todo)}] {label}  ->  profile '{a['linked_profile']}'")
+        live.mark_in_progress(a["username"])
 
         def log(msg, _i=i):
             print(f"    {msg}")
@@ -463,6 +614,7 @@ async def run(args) -> int:
         # later account would fail identically. Stop now, and do NOT record it
         # as an account verdict - the account was never really attempted.
         if not ok and is_infra_error(msg):
+            live.clear(a["username"])
             print(f"    ABORTED: {msg}")
             print("\nThe shared Brave profile is locked (an orphaned brave.exe "
                   "holds it).\nClose Brave / run: taskkill /F /IM brave.exe /T, "
@@ -471,11 +623,12 @@ async def run(args) -> int:
             aborted = True
             break
 
-        # Persist why it failed so the roster can show it. A
+        # Persist why it failed so the roster and the sheet can show it. A
         # success already cleared the status inside login_one via _mark_ok,
         # and DISABLED was recorded there too; everything else lands here.
         if not ok and msg != DISABLED:
             db.set_account_status(a["username"], "", short_reason(msg))
+        live.mark_result(a["username"], ok, msg)
         print(f"    {'OK' if ok else 'FAILED'}: {msg}\n")
         (results["ok"] if ok else results["failed"]).append((label, msg))
 
@@ -503,6 +656,18 @@ async def run(args) -> int:
             print(f"     ... {len(who) - 12} more")
     print("\nPasswords were held in memory only; nothing was written.")
 
+    # Final reconcile: live cell writes are best-effort, so a dropped one
+    # could leave the sheet a step behind the database. Rewrite every STATUS
+    # cell from the database once at the end so the sheet always matches
+    # when a run ends.
+    if live.on:
+        try:
+            import sync_sheet_status as sync
+            sync.main([])
+            print("Sheet reconciled with the database.")
+        except Exception as e:
+            print(f"(sheet reconcile skipped: {e})")
+
     if aborted:
         return 3
     return 0 if not results["failed"] else 2
@@ -512,16 +677,26 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workbook",
                     help=f"path to the credential xlsx (default: {DEFAULT_WORKBOOK})")
+    ap.add_argument("--no-live-sheet", action="store_true",
+                    help="do not update the Google Sheet STATUS column live "
+                         "as the run works each account (on by default)")
     ap.add_argument("--headless", action="store_true",
                     help="run with no visible browser window (background run); "
                          "implies --unattended and cannot hand off a 2FA prompt")
+    ap.add_argument("--from-no", type=int, default=None, metavar="N",
+                    help="only accounts whose roster number is N or higher "
+                         "(the sheet's own row number)")
     ap.add_argument("--count", type=int, help="attempt at most this many")
     ap.add_argument("--include-disabled", action="store_true",
                     help="also attempt accounts already marked disabled")
     ap.add_argument("--skip", type=int, default=0,
                     help="skip the first N of the queue, so a known-bad "
                          "account is not re-attempted")
-    ap.add_argument("--only", metavar="USERNAME", help="attempt a single account")
+    ap.add_argument("--only", nargs="*", metavar="USERNAME", default=None,
+                    help="attempt only these accounts, by username")
+    ap.add_argument("--challenges", action="store_true",
+                    help="only the accounts an earlier run left waiting on a "
+                         "2FA code or a captcha; implies --hand-off-2fa")
     ap.add_argument("--relogin", action="store_true",
                     help="also attempt accounts already marked logged in "
                          "(by default status=ok accounts are skipped)")
@@ -542,11 +717,18 @@ def main(argv) -> int:
     args = ap.parse_args(argv)
     if args.batch < 0 or args.pause < 0:
         ap.error("--batch and --pause must be >= 0")
+    if args.challenges:
+        # The queue exists so a person can clear these, so the hand-off is
+        # the whole point of the mode rather than an extra flag to remember.
+        args.hand_off_2fa = True
+        args.unattended = True
     if args.headless:
-        # No window means no way to solve a challenge by hand: force the
-        # hands-off path and refuse the 2FA hand-off.
-        if args.hand_off_2fa:
-            ap.error("--headless cannot hand off a 2FA prompt; drop --hand-off-2fa")
+        # --headless used to mean "no window at all", which is why it refused
+        # to hand a challenge over. It now means a real window that is
+        # minimised, and a challenge raises it (see
+        # FacebookAutomation._focus_for_human), so the hand-off works here
+        # too. The run stays unattended: it stops only for the challenges an
+        # operator can actually clear.
         args.unattended = True
     if args.hand_off_2fa and not args.unattended:
         ap.error("--hand-off-2fa only applies with --unattended")

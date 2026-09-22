@@ -40,7 +40,7 @@ def provision_all(log=print) -> dict:
         if not username:
             skipped += 1
             continue
-        if (acct.get("status") or "") == "disabled":
+        if (acct.get("status") or "") == "disabled" or                 (acct.get("sheet_status") or "").strip().upper() == "DISABLED":
             skipped += 1
             continue
         path = browser_choice.profile_dir(username)
