@@ -56,7 +56,7 @@ export default function Dashboard({ onNavigate }) {
     <div className="dash">
       <div className="stats">
         <StatCard title="Total accounts" value={counts?.total} hint="roster rows" />
-        <StatCard title="Logged in" value={counts?.logged_in} hint="status ok" />
+        <StatCard title="Logged in" value={counts?.logged_in} hint="live profile check" />
         <StatCard title="Need login" value={counts?.pending} hint="blank STATUS on the sheet" />
         <StatCard title="Disabled" value={counts?.disabled} hint="by Facebook" />
       </div>

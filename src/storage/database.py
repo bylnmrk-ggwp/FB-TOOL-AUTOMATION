@@ -69,6 +69,20 @@ def init_db():
             noticed_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
         );
 
+        -- One row per Brave profile, holding the verdict of the last live
+        -- login check. Separate from accounts.status because a profile need
+        -- not have a roster row at all: 54 of the 144 profiles the
+        -- 2026-09-24 scan found logged in were linked to no account, so
+        -- recording the verdict only on the account threw those away and the
+        -- dashboard undercounted. The account status stays the roster's own
+        -- view; this table is the profile's.
+        CREATE TABLE IF NOT EXISTS profile_login_state (
+            profile     TEXT    PRIMARY KEY,
+            logged_in   INTEGER NOT NULL,
+            reason      TEXT    DEFAULT '',
+            checked_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE TABLE IF NOT EXISTS activity_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             action      TEXT    NOT NULL,
@@ -575,10 +589,25 @@ def record_login_check(profile_name: str, logged_in: bool,
     never got to Facebook (network blip, stalled profile), which says
     nothing about the account and must not demote a logged-in one.
 
-    Returns False when nothing was written.
+    The verdict is also recorded against the PROFILE, which is what the
+    dashboard counts: a profile with no roster row is still a profile that
+    reached Facebook, and returning early on the missing account used to
+    discard its verdict entirely.
+
+    Returns False when no ACCOUNT was written - the profile row is written
+    either way.
     """
     if not logged_in and reason == "unreachable":
         return False
+    conn = _get_conn()
+    with conn:
+        conn.execute(
+            "INSERT INTO profile_login_state (profile, logged_in, reason) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(profile) DO UPDATE SET "
+            "logged_in = excluded.logged_in, reason = excluded.reason, "
+            "checked_at = datetime('now','localtime')",
+            (profile_name, 1 if logged_in else 0, reason or ""))
     acct = account_for_profile(profile_name)
     if not acct:
         return False
@@ -620,6 +649,19 @@ def logged_in_profiles() -> set[str]:
     rows = conn.execute(
         "SELECT linked_profile FROM accounts "
         "WHERE status = 'ok' AND linked_profile != ''").fetchall()
+    return {r[0] for r in rows}
+
+
+def logged_in_profile_names() -> set[str]:
+    """Names of Brave profiles whose last live check said LOGGED IN.
+
+    Profile-keyed, so it counts profiles with no roster row too. Callers
+    intersect this with the configured profiles; a name deleted from the
+    config keeps its row here but must not be counted.
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT profile FROM profile_login_state WHERE logged_in = 1").fetchall()
     return {r[0] for r in rows}
 
 

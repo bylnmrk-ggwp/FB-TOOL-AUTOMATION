@@ -16,12 +16,18 @@ from src.storage import database as db
 def counts() -> dict:
     """The dashboard numbers: how many accounts, and where each stands.
 
-    logged_in and active are the same figure - Brave profiles whose linked
-    account has status 'ok' - under two keys because the stat card calls it
-    "Logged in" and the status bar calls it "Active".
+    logged_in and active are the same figure - Brave profiles whose last
+    live login check said LOGGED IN - under two keys because the stat card
+    calls it "Logged in" and the status bar calls it "Active".
+
+    Counted per PROFILE, not per account: a logged-in profile with no roster
+    row still counts, which is the difference between the 90 accounts marked
+    'ok' and the 144 profiles the 2026-09-24 scan actually found logged in.
+    Intersected with the configured profiles so a profile dropped from the
+    config stops counting even though its verdict row survives.
     """
     total, _linked = db.count_accounts()
-    logged_in = len(db.logged_in_profiles())
+    logged_in = len(db.logged_in_profile_names() & set(cfg.list_profiles()))
     pending, pending_unlinked = db.count_pending()
     return {
         "total": total,
