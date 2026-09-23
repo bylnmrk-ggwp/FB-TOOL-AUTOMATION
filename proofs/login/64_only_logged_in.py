@@ -65,11 +65,11 @@ try:
 
         auto = FacebookAutomation(log_callback=lambda m: None)
         auto.page = _Page()
-        auto._is_logged_in = lambda timeout=10: asyncio.sleep(0, result=True)
+        auto._is_logged_in = lambda timeout=10, page=None: asyncio.sleep(0, result=True)
         if asyncio.run(auto._classify_account_access()) != FacebookAutomation.LOGGED_IN:
             failures.append("only logged in: a live session is still classified as a "  # noqa: F821
                             "reason for failure")
-        auto._is_logged_in = lambda timeout=10: asyncio.sleep(0, result=False)
+        auto._is_logged_in = lambda timeout=10, page=None: asyncio.sleep(0, result=False)
         verdict = asyncio.run(auto._classify_account_access())
         if verdict == FacebookAutomation.LOGGED_IN:
             failures.append("only logged in: a dead session was called logged in")  # noqa: F821

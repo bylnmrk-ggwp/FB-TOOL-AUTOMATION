@@ -34,6 +34,7 @@ def _fail(msg):
 _OK, _PEND, _DIS = ("verify_s1_ok@example.com", "verify_s1_pending@example.com",
                     "verify_s1_disabled@example.com")
 _PROFILE = "verify-s1-profile"       # linked, but not a saved Brave profile
+_CFG_PROFILE = "verify-s1-configured"   # saved in config, linked to no account
 _ROW_KEYS = {"sheet_no", "facebook_name", "username", "gmail", "linked_profile",
              "status", "status_reason", "sheet_status", "logged_in", "restricted"}
 _STATE_KEYS = {"run", "last_run_summary", "queue", "pending_input",
@@ -54,15 +55,39 @@ try:
     _db.upsert_account(9003, "S1 DISABLED", _DIS, password="x")
     _db.set_account_status(_DIS, "disabled", "checkpoint")
 
+    # logged_in/active count PROFILES whose last live check said logged in,
+    # not accounts marked 'ok'. _PROFILE is deliberately absent from the
+    # config, so marking its account ok moves neither figure.
     _after = _data.counts()
-    _want = {"total": 3, "logged_in": 1, "pending": 1, "pending_unlinked": 1,
-             "disabled": 1, "profiles": 0, "active": 1}
+    _want = {"total": 3, "logged_in": 0, "pending": 1, "pending_unlinked": 1,
+             "disabled": 1, "profiles": 0, "active": 0}
     if set(_after) != set(_want):
         _fail(f"counts() keys {sorted(_after)}")
     else:
         _delta = {k: _after[k] - _before[k] for k in _want}
         if _delta != _want:
             _fail(f"counts() delta {_delta}, expected {_want}")
+
+    # A verdict on a CONFIGURED profile counts, with no account row at all.
+    _cfg.save_profile(_CFG_PROFILE, "C:/verify/nonexistent/User Data/Profile 9001")
+    _db.record_login_check(_CFG_PROFILE, True, "logged_in")
+    _counted = _data.counts()
+    if _counted["logged_in"] - _before["logged_in"] != 1:
+        _fail(f"counts() logged_in ignored a configured profile verdict: "
+              f"{_counted['logged_in']} vs before {_before['logged_in']}")
+    if _counted["active"] != _counted["logged_in"]:
+        _fail(f"counts() active {_counted['active']} != logged_in "
+              f"{_counted['logged_in']}")
+
+    # A verdict on a profile the config does not hold must NOT count.
+    _db.record_login_check(_PROFILE, True, "logged_in")
+    if _data.counts()["logged_in"] != _counted["logged_in"]:
+        _fail("counts() logged_in counted an unconfigured profile")
+
+    # 'unreachable' is inconclusive: it must not demote a logged-in profile.
+    _db.record_login_check(_CFG_PROFILE, False, "unreachable")
+    if _data.counts()["logged_in"] != _counted["logged_in"]:
+        _fail("counts() logged_in demoted a profile on an unreachable check")
 
     _rows = _data.accounts_rows()
     _by_user = {r.get("username"): r for r in _rows}
@@ -108,7 +133,11 @@ try:
 finally:
     _db._get_conn().execute(
         "DELETE FROM accounts WHERE username LIKE 'verify_%@example.com'")
+    _db._get_conn().execute(
+        "DELETE FROM profile_login_state WHERE profile IN (?, ?)",
+        (_PROFILE, _CFG_PROFILE))
     _db._get_conn().commit()
+    _cfg.delete_profile(_CFG_PROFILE)
 
 _line = _data.summary_line(3, 1, _dt(2026, 9, 12, 20, 11))
 if _line != "3 ok \u00b7 1 failed \u00b7 20:11":

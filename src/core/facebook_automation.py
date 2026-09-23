@@ -4662,15 +4662,20 @@ class FacebookAutomation:
         except Exception:
             return False
 
-    async def _login_overlay_present(self) -> bool:
+    async def _login_overlay_present(self, page=None) -> bool:
         """True when a Facebook login gate is on the page.
 
         See LOGIN_GATE_JS: the 'See more on Facebook' overlay, a visible
         login form, or the account chooser a server-invalidated session
         lands on.
+
+        `page` names the page to judge; it defaults to self.page. A caller
+        working a page of its own - the login scan drives its own persistent
+        context - must pass it, or the answer describes a different tab.
         """
+        target = page or self.page
         try:
-            return bool(await self.page.evaluate(LOGIN_GATE_JS))
+            return bool(await target.evaluate(LOGIN_GATE_JS))
         except Exception:
             return False
 
@@ -4715,11 +4720,13 @@ class FacebookAutomation:
             return False
         return parts.path.startswith(cls.GATE_PATHS)
 
-    async def _is_logged_in(self, timeout: int = 10) -> bool:
+    async def _is_logged_in(self, timeout: int = 10, page=None) -> bool:
+        """Whether `page` (default self.page) is on Facebook with no gate."""
+        target = page or self.page
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                page_url = self.page.url.lower()
+                page_url = target.url.lower()
             except Exception:
                 await asyncio.sleep(0.3)
                 continue
@@ -4730,13 +4737,16 @@ class FacebookAutomation:
 
             on_login_page = self._is_gated_url(page_url)
 
-            email_count = await self.page.locator('input[name="email"]').count()
-            pass_count = await self.page.locator('input[name="pass"]').count()
-            on_login_form = email_count > 0 or pass_count > 0
-
-            # The 'See more on Facebook' overlay can appear over a post page
-            # without any URL change — treat it as not logged in too.
-            if on_login_page or on_login_form or await self._login_overlay_present():
+            # Only a login form a person could actually use counts. Facebook
+            # ships hidden login markup on pages a logged-in account is
+            # entitled to read - a /share/p/ permalink over the feed is the
+            # usual one - and locator.count() counts hidden nodes just the
+            # same. Counting them spent this whole timeout deciding a live
+            # session was dead. _login_overlay_present() runs LOGIN_GATE_JS,
+            # which tests visibility before calling anything a gate, and
+            # already covers the email/pass inputs as well as the 'See more
+            # on Facebook' overlay and the account chooser.
+            if on_login_page or await self._login_overlay_present(target):
                 await asyncio.sleep(0.5)
                 continue
 
@@ -4766,7 +4776,8 @@ class FacebookAutomation:
         # A live session first: anything else here is a reason for failure,
         # and a working account must never be given one.
         try:
-            if "facebook.com" in url and await self._is_logged_in(timeout=5):
+            if "facebook.com" in url and await self._is_logged_in(timeout=5,
+                                                                  page=target):
                 return self.LOGGED_IN
         except Exception:
             pass
@@ -4795,8 +4806,16 @@ class FacebookAutomation:
         if any(term in url for term in ("checkpoint", "twofactor", "approvals")) \
                 or any(term in body for term in checkpoint_terms):
             return "checkpoint_or_verification_required"
-        if "login" in url or await target.locator(
-                'input[name="email"], input[name="pass"]').count():
+        # Two things this must NOT do, because both once demoted live
+        # accounts. A substring test calls any URL carrying "login" in a
+        # query a gate, which is what _is_gated_url exists to avoid. And
+        # counting input[name="email"] counts nodes that are hidden, so the
+        # login markup Facebook ships on ordinary post pages read as a dead
+        # session - the same mistake _is_logged_in made, repeated here, so
+        # this "second opinion" agreed with it every time instead of
+        # correcting it. The visibility-aware gate below is the only test
+        # that decides a form is real.
+        if self._is_gated_url(url):
             return "logged_out_or_session_expired"
         # Evaluate the gate on the page being classified, not self.page: the
         # login scan passes its own persistent-context page, so checking
