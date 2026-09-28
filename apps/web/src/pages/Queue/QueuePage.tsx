@@ -27,14 +27,16 @@ import { dateTime, humanise, relativeTime } from '../../lib/format';
 const ACTIVE: readonly JobStatus[] = ['pending', 'queued', 'running', 'retrying'];
 const TERMINAL: readonly JobStatus[] = ['completed', 'failed', 'cancelled'];
 
-type Filter = 'active' | 'finished' | JobStatus;
+type Filter = 'all' | 'active' | 'finished' | JobStatus;
 
 const isFilter = (value: string | null): value is Filter =>
+  value === 'all' ||
   value === 'active' ||
   value === 'finished' ||
   (JOB_STATUSES as readonly string[]).includes(value ?? '');
 
 const statusesFor = (filter: Filter): JobStatus[] => {
+  if (filter === 'all') return [...JOB_STATUSES];
   if (filter === 'active') return [...ACTIVE];
   if (filter === 'finished') return [...TERMINAL];
   return [filter];
@@ -43,7 +45,9 @@ const statusesFor = (filter: Filter): JobStatus[] => {
 export const QueuePage = (): ReactElement => {
   const [params, setParams] = useSearchParams();
   const raw = params.get('filter');
-  const filter: Filter = isFilter(raw) ? raw : 'active';
+  // Everything by default: a person opening this page wants to see what
+  // happened, and a failed job is the thing most worth seeing.
+  const filter: Filter = isFilter(raw) ? raw : 'all';
   const [inspecting, setInspecting] = useState<Job | null>(null);
 
   const jobs = useJobs(useMemo(() => ({ status: statusesFor(filter), limit: 100 }), [filter]));
@@ -56,7 +60,7 @@ export const QueuePage = (): ReactElement => {
 
   const setFilter = (value: string): void => {
     const next = new URLSearchParams(params);
-    if (value === 'active') next.delete('filter');
+    if (value === 'all') next.delete('filter');
     else next.set('filter', value);
     setParams(next, { replace: true });
   };
@@ -224,6 +228,7 @@ export const QueuePage = (): ReactElement => {
 
       <Tabs value={filter} onValueChange={setFilter}>
         <TabsList>
+          <TabsTrigger value="all">All</TabsTrigger>
           <TabsTrigger value="active">Active</TabsTrigger>
           <TabsTrigger value="finished">Finished</TabsTrigger>
           {(JOB_STATUSES as readonly string[]).includes(filter) && (
@@ -241,8 +246,12 @@ export const QueuePage = (): ReactElement => {
         loading={jobs.isFetching}
         empty={
           <EmptyState
-            title="No jobs here"
-            description="Compose work for one or more accounts and it appears in this list."
+            title={filter === 'all' ? 'No jobs yet' : `No ${humanise(filter).toLowerCase()} jobs`}
+            description={
+              filter === 'all'
+                ? 'Compose work for one or more accounts and it appears in this list.'
+                : 'Nothing is in this state right now. The All tab lists every job.'
+            }
           />
         }
       />

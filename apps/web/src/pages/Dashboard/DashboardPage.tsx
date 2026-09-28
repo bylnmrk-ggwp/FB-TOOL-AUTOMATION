@@ -41,7 +41,7 @@ const figuresFor = (stats: DashboardStats): { accounts: Figure[]; queue: Figure[
     {
       label: 'Waiting',
       value: stats.queue.pending + stats.queue.queued + stats.queue.retrying,
-      to: '/queue',
+      to: '/queue?filter=active',
     },
     { label: 'Running', value: stats.queue.running, to: '/monitor' },
     { label: 'Completed', value: stats.queue.completed, to: '/queue?filter=completed' },
