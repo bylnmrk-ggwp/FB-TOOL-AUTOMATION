@@ -1,46 +1,26 @@
-__pycache__/
-*.pyc
-.autoshare/
-autoshare_config.enc
-.env
-.venv/
-venv/
-*.log
-dump_*.json
-nul
-.claude/settings.local.json
-
-# Account spreadsheets - plaintext credentials, never commit
-*.xlsx
-*.xls
-*.csv
-
-# Google service-account key — never commit
-.secrets/
-*service-account*.json
-# service-account key (exact name)
-mcarsmainwebsite-01d2cff94ed8.json
-
-# parallel-login scratch + profile backups (session data)
-.parallel-work/
-.parallel-backup/
 node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
 
-# web app build output and the frp tunnel (binary + the toml with the token)
-web/node_modules/
-web/dist/
-tools/frp/frpc.toml
-tools/frp/*.exe
-tools/frp/*.zip
+.env
+.env.local
+.env.*.local
 
-# Exported Facebook sessions - plaintext, never commit
-transfer/
+data/database/*.sqlite
+data/database/*.sqlite-*
+data/browser-profiles/*/
+data/uploads/*
+data/exports/*
+data/logs/*
+!data/**/.gitkeep
 
-# Windows folder metadata, MCP scratch, diagnostic screenshots
-desktop.ini
-.playwright-mcp/
-checkpoint_probe.png
-watch_diagnose.png
+test-results/
+playwright-report/
+blob-report/
+coverage/
+.playwright/
 
-# Fleet transfer bundle - plaintext sessions, never commit
-fleet-transfer.zip
+.DS_Store
+Thumbs.db

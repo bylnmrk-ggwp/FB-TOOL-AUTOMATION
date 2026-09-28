@@ -1,0 +1,44 @@
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1080px;
+}
+
+.dashboard__title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.dashboard__subtitle {
+  color: var(--text-muted);
+}
+
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-5);
+  margin: 0;
+}
+
+.dashboard__grid dt {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-bottom: var(--space-2);
+}
+
+.dashboard__grid dd {
+  margin: 0;
+  font-size: 15px;
+}
+
+.dashboard__muted {
+  color: var(--text-muted);
+}
+
+.dashboard__error {
+  color: var(--danger);
+}
