@@ -64,7 +64,7 @@ const Navigation = ({ onNavigate }: { onNavigate?: () => void }): ReactElement =
  * sits straight on the black sidebar.
  */
 const Brand = (): ReactElement => (
-  <div className="grid gap-1.5 px-2.5">
+  <div className="px-2.5">
     <img
       src="/mcarsph-logo-on-dark.png"
       alt="MCARSPH"
@@ -72,9 +72,6 @@ const Brand = (): ReactElement => (
       height={132}
       className="h-auto w-full max-w-[170px]"
     />
-    <span className="px-0.5 text-xs font-medium tracking-tight text-sidebar-foreground">
-      FB Automation
-    </span>
   </div>
 );
 
