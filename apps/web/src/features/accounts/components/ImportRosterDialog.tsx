@@ -14,7 +14,7 @@ interface ImportRosterDialogProps {
 }
 
 const describe = (result: RosterImportResult): string =>
-  `${result.rows} row${result.rows === 1 ? '' : 's'} read: ${result.created} added, ${result.updated} updated, ${result.skipped.length} skipped`;
+  `${result.rows} row${result.rows === 1 ? '' : 's'} read: ${result.created} added, ${result.updated} updated, ${result.removed} removed, ${result.skipped.length} skipped`;
 
 /**
  * Two ways in: the Google Sheet the server is configured with, or a CSV the
@@ -39,7 +39,7 @@ export const ImportRosterDialog = ({ open, onClose }: ImportRosterDialogProps): 
     <Modal
       open={open}
       title="Import the roster"
-      description="Columns are matched by their header — FACEBOOK NAME, USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER. The row number in column A is the key; a known number is updated, a new one becomes an account."
+      description="Columns are matched by their header — FACEBOOK NAME, USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER. Only rows with both a username and a password count. The row number in column A is the key; a known number is updated, a new one becomes an account, and a roster account whose row stops counting is removed."
       onClose={onClose}
       size="wide"
       footer={

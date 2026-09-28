@@ -39,33 +39,34 @@ describe('mapHeaders', () => {
 });
 
 describe('parseRoster', () => {
-  it('keys rows on column A and keeps numbered rows without a username', () => {
+  it('counts only rows with both a username and a password, keyed on column A', () => {
     const rows = parseRoster([
       EXPORTED_HEADER,
       ['1', 'Rene Batler', 'rene@example.com', 'secret', '', '', '', ''],
       ['2', '', 'second@example.com', 'secret', '', '', '', ''],
-      ['3', '', '', '', '', '', '', ''],
+      ['3', 'No password yet', 'third@example.com', '', '', '', '', ''],
+      ['4', 'No username', '', 'secret', '', '', '', ''],
+      ['5', '', '', '', '', '', '', ''],
       ['', '', '', '', '', '', '', ''],
     ]);
 
-    expect(rows.map((row) => row.sheetNo)).toEqual([1, 2, 3]);
+    expect(rows.map((row) => row.sheetNo)).toEqual([1, 2]);
     expect(rows[0]?.facebookName).toBe('Rene Batler');
     expect(rows[1]?.facebookName).toBeNull();
-    expect(rows[2]?.username).toBeNull();
   });
 
   it('treats a digits-only Facebook name as no name', () => {
     const rows = parseRoster([
       EXPORTED_HEADER,
-      ['7', '7', 'seven@example.com', '', '', '', '', ''],
+      ['7', '7', 'seven@example.com', 'secret', '', '', '', ''],
     ]);
     expect(rows[0]?.facebookName).toBeNull();
   });
 
-  it('keeps a row that has a username but no number', () => {
+  it('keeps a row that has credentials but no number', () => {
     const rows = parseRoster([
-      ['NAME', 'USERNAME'],
-      ['Someone', 'someone@example.com'],
+      ['NAME', 'USERNAME', 'PASSWORD'],
+      ['Someone', 'someone@example.com', 'secret'],
     ]);
     expect(rows).toEqual([
       expect.objectContaining({ sheetNo: null, username: 'someone@example.com' }),

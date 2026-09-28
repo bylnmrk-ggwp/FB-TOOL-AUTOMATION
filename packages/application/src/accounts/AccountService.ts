@@ -216,7 +216,7 @@ export class AccountService {
     accounts: readonly CreateAccountInput[],
     upsert: boolean,
   ): Promise<ImportAccountsResult> {
-    const result: ImportAccountsResult = { created: 0, updated: 0, skipped: [] };
+    const result: ImportAccountsResult = { created: 0, updated: 0, removed: 0, skipped: [] };
 
     for (const candidate of accounts) {
       const name = candidate.name.trim();
@@ -259,10 +259,10 @@ export class AccountService {
    * becomes an account named after the person, with a profile of its own.
    */
   async importRoster(rows: readonly RosterRow[]): Promise<ImportAccountsResult> {
-    const result: ImportAccountsResult = { created: 0, updated: 0, skipped: [] };
+    const result: ImportAccountsResult = { created: 0, updated: 0, removed: 0, skipped: [] };
 
     for (const row of rows) {
-      const label = row.facebookName ?? row.username ?? `No. ${String(row.sheetNo)}`;
+      const label = row.facebookName ?? row.username;
       try {
         // Column A is the key: the row number is what the team counts by.
         // An account that has no number yet (imported before numbers were
@@ -304,6 +304,32 @@ export class AccountService {
       }
     }
 
+    // The roster is the count. An account that came from the sheet but can no
+    // longer sign in — its row lost the username or the password, or the
+    // row is gone — is removed with its profile, so the total here matches
+    // the rows that count over there. Accounts added by hand carry no row
+    // number and are never touched.
+    const kept = new Set(
+      rows.filter((row) => row.sheetNo !== null).map((row) => row.sheetNo as number),
+    );
+    for (const account of await this.deps.repositories.accounts.listRoster()) {
+      const counts =
+        account.sheetNo !== null &&
+        kept.has(account.sheetNo) &&
+        account.username !== null &&
+        account.hasPassword;
+      if (counts) continue;
+      try {
+        await this.delete(account.id);
+        result.removed += 1;
+      } catch (error) {
+        result.skipped.push({
+          name: account.displayName,
+          reason: `could not remove: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+    }
+
     return result;
   }
 
@@ -314,7 +340,6 @@ export class AccountService {
       const numbered = await accounts.findBySheetNo(row.sheetNo);
       if (numbered !== null) return numbered;
     }
-    if (row.username === null) return null;
     const named = await accounts.findByUsername(row.username);
     // A username already tied to another row number belongs to that row.
     return named !== null && (named.sheetNo === null || named.sheetNo === row.sheetNo)

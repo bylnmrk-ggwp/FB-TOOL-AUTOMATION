@@ -127,10 +127,13 @@ the import dialog; both go through the same `RosterService`. Columns are matched
 by their header label, never by position, so the sheet can be reordered: the
 labels it looks for are `FACEBOOK NAME`, `USERNAME`, `PASSWORD`, `GMAIL`,
 `PASS FOR GMAIL`, `NUMBER` and `NO` (a blank first header is also taken as the
-row number). Column A — the row number — is the key: a row already known
-updates its roster fields, a new one creates an account with its own browser
-profile (so the account count follows column A), and a row with neither a
-number nor a username is skipped as a heading or a note.
+row number). Only rows with both a username and a password count — a row
+that cannot sign in is a heading, a note or a slot not filled in yet. Column
+A — the row number — is the key: a row already known updates its roster
+fields, a new one creates an account with its own browser profile, and a
+roster account whose row stops counting (or disappears) is removed, so the
+account count here is the count of usable rows over there. Accounts added by
+hand carry no row number and are never touched by an import.
 
 Passwords are stored so that the login job can type them, but they never come
 back out. The API reports `hasPassword` and `hasGmailPassword` and nothing more,

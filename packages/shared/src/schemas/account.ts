@@ -141,6 +141,8 @@ export type ImportAccountsInput = z.input<typeof ImportAccountsSchema>;
 export const ImportAccountsResultSchema = z.object({
   created: z.number().int().min(0),
   updated: z.number().int().min(0),
+  /** Roster accounts dropped because their row no longer counts (no username or password). */
+  removed: z.number().int().min(0),
   skipped: z.array(z.object({ name: z.string(), reason: z.string() })),
 });
 export type ImportAccountsResult = z.infer<typeof ImportAccountsResultSchema>;
@@ -153,8 +155,9 @@ export const RosterRowSchema = z.object({
   /** Column A on the sheet: the row's number, and the key an import matches on. */
   sheetNo: z.number().int().nullable(),
   facebookName: z.string().nullable(),
-  username: z.string().nullable(),
-  password: z.string().nullable(),
+  /** Both required: a row that cannot sign in does not count as an account. */
+  username: z.string().min(1),
+  password: z.string().min(1),
   gmail: z.string().nullable(),
   gmailPassword: z.string().nullable(),
   phone: z.string().nullable(),

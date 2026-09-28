@@ -48,8 +48,8 @@ const orNull = (value: string): string | null => (value === '' ? null : value);
 
 /**
  * Sheet rows -> roster rows. Column A (the row number) is the key an import
- * matches on; a row with neither a number nor a username is a heading, a
- * note or an empty line and is skipped.
+ * matches on. Only rows with both a username and a password count; the rest
+ * are headings, notes, empty lines or slots not filled in yet.
  */
 export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] => {
   const header = rows[0];
@@ -65,19 +65,19 @@ export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] =
   const parsed: RosterRow[] = [];
   rows.slice(1).forEach((row) => {
     const username = cleanUsername(cell(row, columns.username));
-    const numbered = Number.parseInt(cell(row, columns.sheetNo), 10);
-    const sheetNo = Number.isFinite(numbered) ? numbered : null;
-    // A row counts when column A numbers it or it names an account; a line
-    // with neither is a heading, a note or an empty row.
-    if (sheetNo === null && username === '') return;
+    const password = cell(row, columns.password);
+    // A row counts only when it can sign in: username and password both
+    // present. Anything else is a heading, a note, or a slot not filled yet.
+    if (username === '' || password === '') return;
 
+    const numbered = Number.parseInt(cell(row, columns.sheetNo), 10);
     // A name that is only digits is a placeholder on the sheet, not a name.
     const facebookName = cell(row, columns.facebookName);
     parsed.push({
-      sheetNo,
+      sheetNo: Number.isFinite(numbered) ? numbered : null,
       facebookName: /^\d*$/.test(facebookName) ? null : facebookName,
-      username: orNull(username),
-      password: orNull(cell(row, columns.password)),
+      username,
+      password,
       gmail: orNull(cell(row, columns.gmail)),
       gmailPassword: orNull(cell(row, columns.gmailPassword)),
       phone: orNull(cell(row, columns.phone)),
@@ -110,7 +110,7 @@ export class RosterService {
 
     const result = await this.accounts.importRoster(roster);
     this.logger.info(
-      `Roster import: ${result.created} created, ${result.updated} updated, ${result.skipped.length} skipped`,
+      `Roster import: ${result.created} created, ${result.updated} updated, ${result.removed} removed, ${result.skipped.length} skipped`,
       { event: 'roster.imported' },
     );
     return { ...result, rows: roster.length };

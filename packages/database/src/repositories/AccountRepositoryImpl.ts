@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray, like, or } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, like, or, isNotNull } from 'drizzle-orm';
 import type { Account, AccountStatus, LoginStatus } from '@fb/shared';
 import { ACCOUNT_STATUSES, AccountNotFoundError, LOGIN_STATUSES, nowIso } from '@fb/shared';
 import type {
@@ -97,6 +97,15 @@ export class AccountRepositoryImpl implements AccountRepository {
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toAccount(row);
+  }
+
+  async listRoster(): Promise<Account[]> {
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(isNotNull(accounts.sheetNo))
+      .orderBy(asc(accounts.sheetNo));
+    return rows.map(toAccount);
   }
 
   async findByIds(ids: readonly string[]): Promise<Account[]> {

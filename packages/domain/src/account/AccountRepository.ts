@@ -15,6 +15,8 @@ export interface AccountRepository {
   findByName(name: string): Promise<Account | null>;
   findByUsername(username: string): Promise<Account | null>;
   findBySheetNo(sheetNo: number): Promise<Account | null>;
+  /** Every account that came from the roster, i.e. carries a sheet row number. */
+  listRoster(): Promise<Account[]>;
   findByIds(ids: readonly string[]): Promise<Account[]>;
   list(filter: AccountFilter): Promise<Page<Account>>;
   update(id: string, patch: AccountPatch): Promise<Account>;

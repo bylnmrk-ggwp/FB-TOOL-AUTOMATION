@@ -64,11 +64,13 @@ account can have a browser open and still be signed out.
 characters, with quoted cells handled). Both hand their rows to
 `RosterService`, which matches columns by header label (`FACEBOOK NAME`,
 `USERNAME`, `PASSWORD`, `GMAIL`, `PASS FOR GMAIL`, `NUMBER`, `NO`, with a few
-synonyms) and keys every row on its row number (column A; a row without one
-falls back to its username). A known row updates the roster fields and leaves
-status, profile and login verdict alone; a new one creates an account; a row
-with neither a number nor a username is skipped. The result is the usual
-`created` / `updated` / `skipped` counts plus `rows`, the number of roster rows
+synonyms), keeps only rows that carry both a username and a password, and
+keys every row on its row number (column A; a row without one falls back to
+its username). A known row updates the roster fields and leaves status,
+profile and login verdict alone; a new one creates an account; a roster
+account (one with a row number) whose row no longer counts is deleted with
+its profile and jobs, and reported under `removed`. The result is the usual
+`created` / `updated` / `removed` / `skipped` counts plus `rows`, the number of roster rows
 read. Without a key file the sheet is fetched as CSV through Google's
 link-sharing route, which works for any sheet shared with "anyone with the
 link"; a private sheet answers that route with a sign-in page, which is
