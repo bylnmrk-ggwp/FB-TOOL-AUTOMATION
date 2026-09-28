@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { AppError } from '@fb/shared';
+import { Toaster } from '@/components/ui/sonner';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 /** A 4xx means the request was wrong; repeating it will not help. */
 const shouldRetry = (failureCount: number, error: unknown): boolean => {
@@ -23,5 +25,10 @@ export const AppProviders = ({ children }: { children: ReactNode }): ReactElemen
       }),
   );
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+      <Toaster />
+    </QueryClientProvider>
+  );
 };

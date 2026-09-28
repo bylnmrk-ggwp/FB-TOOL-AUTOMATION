@@ -33,8 +33,10 @@ export const useLiveEvents = (): void => {
 
   useEffect(() => {
     closedByUs.current = false;
+    let reconnectTimer: number | null = null;
 
     const connect = (): void => {
+      reconnectTimer = null;
       const socket = new WebSocket(socketUrl());
       socketRef.current = socket;
       setConnection('connecting');
@@ -60,7 +62,7 @@ export const useLiveEvents = (): void => {
         // open tab at once.
         attemptRef.current += 1;
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** (attemptRef.current - 1));
-        window.setTimeout(connect, delay);
+        reconnectTimer = window.setTimeout(connect, delay);
       };
 
       socket.onerror = () => socket.close();
@@ -70,8 +72,21 @@ export const useLiveEvents = (): void => {
 
     return () => {
       closedByUs.current = true;
-      socketRef.current?.close();
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+
+      const socket = socketRef.current;
       socketRef.current = null;
+      if (socket === null) return;
+
+      // Closing a socket that is still connecting logs a browser warning; let
+      // it finish opening and close it then. StrictMode mounts twice in
+      // development, which is exactly this case.
+      if (socket.readyState === WebSocket.CONNECTING) {
+        socket.onopen = () => socket.close();
+        socket.onmessage = null;
+      } else {
+        socket.close();
+      }
     };
   }, [queryClient, record, setConnection]);
 };
@@ -116,6 +131,15 @@ const invalidate = (queryClient: ReturnType<typeof useQueryClient>, event: Serve
 
     case 'log.created':
       refresh('logs');
+      break;
+
+    case 'groups.changed':
+      refresh('groups');
+      break;
+
+    case 'input.requested':
+    case 'input.resolved':
+      refresh('operator-requests');
       break;
 
     // Progress and statistics are read from the live store, so they need no

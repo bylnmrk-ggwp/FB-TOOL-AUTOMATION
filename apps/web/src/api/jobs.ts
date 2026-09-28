@@ -7,11 +7,13 @@ import {
   type ListJobsQuery,
   type Paginated,
   type QueueStats,
+  type ReactionType,
 } from '@fb/shared';
 import { z } from 'zod';
 import { apiRequest } from './client';
 
 const JobPageSchema = paginatedSchema(JobSchema);
+const JobsSchema = z.object({ jobs: z.array(JobSchema) });
 
 export const listJobs = (
   query: Partial<ListJobsQuery>,
@@ -32,13 +34,39 @@ export const getJob = (id: string, signal?: AbortSignal): Promise<Job> =>
   apiRequest(`/jobs/${id}`, JobSchema, { signal });
 
 export const createJobBatch = (input: CreateJobBatchInput): Promise<{ jobs: Job[] }> =>
-  apiRequest('/jobs/batch', z.object({ jobs: z.array(JobSchema) }), {
-    method: 'POST',
-    body: input,
-  });
+  apiRequest('/jobs/batch', JobsSchema, { method: 'POST', body: input });
+
+export interface ShareToGroupsInput {
+  accountIds: string[];
+  postUrl: string;
+  groups: Array<{ name: string; url: string | null }>;
+  comments: string[];
+  reaction: ReactionType | null;
+  shareToTimeline: boolean;
+  skipDone: boolean;
+  priority?: number;
+}
+
+export const shareToGroups = (input: ShareToGroupsInput): Promise<{ jobs: Job[] }> =>
+  apiRequest('/jobs/share-to-groups', JobsSchema, { method: 'POST', body: input });
+
+export interface JoinGroupsInput {
+  accountIds: string[];
+  groupUrls: string[];
+  skipDone: boolean;
+  priority?: number;
+}
+
+export const joinGroups = (input: JoinGroupsInput): Promise<{ jobs: Job[] }> =>
+  apiRequest('/jobs/join-groups', JobsSchema, { method: 'POST', body: input });
 
 export const cancelJob = (id: string): Promise<Job> =>
   apiRequest(`/jobs/${id}/cancel`, JobSchema, { method: 'POST' });
+
+export const cancelAllJobs = (): Promise<{ cancelled: number }> =>
+  apiRequest('/jobs/cancel-all', z.object({ cancelled: z.number().int().min(0) }), {
+    method: 'POST',
+  });
 
 export const retryJob = (id: string): Promise<Job> =>
   apiRequest(`/jobs/${id}/retry`, JobSchema, { method: 'POST' });

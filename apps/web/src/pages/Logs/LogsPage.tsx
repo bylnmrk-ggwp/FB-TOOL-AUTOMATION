@@ -1,15 +1,15 @@
 import { useMemo, useState, type ReactElement } from 'react';
 import { LOG_LEVELS, type LogEntry, type LogLevel } from '@fb/shared';
-import { LogLevelBadge } from '../../components/ui/Badge';
-import { Button } from '../../components/ui/Button';
-import { EmptyState, ErrorNotice } from '../../components/ui/Feedback';
-import { PageHeader } from '../../components/ui/PageHeader';
-import { SelectField, TextField } from '../../components/forms/Field';
-import { DataTable, type Column } from '../../components/tables/DataTable';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { LogLevelDot } from '@/components/common/StatusDot';
+import { EmptyState, ErrorNotice } from '@/components/common/Feedback';
+import { PageHeader } from '@/components/common/PageHeader';
+import { NativeSelect } from '@/components/forms/Field';
+import { DataTable, type Column } from '@/components/tables/DataTable';
 import { useAccounts } from '../../features/accounts/hooks';
 import { useLogs } from '../../features/monitoring/hooks';
 import { clockTime, dateTime } from '../../lib/format';
-import './LogsPage.css';
 
 const PAGE_SIZE = 100;
 
@@ -50,9 +50,9 @@ export const LogsPage = (): ReactElement => {
     {
       key: 'time',
       header: 'Time',
-      width: '110px',
+      width: '96px',
       render: (entry) => (
-        <span title={dateTime(entry.createdAt)} className="mono">
+        <span title={dateTime(entry.createdAt)} className="font-mono text-xs text-muted-foreground">
           {clockTime(entry.createdAt)}
         </span>
       ),
@@ -60,24 +60,30 @@ export const LogsPage = (): ReactElement => {
     {
       key: 'level',
       header: 'Level',
-      width: '90px',
-      render: (entry) => <LogLevelBadge level={entry.level} />,
+      width: '100px',
+      render: (entry) => <LogLevelDot level={entry.level} />,
     },
     {
       key: 'event',
       header: 'Event',
-      width: '180px',
-      render: (entry) => <span className="mono">{entry.event ?? '—'}</span>,
+      width: '190px',
+      secondary: true,
+      render: (entry) => (
+        <span className="font-mono text-xs">
+          {entry.event ?? <span className="text-muted-foreground">—</span>}
+        </span>
+      ),
     },
     { key: 'message', header: 'Message', render: (entry) => entry.message },
     {
       key: 'context',
       header: 'Context',
       width: '220px',
+      secondary: true,
       render: (entry) => (
-        <span className="logs__context">
-          {entry.accountId !== null && <span className="mono">{entry.accountId}</span>}
-          {entry.jobId !== null && <span className="mono">{entry.jobId}</span>}
+        <span className="grid font-mono text-xs text-muted-foreground">
+          {entry.accountId !== null && <span>{entry.accountId}</span>}
+          {entry.jobId !== null && <span>{entry.jobId}</span>}
         </span>
       ),
     },
@@ -89,15 +95,15 @@ export const LogsPage = (): ReactElement => {
   };
 
   return (
-    <div className="page">
+    <div className="grid gap-6">
       <PageHeader
         title="Logs"
         description="Everything the server wrote, with credentials already removed."
       />
 
-      <div className="logs__filters">
-        <SelectField
-          label="Level"
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <NativeSelect
+          aria-label="Level"
           value={level}
           options={[
             { value: '', label: 'Any level' },
@@ -105,20 +111,20 @@ export const LogsPage = (): ReactElement => {
           ]}
           onChange={(event) => resetPageAnd(() => setLevel(event.target.value))}
         />
-        <SelectField
-          label="Account"
+        <NativeSelect
+          aria-label="Account"
           value={accountId}
           options={accountOptions}
           onChange={(event) => resetPageAnd(() => setAccountId(event.target.value))}
         />
-        <TextField
-          label="Search"
+        <Input
+          aria-label="Search"
           placeholder="Search the message"
           value={search}
           onChange={(event) => resetPageAnd(() => setSearch(event.target.value))}
         />
-        <TextField
-          label="From"
+        <Input
+          aria-label="From"
           type="datetime-local"
           value={from}
           onChange={(event) => resetPageAnd(() => setFrom(event.target.value))}
@@ -132,19 +138,27 @@ export const LogsPage = (): ReactElement => {
         rows={logs.data?.items ?? []}
         rowKey={(entry) => entry.id}
         loading={logs.isFetching}
-        empty={<EmptyState title="No log entries match" />}
+        empty={
+          <EmptyState title="No log entries match" description="Widen the filters to see more." />
+        }
       />
 
-      <div className="logs__pager">
-        <span className="muted">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground">
           {total === 0 ? 'Nothing to show' : `${total} entr${total === 1 ? 'y' : 'ies'}`}
         </span>
-        <div className="row">
-          <Button size="sm" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page === 0}
+            onClick={() => setPage((value) => value - 1)}
+          >
             Previous
           </Button>
           <Button
             size="sm"
+            variant="outline"
             disabled={page >= lastPage}
             onClick={() => setPage((value) => value + 1)}
           >

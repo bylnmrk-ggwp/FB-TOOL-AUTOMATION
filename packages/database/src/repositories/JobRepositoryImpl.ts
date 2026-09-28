@@ -1,5 +1,18 @@
-import { and, asc, count, desc, eq, gte, inArray, isNull, lte, notInArray, or } from 'drizzle-orm';
-import type { Job, JobStatus, QueueStats } from '@fb/shared';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
+import type { Job, JobStatus, JobType, QueueStats } from '@fb/shared';
 import { JOB_STATUSES, JobNotFoundError, nowIso } from '@fb/shared';
 import type { ClaimRequest, JobFilter, JobPatch, JobRepository, NewJob, Page } from '@fb/domain';
 import type { Database } from '../db.js';
@@ -177,6 +190,22 @@ export class JobRepositoryImpl implements JobRepository {
     return rows.map(toJob);
   }
 
+  /** One statement, so a Stop-all button cannot race a worker into a half-cancelled list. */
+  async cancelAllActive(): Promise<number> {
+    const active = await this.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(inArray(jobs.status, ['pending', 'queued', 'running', 'retrying']));
+    if (active.length === 0) return 0;
+
+    const now = nowIso();
+    await this.db
+      .update(jobs)
+      .set({ status: 'cancelled', finishedAt: now, updatedAt: now, lockedBy: null })
+      .where(inArray(jobs.status, ['pending', 'queued', 'running', 'retrying']));
+    return active.length;
+  }
+
   async countRunningByAccount(): Promise<Record<string, number>> {
     const rows = await this.db
       .select({ accountId: jobs.accountId, value: count() })
@@ -214,6 +243,34 @@ export class JobRepositoryImpl implements JobRepository {
       if (row.status === 'failed') failed += row.value;
     }
     return { total, succeeded, failed };
+  }
+
+  async finishedByHour(
+    since: Date,
+  ): Promise<Array<{ hour: string; status: JobStatus; count: number }>> {
+    // finished_at is ISO-8601, so its first 13 characters name the hour.
+    const hour = sql<string>`substr(${jobs.finishedAt}, 1, 13)`;
+    const rows = await this.db
+      .select({ hour, status: jobs.status, value: count() })
+      .from(jobs)
+      .where(and(inArray(jobs.status, [...TERMINAL]), gte(jobs.finishedAt, since.toISOString())))
+      .groupBy(hour, jobs.status)
+      .orderBy(hour);
+    return rows.map((row) => ({
+      hour: `${row.hour}:00:00.000Z`,
+      status: row.status,
+      count: row.value,
+    }));
+  }
+
+  async finishedByType(since: Date): Promise<Array<{ type: JobType; count: number }>> {
+    const rows = await this.db
+      .select({ type: jobs.type, value: count() })
+      .from(jobs)
+      .where(and(inArray(jobs.status, [...TERMINAL]), gte(jobs.finishedAt, since.toISOString())))
+      .groupBy(jobs.type)
+      .orderBy(desc(count()));
+    return rows.map((row) => ({ type: row.type, count: row.value }));
   }
 
   async deleteByAccount(accountId: string): Promise<number> {

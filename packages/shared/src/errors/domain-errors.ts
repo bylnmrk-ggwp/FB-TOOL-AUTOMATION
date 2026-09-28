@@ -262,3 +262,95 @@ export class SettingsInvalidError extends AppError {
     });
   }
 }
+
+// --- Credentials, gates and the operator --------------------------------
+
+export class CredentialsMissingError extends AppError {
+  constructor(accountId: string) {
+    super(
+      ERROR_CODES.ACCOUNT_CREDENTIALS_MISSING,
+      `Account ${accountId} has no username and password to sign in with`,
+      { status: 409, details: { accountId }, retryable: false },
+    );
+  }
+}
+
+export class ShareRestrictedError extends AppError {
+  constructor(accountId: string, until: string | null) {
+    super(
+      ERROR_CODES.ACCOUNT_SHARE_RESTRICTED,
+      `Facebook is restricting account ${accountId} from sharing`,
+      { status: 409, details: { accountId, until }, retryable: false },
+    );
+  }
+}
+
+export class LoginFailedError extends AppError {
+  constructor(reason: string, retryable = false) {
+    super(ERROR_CODES.AUTOMATION_LOGIN_FAILED, `Login failed: ${reason}`, {
+      status: 409,
+      details: { reason },
+      retryable,
+    });
+  }
+}
+
+/** Facebook put a checkpoint, code prompt or confirmation in the way. */
+export class AccountGatedError extends AppError {
+  constructor(gate: string, message: string) {
+    super(ERROR_CODES.AUTOMATION_GATED, message, {
+      status: 409,
+      details: { gate },
+      // A person has to clear it; another automatic attempt hits the same wall.
+      retryable: false,
+    });
+  }
+}
+
+export class OperatorInputTimeoutError extends AppError {
+  constructor(requestId: string, kind: string) {
+    super(ERROR_CODES.OPERATOR_INPUT_TIMEOUT, `Nobody answered the ${kind} request in time`, {
+      status: 408,
+      details: { requestId, kind },
+      retryable: false,
+    });
+  }
+}
+
+export class OperatorInputCancelledError extends AppError {
+  constructor(requestId: string) {
+    super(ERROR_CODES.OPERATOR_INPUT_CANCELLED, 'The operator cancelled this step', {
+      status: 409,
+      details: { requestId },
+      retryable: false,
+    });
+  }
+}
+
+export class OperatorRequestNotFoundError extends AppError {
+  constructor(requestId: string) {
+    super(ERROR_CODES.OPERATOR_REQUEST_NOT_FOUND, `Request ${requestId} is not waiting`, {
+      status: 404,
+      details: { requestId },
+    });
+  }
+}
+
+export class GroupNotFoundError extends AppError {
+  constructor(name: string) {
+    super(ERROR_CODES.GROUP_NOT_FOUND, `No group matching "${name}" was found`, {
+      status: 404,
+      details: { name },
+      retryable: false,
+    });
+  }
+}
+
+export class WorkbookInvalidError extends AppError {
+  constructor(reason: string) {
+    super(ERROR_CODES.WORKBOOK_INVALID, `The workbook could not be read: ${reason}`, {
+      status: 400,
+      details: { reason },
+    });
+  }
+}

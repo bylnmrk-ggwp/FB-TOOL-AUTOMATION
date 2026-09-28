@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { StatusDot, type StatusTone } from '../ui/StatusDot';
+import { StatusDot, type StatusTone } from '@/components/common/StatusDot';
 import { useHealth } from '../../hooks/useHealth';
 import { useLiveStore } from '../../features/automation/liveStore';
 
@@ -12,14 +12,14 @@ export const ConnectionBadge = (): ReactElement => {
   const health = useHealth();
   const connection = useLiveStore((state) => state.connection);
 
-  if (health.isPending) return <StatusDot tone="idle" label="Connecting to the API" />;
+  if (health.isPending) return <StatusDot tone="idle" label="Connecting" />;
   if (health.isError) return <StatusDot tone="danger" label="API unreachable" />;
 
   if (connection !== 'open') {
-    return <StatusDot tone="warn" label="Live updates disconnected" />;
+    return <StatusDot tone="warn" label="Live updates paused" pulse />;
   }
 
   const tone: StatusTone = health.data.status === 'ok' ? 'ok' : 'warn';
   const label = health.data.status === 'ok' ? 'Connected' : 'API degraded';
-  return <StatusDot tone={tone} label={label} />;
+  return <StatusDot tone={tone} label={label} className="text-muted-foreground" />;
 };

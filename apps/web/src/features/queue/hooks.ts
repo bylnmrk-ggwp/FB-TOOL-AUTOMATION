@@ -5,9 +5,19 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Job, ListJobsQuery, Paginated, QueueStats } from '@fb/shared';
-import { cancelJob, createJobBatch, getQueueStats, listJobs, retryJob } from '../../api/jobs';
-import type { CreateJobBatchInput } from '@fb/shared';
+import type { CreateJobBatchInput, Job, ListJobsQuery, Paginated, QueueStats } from '@fb/shared';
+import {
+  cancelAllJobs,
+  cancelJob,
+  createJobBatch,
+  getQueueStats,
+  joinGroups,
+  listJobs,
+  retryJob,
+  shareToGroups,
+  type JoinGroupsInput,
+  type ShareToGroupsInput,
+} from '../../api/jobs';
 
 export const jobKeys = {
   all: ['jobs'] as const,
@@ -45,7 +55,16 @@ const useJobMutation = <TInput, TResult>(
 
 export const useCancelJob = (): UseMutationResult<Job, Error, string> => useJobMutation(cancelJob);
 
+export const useCancelAllJobs = (): UseMutationResult<{ cancelled: number }, Error, void> =>
+  useJobMutation(() => cancelAllJobs());
+
 export const useRetryJob = (): UseMutationResult<Job, Error, string> => useJobMutation(retryJob);
 
 export const useCreateJobs = (): UseMutationResult<{ jobs: Job[] }, Error, CreateJobBatchInput> =>
   useJobMutation(createJobBatch);
+
+export const useShareToGroups = (): UseMutationResult<{ jobs: Job[] }, Error, ShareToGroupsInput> =>
+  useJobMutation(shareToGroups);
+
+export const useJoinGroups = (): UseMutationResult<{ jobs: Job[] }, Error, JoinGroupsInput> =>
+  useJobMutation(joinGroups);

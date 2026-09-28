@@ -1,9 +1,12 @@
 import { nowIso, type Job } from '@fb/shared';
 import type { AutomationGateway } from '@fb/domain';
 import type {
+  AccountService,
   BrowserService,
   EventPublisher,
+  GroupService,
   Logger,
+  OperatorInputService,
   QueuePort,
   Repositories,
 } from '@fb/application';
@@ -17,6 +20,9 @@ export interface QueueManagerDeps {
   repositories: Repositories;
   gateway: AutomationGateway;
   browsers: BrowserService;
+  accounts: AccountService;
+  groups: GroupService;
+  operator: OperatorInputService;
   events: EventPublisher;
   logger: Logger;
   /** How often to look for work that became due while nothing happened. */
@@ -44,6 +50,9 @@ export class QueueManager implements QueuePort {
       repositories: deps.repositories,
       gateway: deps.gateway,
       browsers: deps.browsers,
+      accounts: deps.accounts,
+      groups: deps.groups,
+      operator: deps.operator,
       retries: this.retries,
       events: deps.events,
       logger: deps.logger,

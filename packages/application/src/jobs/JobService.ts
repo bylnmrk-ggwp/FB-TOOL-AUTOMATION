@@ -7,10 +7,13 @@ import {
   JobNotFoundError,
   JobNotRetryableError,
   nowIso,
+  type AutomationAction,
+  type AutomationActionInput,
   type CreateJobBatchInput,
   type CreateJobInput,
   type Job,
   type QueueStats,
+  type ReactionType,
 } from '@fb/shared';
 import { isCancellable, isRetriable, jobTypeOf, type JobFilter, type Page } from '@fb/domain';
 import type { EventPublisher } from '../ports/EventPublisher.js';
@@ -25,6 +28,32 @@ export interface JobServiceDeps {
   logger: Logger;
 }
 
+export interface ShareToGroupsRequest {
+  accountIds: readonly string[];
+  postUrl: string;
+  groups: ReadonlyArray<{ name: string; url: string | null }>;
+  comments: readonly string[];
+  reaction: ReactionType | null;
+  /** Also share to each account's own timeline and story before the first group. */
+  shareToTimeline: boolean;
+  /** Leave out groups an account has already shared this post to. */
+  skipDone: boolean;
+  priority?: number;
+}
+
+export interface JoinGroupsRequest {
+  accountIds: readonly string[];
+  groupUrls: readonly string[];
+  skipDone: boolean;
+  priority?: number;
+}
+
+interface CreateOptions {
+  priority?: number;
+  maxRetries?: number;
+  scheduledFor?: string;
+}
+
 /**
  * Creating a job is a database write, not a start signal. The queue is only
  * nudged afterwards, so a job that is accepted is already durable and a crash
@@ -34,14 +63,71 @@ export class JobService {
   constructor(private readonly deps: JobServiceDeps) {}
 
   async create(input: CreateJobInput): Promise<Job> {
-    const [job] = await this.createMany([input.accountId], input);
+    const [job] = await this.createMany([input.accountId], input.action, input);
     if (job === undefined) throw new JobNotFoundError('unknown');
     return job;
   }
 
   /** Compose sends one action to several accounts; each gets its own job. */
   async createBatch(input: CreateJobBatchInput): Promise<Job[]> {
-    return this.createMany(input.accountIds, input);
+    return this.createMany(input.accountIds, input.action, input);
+  }
+
+  /**
+   * One post, many groups, many accounts: a job per account and group, in the
+   * order given. The timeline share, when asked for, rides on the first group
+   * job only, so a run over forty groups does not post forty times to the
+   * account's own timeline.
+   */
+  async createShareToGroups(request: ShareToGroupsRequest): Promise<Job[]> {
+    const accounts = await this.usableAccounts(request.accountIds);
+    const actions: Array<{ accountId: string; action: AutomationActionInput }> = [];
+
+    for (const account of accounts) {
+      const done = request.skipDone
+        ? await this.deps.repositories.activities.doneTargets(account.id, 'share')
+        : new Set<string>();
+
+      let first = true;
+      for (const group of request.groups) {
+        const key = `${request.postUrl}::${group.url ?? group.name}`;
+        if (done.has(key)) continue;
+
+        actions.push({
+          accountId: account.id,
+          action: {
+            type: 'share_to_group',
+            postUrl: request.postUrl,
+            groupName: group.name,
+            groupUrl: group.url,
+            shareToTimeline: first && request.shareToTimeline,
+            reaction: request.reaction,
+            comments: [...request.comments],
+          },
+        });
+        first = false;
+      }
+    }
+
+    return this.createMixed(actions, { priority: request.priority ?? 0 });
+  }
+
+  async createJoinGroups(request: JoinGroupsRequest): Promise<Job[]> {
+    const accounts = await this.usableAccounts(request.accountIds);
+    const actions: Array<{ accountId: string; action: AutomationActionInput }> = [];
+
+    for (const account of accounts) {
+      const done = request.skipDone
+        ? await this.deps.repositories.activities.doneTargets(account.id, 'join')
+        : new Set<string>();
+
+      for (const groupUrl of request.groupUrls) {
+        if (done.has(groupUrl)) continue;
+        actions.push({ accountId: account.id, action: { type: 'join_group', groupUrl } });
+      }
+    }
+
+    return this.createMixed(actions, { priority: request.priority ?? 0 });
   }
 
   async get(id: string): Promise<Job> {
@@ -84,6 +170,17 @@ export class JobService {
     return cancelled;
   }
 
+  /** The Stop button: running jobs are aborted, everything waiting is cancelled. */
+  async cancelAll(): Promise<number> {
+    for (const job of this.deps.queue.runningJobs()) this.deps.queue.requestCancel(job.id);
+    const count = await this.deps.repositories.jobs.cancelAllActive();
+
+    this.deps.logger.warn(`Cancelled ${count} job(s)`, { event: 'queue.cancel_all' });
+    const stats = await this.deps.repositories.jobs.stats();
+    this.deps.events.publish({ type: 'queue.stats', timestamp: nowIso(), payload: stats });
+    return count;
+  }
+
   /** Sends a finished, unsuccessful job round again with a fresh attempt budget. */
   async retry(id: string): Promise<Job> {
     const job = await this.get(id);
@@ -112,33 +209,52 @@ export class JobService {
 
   private async createMany(
     accountIds: readonly string[],
-    input: Omit<CreateJobBatchInput, 'accountIds'>,
+    action: AutomationActionInput,
+    options: CreateOptions,
   ): Promise<Job[]> {
+    await this.usableAccounts(accountIds);
+    return this.createMixed(
+      accountIds.map((accountId) => ({ accountId, action })),
+      options,
+    );
+  }
+
+  /** Every account is checked before anything is written: a batch goes in whole or not at all. */
+  private async usableAccounts(accountIds: readonly string[]) {
+    const found = await this.deps.repositories.accounts.findByIds(accountIds);
+    const byId = new Map(found.map((account) => [account.id, account]));
+    return accountIds.map((accountId) => {
+      const account = byId.get(accountId);
+      if (account === undefined) throw new AccountNotFoundError(accountId);
+      if (!account.enabled) throw new AccountDisabledError(accountId);
+      return account;
+    });
+  }
+
+  private async createMixed(
+    entries: ReadonlyArray<{ accountId: string; action: AutomationActionInput }>,
+    options: CreateOptions,
+  ): Promise<Job[]> {
+    if (entries.length === 0) return [];
     const { repositories, events, queue } = this.deps;
     const settings = await repositories.settings.read();
 
-    // Every account is checked before anything is written, so a batch either
-    // goes in whole or not at all.
-    for (const accountId of accountIds) {
-      const account = await repositories.accounts.findById(accountId);
-      if (account === null) throw new AccountNotFoundError(accountId);
-      if (!account.enabled) throw new AccountDisabledError(accountId);
-    }
-
-    // Parsed rather than trusted: the caller may hand us the input shape, where
-    // fields with defaults are still optional.
-    const action = AutomationActionSchema.parse(input.action);
     const created = await repositories.jobs.createMany(
-      accountIds.map((accountId) => ({
-        id: createId('job'),
-        accountId,
-        type: jobTypeOf(action),
-        payload: action,
-        priority: input.priority ?? 0,
-        maxRetries: input.maxRetries ?? settings.defaultMaxRetries,
-        status: 'pending' as const,
-        runAfter: input.scheduledFor ?? null,
-      })),
+      entries.map((entry) => {
+        // Parsed rather than trusted: the caller may hand us the input shape,
+        // where fields with defaults are still optional.
+        const action: AutomationAction = AutomationActionSchema.parse(entry.action);
+        return {
+          id: createId('job'),
+          accountId: entry.accountId,
+          type: jobTypeOf(action),
+          payload: action,
+          priority: options.priority ?? 0,
+          maxRetries: options.maxRetries ?? settings.defaultMaxRetries,
+          status: 'pending' as const,
+          runAfter: options.scheduledFor ?? null,
+        };
+      }),
     );
 
     for (const job of created) {

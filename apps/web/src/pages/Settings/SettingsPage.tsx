@@ -1,12 +1,25 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
-import { BROWSER_CHANNELS, SettingsSchema, validateSettings, type Settings } from '@fb/shared';
-import { Button } from '../../components/ui/Button';
-import { Card } from '../../components/ui/Card';
-import { ErrorNotice, InfoNotice, Loading } from '../../components/ui/Feedback';
-import { PageHeader } from '../../components/ui/PageHeader';
-import { CheckboxField, SelectField, TextField } from '../../components/forms/Field';
+import { toast } from 'sonner';
+import {
+  BROWSER_CHANNELS,
+  DELAY_RANGES,
+  SettingsSchema,
+  validateSettings,
+  type Settings,
+} from '@fb/shared';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorNotice, Loading } from '@/components/common/Feedback';
+import { PageHeader } from '@/components/common/PageHeader';
+import { CheckboxField, SelectField, TextField } from '@/components/forms/Field';
 import { useSettings, useSystemPaths, useUpdateSettings } from '../../features/settings/hooks';
-import './SettingsPage.css';
+
+/** Seconds in the form, milliseconds in the API: nobody thinks in 15000. */
+const seconds = (ms: number): string => String(Math.round(ms / 100) / 10);
+const fromSeconds = (value: string, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed * 1000) : fallback;
+};
 
 export const SettingsPage = (): ReactElement => {
   const settings = useSettings();
@@ -15,21 +28,16 @@ export const SettingsPage = (): ReactElement => {
 
   const [draft, setDraft] = useState<Settings | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
-  const [saved, setSaved] = useState(false);
 
-  // The form starts from what the server has, and only the fields a person
-  // actually changed are sent back.
   useEffect(() => {
     if (settings.data !== undefined && draft === null) setDraft(settings.data);
   }, [settings.data, draft]);
 
-  if (settings.isPending || draft === null) return <Loading label="Loading settings…" />;
   if (settings.isError) return <ErrorNotice error={settings.error} />;
+  if (settings.isPending || draft === null) return <Loading rows={6} />;
 
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]): void => {
-    setSaved(false);
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]): void =>
     setDraft((state) => (state === null ? state : { ...state, [key]: value }));
-  };
 
   const number = (value: string, fallback: number): number => {
     const parsed = Number(value);
@@ -44,7 +52,6 @@ export const SettingsPage = (): ReactElement => {
       setProblems(parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`));
       return;
     }
-
     const crossField = validateSettings(parsed.data);
     if (crossField.length > 0) {
       setProblems(crossField);
@@ -55,57 +62,117 @@ export const SettingsPage = (): ReactElement => {
     update.mutate(parsed.data, {
       onSuccess: (next) => {
         setDraft(next);
-        setSaved(true);
+        toast.success('Settings saved');
       },
     });
   };
 
+  const dirty = JSON.stringify(draft) !== JSON.stringify(settings.data);
+
   return (
-    <div className="page">
+    <div className="grid gap-6">
       <PageHeader
         title="Settings"
-        description="Applied to the next browser and the next queue pass — no restart needed."
+        description="Applied to the next browser and the next queue pass. No restart needed."
       />
 
-      <form className="settings" onSubmit={submit}>
-        <Card title="Browser">
-          <div className="settings__grid">
-            <SelectField
-              label="Channel"
-              value={draft.browserChannel}
-              options={BROWSER_CHANNELS.map((value) => ({ value, label: value }))}
-              onChange={(event) =>
-                set('browserChannel', event.target.value as Settings['browserChannel'])
-              }
+      <form className="grid gap-4" onSubmit={submit}>
+        <Card>
+          <CardHeader>
+            <CardTitle>Browser</CardTitle>
+            <CardDescription>Which Chromium runs, and whether you can see it.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SelectField
+                label="Channel"
+                value={draft.browserChannel}
+                options={BROWSER_CHANNELS.map((value) => ({ value, label: value }))}
+                onChange={(event) =>
+                  set('browserChannel', event.target.value as Settings['browserChannel'])
+                }
+              />
+              <TextField
+                label="Executable path"
+                value={draft.browserExecutablePath ?? ''}
+                placeholder="Empty uses the bundled Chromium"
+                hint={
+                  'Brave on Windows: C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'
+                }
+                onChange={(event) =>
+                  set(
+                    'browserExecutablePath',
+                    event.target.value === '' ? null : event.target.value,
+                  )
+                }
+              />
+            </div>
+            <CheckboxField
+              label="Run headless"
+              hint="A visible window is usually wanted: captchas and checkpoints are solved by hand, inside the profile."
+              checked={draft.headless}
+              onCheckedChange={(headless) => set('headless', headless)}
             />
-            <TextField
-              label="Executable path"
-              value={draft.browserExecutablePath ?? ''}
-              placeholder="Leave empty to use the bundled Chromium"
-              hint="Point this at Brave or another Chromium build to use it instead."
-              onChange={(event) =>
-                set('browserExecutablePath', event.target.value === '' ? null : event.target.value)
-              }
-            />
-          </div>
-
-          <CheckboxField
-            label="Run headless"
-            hint="A visible window is usually wanted: signing in happens by hand, inside the profile."
-            checked={draft.headless}
-            onChange={(event) => set('headless', event.target.checked)}
-          />
+          </CardContent>
         </Card>
 
-        <Card title="Queue">
-          <div className="settings__grid">
+        <Card>
+          <CardHeader>
+            <CardTitle>Anti-spam delays</CardTitle>
+            <CardDescription>
+              Every share, join and comment waits a random time inside its range, so no two runs
+              share a rhythm. These protect the accounts; do not set them to zero.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            {DELAY_RANGES.map((range) => (
+              <div key={range.min} className="grid gap-3 sm:grid-cols-2">
+                <TextField
+                  label={`${range.label}, from (seconds)`}
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={seconds(draft[range.min] as number)}
+                  onChange={(event) =>
+                    set(
+                      range.min,
+                      fromSeconds(event.target.value, draft[range.min] as number) as never,
+                    )
+                  }
+                />
+                <TextField
+                  label={`${range.label}, to (seconds)`}
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={seconds(draft[range.max] as number)}
+                  onChange={(event) =>
+                    set(
+                      range.max,
+                      fromSeconds(event.target.value, draft[range.max] as number) as never,
+                    )
+                  }
+                />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Queue</CardTitle>
+            <CardDescription>
+              How much runs at once, and what happens when it fails or waits.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
             <TextField
               label="Global concurrency"
               type="number"
               min={1}
               max={32}
               value={String(draft.globalConcurrency)}
-              hint="How many jobs may run at once, across all accounts."
+              hint="Jobs that may run at the same time, across all accounts."
               onChange={(event) =>
                 set('globalConcurrency', number(event.target.value, draft.globalConcurrency))
               }
@@ -121,95 +188,91 @@ export const SettingsPage = (): ReactElement => {
               }
             />
             <TextField
-              label="Default timeout (ms)"
+              label="Step timeout (seconds)"
               type="number"
-              min={1000}
-              step={500}
-              value={String(draft.defaultTimeoutMs)}
+              min={1}
+              step="any"
+              value={seconds(draft.defaultTimeoutMs)}
               onChange={(event) =>
-                set('defaultTimeoutMs', number(event.target.value, draft.defaultTimeoutMs))
+                set('defaultTimeoutMs', fromSeconds(event.target.value, draft.defaultTimeoutMs))
               }
             />
             <TextField
-              label="Retry backoff (ms)"
+              label="Retry backoff (seconds)"
               type="number"
-              min={1000}
-              step={500}
-              value={String(draft.retryBackoffMs)}
-              hint="The first wait; later attempts double it, with jitter."
+              min={1}
+              step="any"
+              value={seconds(draft.retryBackoffMs)}
+              hint="The first wait. Later attempts double it, with jitter."
               onChange={(event) =>
-                set('retryBackoffMs', number(event.target.value, draft.retryBackoffMs))
-              }
-            />
-          </div>
-        </Card>
-
-        <Card title="Pacing and locks">
-          <div className="settings__grid">
-            <TextField
-              label="Minimum step delay (ms)"
-              type="number"
-              min={0}
-              value={String(draft.minActionDelayMs)}
-              onChange={(event) =>
-                set('minActionDelayMs', number(event.target.value, draft.minActionDelayMs))
+                set('retryBackoffMs', fromSeconds(event.target.value, draft.retryBackoffMs))
               }
             />
             <TextField
-              label="Maximum step delay (ms)"
+              label="Wait for a person (seconds)"
               type="number"
-              min={0}
-              value={String(draft.maxActionDelayMs)}
-              hint="Each step waits a random time in this range."
+              min={10}
+              step="any"
+              value={seconds(draft.operatorInputTimeoutMs)}
+              hint="How long a job holds on a captcha or checkpoint before it gives up."
               onChange={(event) =>
-                set('maxActionDelayMs', number(event.target.value, draft.maxActionDelayMs))
+                set(
+                  'operatorInputTimeoutMs',
+                  fromSeconds(event.target.value, draft.operatorInputTimeoutMs),
+                )
               }
             />
             <TextField
-              label="Profile lock TTL (ms)"
+              label="Profile lock TTL (seconds)"
               type="number"
-              min={30000}
-              step={1000}
-              value={String(draft.profileLockTtlMs)}
+              min={30}
+              step="any"
+              value={seconds(draft.profileLockTtlMs)}
               hint="How long a lock survives before it counts as abandoned."
               onChange={(event) =>
-                set('profileLockTtlMs', number(event.target.value, draft.profileLockTtlMs))
+                set('profileLockTtlMs', fromSeconds(event.target.value, draft.profileLockTtlMs))
               }
             />
             <TextField
-              label="Stale job timeout (ms)"
+              label="Stale job timeout (seconds)"
               type="number"
-              min={60000}
-              step={1000}
-              value={String(draft.staleJobTimeoutMs)}
+              min={60}
+              step="any"
+              value={seconds(draft.staleJobTimeoutMs)}
               onChange={(event) =>
-                set('staleJobTimeoutMs', number(event.target.value, draft.staleJobTimeoutMs))
+                set('staleJobTimeoutMs', fromSeconds(event.target.value, draft.staleJobTimeoutMs))
               }
             />
-          </div>
+          </CardContent>
         </Card>
 
-        <Card title="Storage">
-          <InfoNotice>
-            Directories come from the environment and cannot be changed from the browser.
-          </InfoNotice>
-          {paths.isSuccess && (
-            <dl className="settings__paths">
-              <Path label="Database" value={paths.data.databaseFile} />
-              <Path label="Browser profiles" value={paths.data.profileDir} />
-              <Path label="Uploads" value={paths.data.uploadDir} />
-              <Path label="Exports" value={paths.data.exportDir} />
-              <Path label="Logs" value={paths.data.logDir} />
-            </dl>
-          )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Storage</CardTitle>
+            <CardDescription>
+              Set in the environment, read here. The browser can see where things live but never
+              move them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {paths.isSuccess && (
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <Path label="Database" value={paths.data.databaseFile} />
+                <Path label="Browser profiles" value={paths.data.profileDir} />
+                <Path label="Uploads" value={paths.data.uploadDir} />
+                <Path label="Exports" value={paths.data.exportDir} />
+                <Path label="Logs" value={paths.data.logDir} />
+              </dl>
+            )}
+          </CardContent>
         </Card>
 
         {problems.length > 0 && <ErrorNotice error={new Error(problems.join('; '))} />}
         {update.error !== null && <ErrorNotice error={update.error} />}
 
-        <div className="settings__submit">
-          {saved && <span className="muted">Saved.</span>}
-          <Button type="submit" variant="primary" loading={update.isPending}>
+        <div className="flex items-center justify-end gap-3">
+          {dirty && <span className="text-sm text-muted-foreground">Unsaved changes</span>}
+          <Button type="submit" disabled={update.isPending}>
             Save settings
           </Button>
         </div>
@@ -219,8 +282,8 @@ export const SettingsPage = (): ReactElement => {
 };
 
 const Path = ({ label, value }: { label: string; value: string }): ReactElement => (
-  <div>
-    <dt>{label}</dt>
-    <dd className="mono">{value}</dd>
+  <div className="grid gap-0.5">
+    <dt className="text-xs text-muted-foreground">{label}</dt>
+    <dd className="font-mono text-xs break-all">{value}</dd>
   </div>
 );

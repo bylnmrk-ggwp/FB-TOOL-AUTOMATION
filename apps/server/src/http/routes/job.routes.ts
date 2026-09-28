@@ -9,6 +9,9 @@ export const jobRoutes =
 
     // Literal segments before the parameterised one.
     app.post('/jobs/batch', controller.createBatch);
+    app.post('/jobs/share-to-groups', controller.shareToGroups);
+    app.post('/jobs/join-groups', controller.joinGroups);
+    app.post('/jobs/cancel-all', controller.cancelAll);
     app.get('/jobs/stats', controller.stats);
 
     app.get('/jobs/:id', controller.get);

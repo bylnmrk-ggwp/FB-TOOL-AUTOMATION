@@ -1,12 +1,45 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import {
   CreateJobBatchSchema,
   CreateJobSchema,
+  FacebookUrlSchema,
   IdParamSchema,
+  IdSchema,
   ListJobsQuerySchema,
+  PRIORITY_RANGE,
+  ReactionTypeSchema,
 } from '@fb/shared';
 import type { JobService } from '@fb/application';
 import { validateBody, validateParams, validateQuery } from '../middleware/validate.js';
+
+const priority = z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).default(0);
+
+const ShareToGroupsSchema = z.object({
+  accountIds: z.array(IdSchema).min(1).max(500),
+  postUrl: FacebookUrlSchema,
+  groups: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        url: FacebookUrlSchema.nullable().default(null),
+      }),
+    )
+    .min(1)
+    .max(200),
+  comments: z.array(z.string().trim().min(1).max(8_000)).max(50).default([]),
+  reaction: ReactionTypeSchema.nullable().default(null),
+  shareToTimeline: z.boolean().default(false),
+  skipDone: z.boolean().default(true),
+  priority,
+});
+
+const JoinGroupsSchema = z.object({
+  accountIds: z.array(IdSchema).min(1).max(500),
+  groupUrls: z.array(FacebookUrlSchema).min(1).max(200),
+  skipDone: z.boolean().default(true),
+  priority,
+});
 
 export class JobController {
   constructor(private readonly jobs: JobService) {}
@@ -38,9 +71,25 @@ export class JobController {
     await reply.status(201).send({ jobs: await this.jobs.createBatch(input) });
   };
 
+  shareToGroups = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const input = validateBody(ShareToGroupsSchema, request);
+    const jobs = await this.jobs.createShareToGroups(input);
+    await reply.status(201).send({ jobs });
+  };
+
+  joinGroups = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const input = validateBody(JoinGroupsSchema, request);
+    const jobs = await this.jobs.createJoinGroups(input);
+    await reply.status(201).send({ jobs });
+  };
+
   cancel = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const { id } = validateParams(IdParamSchema, request);
     await reply.send(await this.jobs.cancel(id));
+  };
+
+  cancelAll = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    await reply.send({ cancelled: await this.jobs.cancelAll() });
   };
 
   retry = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {

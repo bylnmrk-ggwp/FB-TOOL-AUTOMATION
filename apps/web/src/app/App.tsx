@@ -5,6 +5,6 @@ import { router } from './router';
 
 export const App = (): ReactElement => (
   <AppProviders>
-    <RouterProvider router={router} />
+    <RouterProvider router={router} future={{ v7_startTransition: true }} />
   </AppProviders>
 );

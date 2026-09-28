@@ -18,12 +18,21 @@ const createAccount = async (page: Page, name: string): Promise<void> => {
   await expect(page.getByRole('cell', { name, exact: true })).toBeVisible();
 };
 
-const deleteAccount = async (page: Page, name: string): Promise<void> => {
-  page.once('dialog', (confirmation) => void confirmation.accept());
+/** Row actions live in a menu; open it and pick one. */
+const rowAction = async (page: Page, name: string, item: string): Promise<void> => {
   await page
     .getByRole('row', { name: new RegExp(name) })
-    .getByRole('button', { name: 'Delete' })
+    .getByRole('button', { name: /More actions/ })
     .click();
+  await page.getByRole('menuitem', { name: item, exact: true }).click();
+};
+
+const deleteAccount = async (page: Page, name: string): Promise<void> => {
+  await rowAction(page, name, 'Delete');
+
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Delete account' }).click();
+  await expect(dialog).toBeHidden();
   await expect(page.getByRole('cell', { name, exact: true })).toBeHidden();
 };
 
@@ -42,13 +51,14 @@ test.describe('Shell', () => {
 
     for (const [label, heading] of [
       ['Accounts', 'Accounts'],
+      ['Groups', 'Groups'],
       ['Compose', 'Compose'],
       ['Queue', 'Queue'],
       ['Monitor', 'Monitor'],
       ['Logs', 'Logs'],
       ['Settings', 'Settings'],
     ] as const) {
-      // Scoped to the sidebar: the dashboard tiles are links with the same names.
+      // Scoped to the sidebar: the dashboard figures are links with the same names.
       await page
         .getByRole('navigation', { name: 'Main' })
         .getByRole('link', { name: label })
@@ -59,13 +69,14 @@ test.describe('Shell', () => {
 
   test('remembers the chosen theme across a reload', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: 'Light theme' }).click();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await page.getByRole('button', { name: 'Switch to light theme' }).click();
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
 
     await page.reload();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
 
-    await page.getByRole('button', { name: 'Dark theme' }).click();
+    await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
   });
 });
 
@@ -77,18 +88,18 @@ test.describe('Accounts', () => {
     const row = page.getByRole('row', { name: new RegExp(name) });
     await expect(row.getByText('offline')).toBeVisible();
 
-    await row.getByRole('button', { name: 'Disable' }).click();
-    await expect(row.getByRole('button', { name: 'Enable' })).toBeVisible();
+    await rowAction(page, name, 'Disable');
+    await expect(row.getByText('Disabled', { exact: true })).toBeVisible();
 
-    await row.getByRole('button', { name: 'Enable' }).click();
-    await expect(row.getByRole('button', { name: 'Disable' })).toBeVisible();
+    await rowAction(page, name, 'Enable');
+    await expect(row.getByText('Disabled', { exact: true })).toBeHidden();
 
-    await row.getByRole('button', { name: 'Edit' }).click();
+    await rowAction(page, name, 'Edit');
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Display name').fill('Renamed by the test');
     await dialog.getByRole('button', { name: 'Save changes' }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole('cell', { name: /Renamed by the test/ })).toBeVisible();
+    await expect(row.getByText('Renamed by the test')).toBeVisible();
 
     await deleteAccount(page, name);
   });
@@ -112,13 +123,13 @@ test.describe('Accounts', () => {
     const name = uniqueName('E2E Searchable');
     await createAccount(page, name);
 
-    await page.getByLabel('Search').fill('nothing-matches-this');
+    await page.getByLabel('Search', { exact: true }).fill('nothing-matches-this');
     await expect(page.getByText('Nothing matches')).toBeVisible();
 
-    await page.getByLabel('Search').fill(name);
+    await page.getByLabel('Search', { exact: true }).fill(name);
     await expect(page.getByRole('cell', { name, exact: true })).toBeVisible();
 
-    await page.getByLabel('Search').fill('');
+    await page.getByLabel('Search', { exact: true }).fill('');
     await deleteAccount(page, name);
   });
 });
@@ -127,7 +138,8 @@ test.describe('Compose', () => {
   test('will not queue work without an account chosen', async ({ page }) => {
     await page.goto('/compose');
 
-    await page.getByLabel('Text').fill('A post that should not be queued');
+    await page.getByLabel('Type').selectOption('create_post');
+    await page.getByLabel('Text', { exact: true }).fill('A post that should not be queued');
     await page.getByRole('button', { name: 'Queue work' }).click();
 
     await expect(page.getByRole('alert')).toContainText('Choose at least one account');
@@ -138,13 +150,14 @@ test.describe('Compose', () => {
     await createAccount(page, name);
 
     await page.goto('/compose');
-    await page.getByLabel('Text').fill('Queued by an end-to-end test');
-    await page.getByRole('checkbox', { name }).check();
+    await page.getByLabel('Type').selectOption('create_post');
+    await page.getByLabel('Text', { exact: true }).fill('Queued by an end-to-end test');
+    await page.getByRole('checkbox', { name }).click();
     await page.getByRole('button', { name: 'Queue work' }).click();
 
     // Composing navigates to the queue once the jobs are written.
     await expect(page.getByRole('heading', { name: 'Queue', level: 1 })).toBeVisible();
-    await expect(page.getByRole('cell', { name: 'Create post' }).first()).toBeVisible();
+    await expect(page.getByRole('cell', { name: /Create post/ }).first()).toBeVisible();
 
     await page.goto('/accounts');
     await deleteAccount(page, name);
@@ -155,24 +168,23 @@ test.describe('Settings', () => {
   test('saves a changed setting and reads it back', async ({ page }) => {
     await page.goto('/settings');
 
-    const concurrency = page.getByLabel('Global concurrency');
-    await concurrency.fill('3');
+    await page.getByLabel('Global concurrency').fill('3');
     await page.getByRole('button', { name: 'Save settings' }).click();
-    await expect(page.getByText('Saved.')).toBeVisible();
+    await expect(page.getByText('Settings saved')).toBeVisible();
 
     await page.reload();
     await expect(page.getByLabel('Global concurrency')).toHaveValue('3');
 
     await page.getByLabel('Global concurrency').fill('2');
     await page.getByRole('button', { name: 'Save settings' }).click();
-    await expect(page.getByText('Saved.')).toBeVisible();
+    await expect(page.getByText('Settings saved')).toBeVisible();
   });
 
   test('reports a setting the server refuses', async ({ page }) => {
     await page.goto('/settings');
 
-    await page.getByLabel('Minimum step delay (ms)').fill('9000');
-    await page.getByLabel('Maximum step delay (ms)').fill('1000');
+    await page.getByLabel('Between steps, from (seconds)').fill('9');
+    await page.getByLabel('Between steps, to (seconds)').fill('1');
     await page.getByRole('button', { name: 'Save settings' }).click();
 
     await expect(page.getByRole('alert')).toContainText('minActionDelayMs');

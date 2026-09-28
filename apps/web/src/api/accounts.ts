@@ -2,19 +2,27 @@ import {
   AccountSchema,
   BrowserSessionSchema,
   ImportAccountsResultSchema,
+  JobSchema,
   paginatedSchema,
+  SessionExportSchema,
   type Account,
   type BrowserSessionView,
   type CreateAccountInput,
   type ImportAccountsResult,
+  type Job,
   type ListAccountsQuery,
   type Paginated,
+  type SessionExport,
+  type StorageState,
   type UpdateAccountInput,
 } from '@fb/shared';
 import { z } from 'zod';
 import { apiRequest } from './client';
 
 const AccountPageSchema = paginatedSchema(AccountSchema);
+const JobsSchema = z.object({ jobs: z.array(JobSchema) });
+const RosterResultSchema = ImportAccountsResultSchema.extend({ rows: z.number().int().min(0) });
+export type RosterImportResult = z.infer<typeof RosterResultSchema>;
 
 export const listAccounts = (
   query: Partial<ListAccountsQuery>,
@@ -27,6 +35,7 @@ export const listAccounts = (
       offset: query.offset ?? 0,
       search: query.search,
       status: query.status,
+      loginStatus: query.loginStatus,
       enabled: query.enabled === undefined ? undefined : String(query.enabled),
     },
   });
@@ -67,3 +76,27 @@ export const importAccounts = (
     method: 'POST',
     body: { accounts, upsert },
   });
+
+/** Pulls the roster from the Google Sheet the server is configured with. */
+export const importRosterSheet = (): Promise<RosterImportResult> =>
+  apiRequest('/accounts/import/sheet', RosterResultSchema, { method: 'POST', body: {} });
+
+export const importRosterCsv = (csv: string): Promise<RosterImportResult> =>
+  apiRequest('/accounts/import/csv', RosterResultSchema, { method: 'POST', body: { csv } });
+
+export const loginAccounts = (accountIds: string[], waitForOperator = true): Promise<Job[]> =>
+  apiRequest('/accounts/login', JobsSchema, {
+    method: 'POST',
+    body: { accountIds, waitForOperator },
+  }).then((result) => result.jobs);
+
+export const checkLoginAccounts = (accountIds: string[]): Promise<Job[]> =>
+  apiRequest('/accounts/check-login', JobsSchema, { method: 'POST', body: { accountIds } }).then(
+    (result) => result.jobs,
+  );
+
+export const exportSession = (id: string): Promise<SessionExport> =>
+  apiRequest(`/accounts/${id}/session`, SessionExportSchema);
+
+export const importSession = (id: string, state: StorageState): Promise<null> =>
+  apiRequest(`/accounts/${id}/session`, z.null(), { method: 'POST', body: { state } });

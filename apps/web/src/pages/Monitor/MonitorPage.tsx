@@ -1,30 +1,40 @@
 import type { ReactElement } from 'react';
-import { AccountStatusBadge, JobStatusBadge } from '../../components/ui/Badge';
-import { Card } from '../../components/ui/Card';
-import { EmptyState } from '../../components/ui/Feedback';
-import { PageHeader } from '../../components/ui/PageHeader';
-import { StatusDot, type StatusTone } from '../../components/ui/StatusDot';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  AccountStatusDot,
+  JobStatusDot,
+  StatusDot,
+  type StatusTone,
+} from '@/components/common/StatusDot';
+import { EmptyState } from '@/components/common/Feedback';
+import { PageHeader } from '@/components/common/PageHeader';
 import { useAccounts, useSessions } from '../../features/accounts/hooks';
+import { OperatorPrompts } from '../../features/monitoring/components/OperatorPrompts';
 import { useJobs } from '../../features/queue/hooks';
 import { useLiveStore, type ConnectionState } from '../../features/automation/liveStore';
 import { clockTime, humanise, relativeTime } from '../../lib/format';
-import './MonitorPage.css';
 
-const CONNECTION_TONE: Record<ConnectionState, StatusTone> = {
-  connecting: 'warn',
-  open: 'ok',
-  closed: 'danger',
+const CONNECTION: Record<ConnectionState, { tone: StatusTone; label: string }> = {
+  connecting: { tone: 'warn', label: 'Connecting to the live feed' },
+  open: { tone: 'ok', label: 'Live' },
+  closed: { tone: 'danger', label: 'Disconnected — reconnecting' },
 };
 
-const CONNECTION_LABEL: Record<ConnectionState, string> = {
-  connecting: 'Connecting to the live feed',
-  open: 'Live',
-  closed: 'Disconnected — retrying',
-};
+const Panel = ({ title, children }: { title: string; children: ReactElement }): ReactElement => (
+  <Card className="gap-0 py-0">
+    <CardHeader className="border-b px-5 py-3">
+      <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
+    </CardHeader>
+    <CardContent className="px-0 py-0">{children}</CardContent>
+  </Card>
+);
 
 /**
- * The page that is worth leaving open. Everything on it is driven by the
- * WebSocket: running jobs, the accounts they hold, and the raw event stream.
+ * The page worth leaving open. Everything on it is driven by the WebSocket:
+ * jobs waiting for a person, running jobs, the browsers they hold, and the
+ * raw event stream.
  */
 export const MonitorPage = (): ReactElement => {
   const connection = useLiveStore((state) => state.connection);
@@ -35,91 +45,115 @@ export const MonitorPage = (): ReactElement => {
   const accounts = useAccounts({ limit: 200 });
   const running = useJobs({ status: ['running', 'queued', 'retrying'], limit: 50 });
 
-  const accountName = new Map(
+  const names = new Map(
     (accounts.data?.items ?? []).map((account) => [account.id, account.displayName]),
   );
+  const accountName = (id: string): string => names.get(id) ?? id;
+
+  const activeJobs = running.data?.items ?? [];
+  const openSessions = sessions.data ?? [];
 
   return (
-    <div className="page">
+    <div className="grid gap-6">
       <PageHeader
         title="Monitor"
         description="Live state, pushed from the server as it happens."
         actions={
-          <StatusDot tone={CONNECTION_TONE[connection]} label={CONNECTION_LABEL[connection]} />
+          <StatusDot
+            tone={CONNECTION[connection].tone}
+            label={CONNECTION[connection].label}
+            pulse={connection !== 'open'}
+          />
         }
       />
 
-      <div className="monitor__columns">
-        <Card title="Running work">
-          {(running.data?.items ?? []).length === 0 ? (
-            <EmptyState title="Nothing is running" description="Queued work appears here." />
+      <OperatorPrompts accountName={accountName} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title={`Running work (${activeJobs.length})`}>
+          {activeJobs.length === 0 ? (
+            <div className="p-4">
+              <EmptyState title="Nothing is running" description="Queued work appears here." />
+            </div>
           ) : (
-            <ul className="monitor__jobs">
-              {(running.data?.items ?? []).map((job) => {
+            <ul className="divide-y">
+              {activeJobs.map((job) => {
                 const live = progress[job.id];
                 const value = live?.progress ?? job.progress;
-
                 return (
-                  <li key={job.id} className="monitor__job">
-                    <div className="monitor__job-head">
-                      <span>{humanise(job.type)}</span>
-                      <JobStatusBadge status={job.status} />
+                  <li key={job.id} className="grid gap-2 px-5 py-3">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="font-medium">{humanise(job.type)}</span>
+                      <JobStatusDot status={job.status} />
                     </div>
-                    <p className="muted">{accountName.get(job.accountId) ?? job.accountId}</p>
-                    <div className="monitor__bar">
-                      <div className="monitor__bar-fill" style={{ width: `${value}%` }} />
-                    </div>
-                    <p className="monitor__step">{live?.step ?? 'Waiting for a worker'}</p>
+                    <span className="text-xs text-muted-foreground">
+                      {accountName(job.accountId)}
+                    </span>
+                    <Progress value={value} className="h-1.5" />
+                    <span className="text-xs text-muted-foreground">
+                      {live?.step ?? 'Waiting for a worker'}
+                    </span>
                   </li>
                 );
               })}
             </ul>
           )}
-        </Card>
+        </Panel>
 
-        <Card title="Browsers">
-          {(sessions.data ?? []).length === 0 ? (
-            <EmptyState
-              title="No browser is open"
-              description="Start one from the Accounts page."
-            />
+        <Panel title={`Browsers (${openSessions.length})`}>
+          {openSessions.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                title="No browser is open"
+                description="Start one from the Accounts page."
+              />
+            </div>
           ) : (
-            <ul className="monitor__sessions">
-              {(sessions.data ?? []).map((session) => (
-                <li key={session.sessionId} className="monitor__session">
-                  <div className="monitor__job-head">
-                    <span>{accountName.get(session.accountId) ?? session.accountId}</span>
-                    <AccountStatusBadge status={session.status} />
+            <ul className="divide-y">
+              {openSessions.map((session) => (
+                <li key={session.sessionId} className="grid gap-1 px-5 py-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium">{accountName(session.accountId)}</span>
+                    <AccountStatusDot status={session.status} />
                   </div>
-                  <p className="muted">
-                    {session.headless ? 'Headless' : 'Visible'} · started{' '}
+                  <span className="text-xs text-muted-foreground">
+                    {session.headless ? 'Headless' : 'Visible window'}, started{' '}
                     {relativeTime(session.startedAt)}
-                  </p>
+                  </span>
                   {session.currentUrl !== null && (
-                    <p className="mono monitor__url">{session.currentUrl}</p>
+                    <span className="truncate font-mono text-xs text-muted-foreground">
+                      {session.currentUrl}
+                    </span>
                   )}
                 </li>
               ))}
             </ul>
           )}
-        </Card>
+        </Panel>
       </div>
 
-      <Card title="Event stream">
+      <Panel title="Event stream">
         {recent.length === 0 ? (
-          <p className="muted">Waiting for the first event…</p>
+          <p className="px-5 py-4 text-sm text-muted-foreground">Waiting for the first event.</p>
         ) : (
-          <ul className="monitor__events">
-            {recent.slice(0, 60).map((event, index) => (
-              <li key={`${event.timestamp}-${index}`} className="monitor__event">
-                <span className="monitor__event-time">{clockTime(event.timestamp)}</span>
-                <span className="monitor__event-type">{event.type}</span>
-                <span className="monitor__event-detail">{describe(event)}</span>
-              </li>
-            ))}
-          </ul>
+          <ScrollArea className="h-[420px]">
+            <ul className="divide-y font-mono text-xs">
+              {recent.slice(0, 100).map((event, index) => (
+                <li
+                  key={`${event.timestamp}-${index}`}
+                  className="grid grid-cols-[80px_1fr] gap-3 px-5 py-2 sm:grid-cols-[80px_200px_1fr]"
+                >
+                  <span className="text-muted-foreground">{clockTime(event.timestamp)}</span>
+                  <span className="text-primary">{event.type}</span>
+                  <span className="col-span-2 truncate text-muted-foreground sm:col-span-1">
+                    {describe(event)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
         )}
-      </Card>
+      </Panel>
     </div>
   );
 };
@@ -131,13 +165,9 @@ const describe = (event: { type: string; payload: unknown }): string => {
 
   const record = payload as Record<string, unknown>;
   const parts: string[] = [];
-
-  if (typeof record['accountId'] === 'string') parts.push(record['accountId']);
-  if (typeof record['jobId'] === 'string') parts.push(record['jobId']);
-  if (typeof record['id'] === 'string') parts.push(record['id']);
-  if (typeof record['status'] === 'string') parts.push(String(record['status']));
-  if (typeof record['step'] === 'string') parts.push(String(record['step']));
-  if (typeof record['message'] === 'string') parts.push(String(record['message']));
-
-  return parts.join(' · ');
+  for (const key of ['accountId', 'jobId', 'id', 'status', 'step', 'message']) {
+    const value = record[key];
+    if (typeof value === 'string') parts.push(value);
+  }
+  return parts.join('  ');
 };

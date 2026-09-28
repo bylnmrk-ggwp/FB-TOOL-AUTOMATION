@@ -3,15 +3,18 @@ import {
   AutomationResultSchema,
   JobErrorSchema,
   type Account,
+  type Activity,
   type AutomationAction,
   type AutomationResult,
   type BrowserProfile,
+  type Group,
   type Job,
   type JobError,
   type LogEntry,
 } from '@fb/shared';
 import type { AccountRow } from '../schema/accounts.js';
 import type { BrowserProfileRow } from '../schema/browserProfiles.js';
+import type { ActivityRow, GroupRow } from '../schema/groups.js';
 import type { JobRow } from '../schema/jobs.js';
 import type { AutomationLogRow } from '../schema/logs.js';
 
@@ -19,6 +22,9 @@ import type { AutomationLogRow } from '../schema/logs.js';
  * Rows become domain objects here and nowhere else. JSON columns are parsed
  * through the shared schema, so a row written by an older version fails loudly
  * instead of flowing on as a half-filled object.
+ *
+ * Passwords never pass through here: the Account view carries only whether
+ * one is stored.
  */
 export const toAccount = (row: AccountRow): Account => ({
   id: row.id,
@@ -27,6 +33,18 @@ export const toAccount = (row: AccountRow): Account => ({
   profileId: row.profileId,
   status: row.status,
   enabled: row.enabled,
+  sheetNo: row.sheetNo,
+  username: row.username,
+  hasPassword: row.password !== null && row.password !== '',
+  gmail: row.gmail,
+  hasGmailPassword: row.gmailPassword !== null && row.gmailPassword !== '',
+  phone: row.phone,
+  facebookName: row.facebookName,
+  profileUrl: row.profileUrl,
+  loginStatus: row.loginStatus,
+  loginReason: row.loginReason,
+  lastLoginCheckAt: row.lastLoginCheckAt,
+  shareRestrictedUntil: row.shareRestrictedUntil,
   lastError: row.lastError,
   lastActiveAt: row.lastActiveAt,
   createdAt: row.createdAt,
@@ -44,6 +62,26 @@ export const toBrowserProfile = (row: BrowserProfileRow): BrowserProfile => ({
   lastUsedAt: row.lastUsedAt,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+});
+
+export const toGroup = (row: GroupRow): Group => ({
+  id: row.id,
+  accountId: row.accountId,
+  name: row.name,
+  url: row.url,
+  fetchedAt: row.fetchedAt,
+});
+
+export const toActivity = (row: ActivityRow): Activity => ({
+  id: row.id,
+  accountId: row.accountId,
+  kind: row.kind,
+  targetUrl: row.targetUrl,
+  targetName: row.targetName,
+  status: row.status,
+  message: row.message,
+  jobId: row.jobId,
+  createdAt: row.createdAt,
 });
 
 const parseJson = <T>(value: string | null, parse: (input: unknown) => T, column: string): T => {

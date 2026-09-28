@@ -1,5 +1,13 @@
 import type { ReactElement, ReactNode } from 'react';
-import './DataTable.css';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 
 export interface Column<T> {
   key: string;
@@ -8,6 +16,8 @@ export interface Column<T> {
   /** Narrow columns stay narrow when the table has room to spare. */
   width?: string;
   align?: 'left' | 'right';
+  /** Hidden below the `md` breakpoint so the essential columns keep their room. */
+  secondary?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -30,39 +40,53 @@ export const DataTable = <T,>({
   empty,
   loading = false,
 }: DataTableProps<T>): ReactElement => {
-  if (!loading && rows.length === 0) return <div className="table-empty">{empty}</div>;
+  if (!loading && rows.length === 0) return <>{empty}</>;
 
   return (
-    <div className="table-wrap" aria-busy={loading}>
-      <table className="table">
-        <thead>
-          <tr>
+    <div
+      className={cn(
+        'overflow-x-auto rounded-lg border bg-card transition-opacity',
+        loading && 'opacity-60',
+      )}
+      aria-busy={loading}
+    >
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
             {columns.map((column) => (
-              <th
+              <TableHead
                 key={column.key}
                 style={column.width === undefined ? undefined : { width: column.width }}
-                className={column.align === 'right' ? 'table__cell--right' : undefined}
+                className={cn(
+                  'h-10 text-xs font-medium text-muted-foreground',
+                  column.align === 'right' && 'text-right',
+                  column.secondary && 'hidden md:table-cell',
+                )}
               >
                 {column.header}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((row) => (
-            <tr key={rowKey(row)}>
+            <TableRow key={rowKey(row)}>
               {columns.map((column) => (
-                <td
+                <TableCell
                   key={column.key}
-                  className={column.align === 'right' ? 'table__cell--right' : undefined}
+                  className={cn(
+                    'py-2.5',
+                    column.align === 'right' && 'text-right',
+                    column.secondary && 'hidden md:table-cell',
+                  )}
                 >
                   {column.render(row)}
-                </td>
+                </TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 };

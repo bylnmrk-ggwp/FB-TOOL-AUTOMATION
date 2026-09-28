@@ -3,3 +3,8 @@ export * from './navigation.selectors.js';
 export * from './composer.selectors.js';
 export * from './engagement.selectors.js';
 export * from './messaging.selectors.js';
+export * from './share.selectors.js';
+export * from './groups.selectors.js';
+export * from './friends.selectors.js';
+export * from './profile.selectors.js';
+export * from './watch.selectors.js';

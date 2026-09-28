@@ -1,10 +1,39 @@
-import { and, asc, count, eq, inArray, like } from 'drizzle-orm';
-import type { Account, AccountStatus } from '@fb/shared';
-import { ACCOUNT_STATUSES, AccountNotFoundError, nowIso } from '@fb/shared';
-import type { AccountFilter, AccountPatch, AccountRepository, NewAccount, Page } from '@fb/domain';
+import { and, asc, count, eq, inArray, like, or } from 'drizzle-orm';
+import type { Account, AccountStatus, LoginStatus } from '@fb/shared';
+import { ACCOUNT_STATUSES, AccountNotFoundError, LOGIN_STATUSES, nowIso } from '@fb/shared';
+import type {
+  AccountCredentials,
+  AccountFilter,
+  AccountPatch,
+  AccountRepository,
+  NewAccount,
+  Page,
+} from '@fb/domain';
 import type { Database } from '../db.js';
 import { accounts } from '../schema/accounts.js';
 import { toAccount } from './mappers.js';
+
+/** Patch keys that map straight onto a column of the same name. */
+const DIRECT_FIELDS = [
+  'name',
+  'displayName',
+  'enabled',
+  'status',
+  'lastError',
+  'lastActiveAt',
+  'sheetNo',
+  'username',
+  'password',
+  'gmail',
+  'gmailPassword',
+  'phone',
+  'facebookName',
+  'profileUrl',
+  'loginStatus',
+  'loginReason',
+  'lastLoginCheckAt',
+  'shareRestrictedUntil',
+] as const;
 
 export class AccountRepositoryImpl implements AccountRepository {
   constructor(private readonly db: Database) {}
@@ -20,6 +49,18 @@ export class AccountRepositoryImpl implements AccountRepository {
       enabled: account.enabled,
       lastError: null,
       lastActiveAt: null,
+      sheetNo: account.sheetNo ?? null,
+      username: account.username ?? null,
+      password: account.password ?? null,
+      gmail: account.gmail ?? null,
+      gmailPassword: account.gmailPassword ?? null,
+      phone: account.phone ?? null,
+      facebookName: account.facebookName ?? null,
+      profileUrl: null,
+      loginStatus: 'unknown',
+      loginReason: null,
+      lastLoginCheckAt: null,
+      shareRestrictedUntil: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -38,6 +79,25 @@ export class AccountRepositoryImpl implements AccountRepository {
     return row === undefined ? null : toAccount(row);
   }
 
+  async findByUsername(username: string): Promise<Account | null> {
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.username, username))
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toAccount(row);
+  }
+
+  async findByIds(ids: readonly string[]): Promise<Account[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(inArray(accounts.id, [...ids]));
+    return rows.map(toAccount);
+  }
+
   async list(filter: AccountFilter): Promise<Page<Account>> {
     const where = this.buildWhere(filter);
 
@@ -45,7 +105,7 @@ export class AccountRepositoryImpl implements AccountRepository {
       .select()
       .from(accounts)
       .where(where)
-      .orderBy(asc(accounts.name))
+      .orderBy(asc(accounts.sheetNo), asc(accounts.name))
       .limit(filter.limit)
       .offset(filter.offset);
 
@@ -61,12 +121,9 @@ export class AccountRepositoryImpl implements AccountRepository {
 
   async update(id: string, patch: AccountPatch): Promise<Account> {
     const values: Record<string, unknown> = { updatedAt: nowIso() };
-    if (patch.name !== undefined) values['name'] = patch.name;
-    if (patch.displayName !== undefined) values['displayName'] = patch.displayName;
-    if (patch.enabled !== undefined) values['enabled'] = patch.enabled;
-    if (patch.status !== undefined) values['status'] = patch.status;
-    if (patch.lastError !== undefined) values['lastError'] = patch.lastError;
-    if (patch.lastActiveAt !== undefined) values['lastActiveAt'] = patch.lastActiveAt;
+    for (const field of DIRECT_FIELDS) {
+      if (patch[field] !== undefined) values[field] = patch[field];
+    }
 
     await this.db.update(accounts).set(values).where(eq(accounts.id, id));
     return this.require(id);
@@ -86,9 +143,36 @@ export class AccountRepositoryImpl implements AccountRepository {
       AccountStatus,
       number
     >;
-
     for (const row of rows) result[row.status] = row.value;
     return result;
+  }
+
+  async countByLoginStatus(): Promise<Record<LoginStatus, number>> {
+    const rows = await this.db
+      .select({ status: accounts.loginStatus, value: count() })
+      .from(accounts)
+      .groupBy(accounts.loginStatus);
+
+    const result = Object.fromEntries(LOGIN_STATUSES.map((status) => [status, 0])) as Record<
+      LoginStatus,
+      number
+    >;
+    for (const row of rows) result[row.status] = row.value;
+    return result;
+  }
+
+  async credentials(id: string): Promise<AccountCredentials | null> {
+    const rows = await this.db
+      .select({
+        username: accounts.username,
+        password: accounts.password,
+        gmail: accounts.gmail,
+        gmailPassword: accounts.gmailPassword,
+      })
+      .from(accounts)
+      .where(eq(accounts.id, id))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   /**
@@ -115,9 +199,21 @@ export class AccountRepositoryImpl implements AccountRepository {
   private buildWhere(filter: AccountFilter) {
     const clauses = [];
     if (filter.search !== undefined) {
-      clauses.push(like(accounts.name, `%${filter.search}%`));
+      const needle = `%${filter.search}%`;
+      clauses.push(
+        or(
+          like(accounts.name, needle),
+          like(accounts.displayName, needle),
+          like(accounts.username, needle),
+          like(accounts.facebookName, needle),
+          like(accounts.gmail, needle),
+        ),
+      );
     }
     if (filter.status !== undefined) clauses.push(eq(accounts.status, filter.status));
+    if (filter.loginStatus !== undefined) {
+      clauses.push(eq(accounts.loginStatus, filter.loginStatus));
+    }
     if (filter.enabled !== undefined) clauses.push(eq(accounts.enabled, filter.enabled));
     return clauses.length === 0 ? undefined : and(...clauses);
   }

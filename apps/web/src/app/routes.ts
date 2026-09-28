@@ -5,16 +5,15 @@
 export interface RouteDescriptor {
   path: string;
   label: string;
-  /** Short glyph used in the sidebar; replaced by an icon set later. */
-  glyph: string;
 }
 
 export const NAV_ROUTES: readonly RouteDescriptor[] = [
-  { path: '/', label: 'Dashboard', glyph: '◆' },
-  { path: '/accounts', label: 'Accounts', glyph: '◉' },
-  { path: '/compose', label: 'Compose', glyph: '✎' },
-  { path: '/queue', label: 'Queue', glyph: '≡' },
-  { path: '/monitor', label: 'Monitor', glyph: '◎' },
-  { path: '/logs', label: 'Logs', glyph: '⌇' },
-  { path: '/settings', label: 'Settings', glyph: '⚙' },
+  { path: '/', label: 'Dashboard' },
+  { path: '/accounts', label: 'Accounts' },
+  { path: '/groups', label: 'Groups' },
+  { path: '/compose', label: 'Compose' },
+  { path: '/queue', label: 'Queue' },
+  { path: '/monitor', label: 'Monitor' },
+  { path: '/logs', label: 'Logs' },
+  { path: '/settings', label: 'Settings' },
 ];

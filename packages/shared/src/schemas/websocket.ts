@@ -3,6 +3,7 @@ import { IdSchema, IsoDateTimeSchema } from './common.js';
 import { AccountSchema, AccountStatusSchema, BrowserSessionSchema } from './account.js';
 import { JobSchema, QueueStatsSchema } from './job.js';
 import { LogEntrySchema } from './log.js';
+import { OperatorRequestSchema } from './input.js';
 
 /** Envelope shared by every server-to-client message. */
 const event = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
@@ -67,6 +68,18 @@ export const ConnectionReadyEvent = event(
   z.object({ clientId: IdSchema, serverVersion: z.string() }),
 );
 
+/** The groups known for an account changed; the list should be refetched. */
+export const GroupsChangedEvent = event(
+  'groups.changed',
+  z.object({ accountId: IdSchema, count: z.number().int().min(0) }),
+);
+
+export const InputRequestedEvent = event('input.requested', OperatorRequestSchema);
+export const InputResolvedEvent = event(
+  'input.resolved',
+  z.object({ requestId: IdSchema, jobId: IdSchema, cancelled: z.boolean() }),
+);
+
 export const ServerEventSchema = z.discriminatedUnion('type', [
   AccountCreatedEvent,
   AccountUpdatedEvent,
@@ -85,6 +98,9 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   QueueStatsEvent,
   LogCreatedEvent,
   ConnectionReadyEvent,
+  GroupsChangedEvent,
+  InputRequestedEvent,
+  InputResolvedEvent,
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export type ServerEventType = ServerEvent['type'];
@@ -97,23 +113,3 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('subscribe'), payload: z.object({ topics: z.array(z.string()) }) }),
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
-
-export const SERVER_EVENT_TYPES = [
-  'account.created',
-  'account.updated',
-  'account.deleted',
-  'account.status.changed',
-  'browser.started',
-  'browser.stopped',
-  'browser.error',
-  'job.created',
-  'job.started',
-  'job.progress',
-  'job.completed',
-  'job.failed',
-  'job.cancelled',
-  'job.retrying',
-  'queue.stats',
-  'log.created',
-  'connection.ready',
-] as const satisfies readonly ServerEventType[];

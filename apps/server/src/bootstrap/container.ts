@@ -2,7 +2,11 @@ import { join } from 'node:path';
 import {
   AccountService,
   BrowserService,
+  GroupService,
   JobService,
+  OperatorInputService,
+  RosterService,
+  SessionService,
   type EventBus,
   type FileStore,
   type Logger,
@@ -13,6 +17,7 @@ import {
   FacebookAutomation,
   FileProfileLockManager,
   ProfileManager,
+  SessionTransfer,
 } from '@fb/automation';
 import {
   createDatabase,
@@ -27,6 +32,7 @@ import type { AppConfig } from '../config/index.js';
 import { HealthService } from '../modules/health/HealthService.js';
 import { UploadFileStore } from '../modules/media/UploadFileStore.js';
 import { DashboardService } from '../modules/monitoring/DashboardService.js';
+import { GoogleSheetsSource } from '../modules/roster/GoogleSheetsSource.js';
 
 /**
  * Composition root. Every concrete implementation is chosen here and nowhere
@@ -44,6 +50,11 @@ export interface Container {
   accounts: AccountService;
   browsers: BrowserService;
   browserManager: BrowserManager;
+  sessions: SessionService;
+  groups: GroupService;
+  operator: OperatorInputService;
+  roster: RosterService;
+  rosterSheet: GoogleSheetsSource;
   jobs: JobService;
   queue: QueueManager;
   dashboard: DashboardService;
@@ -93,8 +104,6 @@ export const createContainer = (
   );
   const files = new UploadFileStore(config.paths.uploadDir);
 
-  const accounts = new AccountService({ repositories, profiles, events, logger });
-
   const browserManager = new BrowserManager(logger);
   const browserController = overrides.browserController ?? browserManager;
   const browsers = new BrowserService({
@@ -107,11 +116,46 @@ export const createContainer = (
     workerId,
   });
 
-  const gateway =
-    overrides.gateway ?? new FacebookAutomation({ contexts: browserManager, files, logger });
+  const sessions = new SessionService({
+    repositories,
+    controller: browserController,
+    profiles,
+    transfer: new SessionTransfer(),
+    logger,
+  });
 
-  const queue = new QueueManager({ repositories, gateway, browsers, events, logger });
+  const groups = new GroupService(repositories, events, logger);
+  const operator = new OperatorInputService(events, logger);
+
+  const gateway =
+    overrides.gateway ??
+    new FacebookAutomation({
+      contexts: browserManager,
+      files,
+      logger,
+      credentials: { credentials: (accountId) => repositories.accounts.credentials(accountId) },
+    });
+
+  // The account service is built before the queue and rebuilt after: the
+  // queue needs it for login verdicts, and deletion needs the queue to stop
+  // a running job. One instance, two references.
+  const accounts = new AccountService({ repositories, profiles, events, logger });
+
+  const queue = new QueueManager({
+    repositories,
+    gateway,
+    browsers,
+    accounts,
+    groups,
+    operator,
+    events,
+    logger,
+  });
   const jobs = new JobService({ repositories, queue, events, logger });
+  accounts.attach({ sessions: browsers, queue });
+
+  const roster = new RosterService(accounts, logger);
+  const rosterSheet = new GoogleSheetsSource(config.sheets);
   const dashboard = new DashboardService(repositories, queue);
 
   const health = new HealthService({
@@ -168,6 +212,7 @@ export const createContainer = (
   const shutdown = async (): Promise<void> => {
     // Order matters: stop taking work, let what is running finish, then close
     // the browsers it was using, and only then the database it writes to.
+    operator.cancelAll();
     await queue.stop();
     browsers.stopListening();
     await browsers.stopAll();
@@ -188,6 +233,11 @@ export const createContainer = (
     accounts,
     browsers,
     browserManager,
+    sessions,
+    groups,
+    operator,
+    roster,
+    rosterSheet,
     jobs,
     queue,
     dashboard,

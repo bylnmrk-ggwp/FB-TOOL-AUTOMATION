@@ -32,8 +32,14 @@ export interface JobRepository {
   /** Jobs left `running` by a process that died. */
   findStaleRunning(olderThan: Date): Promise<Job[]>;
   findByStatus(status: readonly JobStatus[]): Promise<Job[]>;
+  /** Every job that has not finished, marked cancelled in one statement. */
+  cancelAllActive(): Promise<number>;
   countRunningByAccount(): Promise<Record<string, number>>;
   stats(): Promise<QueueStats>;
   statsSince(since: Date): Promise<{ total: number; succeeded: number; failed: number }>;
+  /** Finished jobs per hour since `since`, only the hours that had any. */
+  finishedByHour(since: Date): Promise<Array<{ hour: string; status: JobStatus; count: number }>>;
+  /** Finished jobs per type since `since`. */
+  finishedByType(since: Date): Promise<Array<{ type: JobType; count: number }>>;
   deleteByAccount(accountId: string): Promise<number>;
 }

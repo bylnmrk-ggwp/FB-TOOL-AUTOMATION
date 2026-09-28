@@ -1,12 +1,36 @@
-import { JobCancelledError, nowIso, type Job, type JobError } from '@fb/shared';
-import { classifyError, type AutomationGateway } from '@fb/domain';
-import type { BrowserService, EventPublisher, Logger, Repositories } from '@fb/application';
+import {
+  createId,
+  JobCancelledError,
+  nowIso,
+  ShareRestrictedError,
+  type Job,
+  type JobError,
+  type LoginStatus,
+} from '@fb/shared';
+import {
+  classifyError,
+  isShareRestricted,
+  type AutomationGateway,
+  type FetchedGroup,
+} from '@fb/domain';
+import type {
+  AccountService,
+  BrowserService,
+  EventPublisher,
+  GroupService,
+  Logger,
+  OperatorInputService,
+  Repositories,
+} from '@fb/application';
 import type { RetryManager } from './RetryManager.js';
 
 export interface JobProcessorDeps {
   repositories: Repositories;
   gateway: AutomationGateway;
   browsers: BrowserService;
+  accounts: AccountService;
+  groups: GroupService;
+  operator: OperatorInputService;
   retries: RetryManager;
   events: EventPublisher;
   logger: Logger;
@@ -17,13 +41,17 @@ export interface JobOutcome {
   status: 'completed' | 'failed' | 'retrying' | 'cancelled';
 }
 
+/** Hours Facebook's share block is honoured before share jobs run again. */
+const SHARE_RESTRICTION_HOURS = 12;
+
 /**
  * Runs exactly one job from `queued` to a terminal state.
  *
  * It owns the whole of one attempt: making sure a browser is there, marking
  * the account busy, handing the action to the gateway, and writing down what
- * happened. Deciding *which* job runs, and how many at once, belongs to the
- * worker above it.
+ * happened — including what the result means for the account, such as a new
+ * login verdict or a fresh list of groups. Deciding *which* job runs, and how
+ * many at once, belongs to the worker above it.
  */
 export class JobProcessor {
   constructor(private readonly deps: JobProcessorDeps) {}
@@ -47,6 +75,8 @@ export class JobProcessor {
     const startedAtMs = Date.now();
 
     try {
+      await this.refuseIfShareRestricted(started);
+
       // A job needs a browser. Starting one here — rather than refusing —
       // means a queued job survives an operator having closed the window.
       const session = await this.ensureBrowser(started.accountId);
@@ -57,12 +87,27 @@ export class JobProcessor {
         accountId: started.accountId,
         sessionId: session.sessionId,
         signal,
+        // A watch is one step that lasts the whole job; everything else is
+        // many steps that each get the configured budget.
         timeoutMs: settings.defaultTimeoutMs,
         delayRangeMs: [settings.minActionDelayMs, settings.maxActionDelayMs],
+        settings,
         onProgress: (progress, step) => {
           void this.reportProgress(started, progress, step);
         },
+        askOperator: (request) =>
+          this.deps.operator.ask({
+            jobId: started.id,
+            accountId: started.accountId,
+            kind: request.kind,
+            message: request.message,
+            ...(request.expectsText === undefined ? {} : { expectsText: request.expectsText }),
+            timeoutMs: settings.operatorInputTimeoutMs,
+            signal,
+          }),
       });
+
+      await this.applyResult(started, result.details);
 
       const completed = await repositories.jobs.update(started.id, {
         status: 'completed',
@@ -72,19 +117,106 @@ export class JobProcessor {
         lastError: null,
       });
 
-      log.info('Job completed', {
-        event: 'job.completed',
-        durationMs: Date.now() - startedAtMs,
-      });
+      log.info('Job completed', { event: 'job.completed', durationMs: Date.now() - startedAtMs });
       events.publish({ type: 'job.completed', timestamp: nowIso(), payload: completed });
 
       return { job: completed, status: 'completed' };
     } catch (error) {
+      await this.applyFailure(started, error);
       return this.handleFailure(started, error, signal);
     } finally {
       // The account goes back to idle whatever happened, so one bad job does
       // not leave an account looking busy for ever.
       await this.setAccountStatus(started.accountId, 'online');
+    }
+  }
+
+  /** What a successful result means for the rest of the system. */
+  private async applyResult(job: Job, details: Record<string, unknown>): Promise<void> {
+    const { accounts, groups, repositories } = this.deps;
+
+    switch (job.type) {
+      case 'login':
+      case 'check_login': {
+        const status = details['loginStatus'];
+        if (typeof status === 'string') {
+          await accounts.recordLoginVerdict(job.accountId, {
+            loginStatus: status as LoginStatus,
+            loginReason: typeof details['loginReason'] === 'string' ? details['loginReason'] : null,
+            facebookName:
+              typeof details['facebookName'] === 'string' ? details['facebookName'] : null,
+            profileUrl: typeof details['profileUrl'] === 'string' ? details['profileUrl'] : null,
+          });
+        }
+        return;
+      }
+      case 'fetch_groups': {
+        const fetched = Array.isArray(details['groups'])
+          ? (details['groups'] as FetchedGroup[])
+          : [];
+        await groups.recordFetched(job.accountId, fetched);
+        return;
+      }
+      case 'share_to_group': {
+        if (job.payload.type !== 'share_to_group') return;
+        await repositories.activities.record({
+          id: createId('act'),
+          accountId: job.accountId,
+          kind: 'share',
+          targetUrl: `${job.payload.postUrl}::${job.payload.groupUrl ?? job.payload.groupName}`,
+          targetName:
+            typeof details['group'] === 'string' ? details['group'] : job.payload.groupName,
+          status: 'done',
+          message: null,
+          jobId: job.id,
+        });
+        return;
+      }
+      case 'join_group': {
+        if (job.payload.type !== 'join_group') return;
+        const outcome = typeof details['outcome'] === 'string' ? details['outcome'] : 'joined';
+        await repositories.activities.record({
+          id: createId('act'),
+          accountId: job.accountId,
+          kind: 'join',
+          targetUrl: job.payload.groupUrl,
+          targetName: null,
+          status: outcome === 'pending' ? 'pending' : 'done',
+          message: typeof details['message'] === 'string' ? details['message'] : null,
+          jobId: job.id,
+        });
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /** What a failure means for the account, before the job itself is judged. */
+  private async applyFailure(job: Job, error: unknown): Promise<void> {
+    if (error instanceof ShareRestrictedError) {
+      await this.deps.accounts.recordShareRestriction(
+        job.accountId,
+        SHARE_RESTRICTION_HOURS,
+        error.message,
+      );
+    }
+    if ((job.type === 'login' || job.type === 'check_login') && error instanceof Error) {
+      const details = (error as { details?: { gate?: string } }).details;
+      const gate = details?.gate;
+      await this.deps.accounts.recordLoginVerdict(job.accountId, {
+        loginStatus: isLoginStatus(gate) ? gate : 'logged_out',
+        loginReason: error.message,
+      });
+    }
+  }
+
+  /** A share job on a restricted account is failed now rather than tried and refused. */
+  private async refuseIfShareRestricted(job: Job): Promise<void> {
+    if (job.type !== 'share_post' && job.type !== 'share_to_group') return;
+    const account = await this.deps.repositories.accounts.findById(job.accountId);
+    if (account !== null && isShareRestricted(account)) {
+      throw new ShareRestrictedError(job.accountId, account.shareRestrictedUntil);
     }
   }
 
@@ -211,3 +343,9 @@ export class JobProcessor {
     });
   }
 }
+
+const isLoginStatus = (value: unknown): value is LoginStatus =>
+  typeof value === 'string' &&
+  ['checkpoint', 'two_factor', 'email_confirmation', 'captcha', 'disabled', 'logged_out'].includes(
+    value,
+  );

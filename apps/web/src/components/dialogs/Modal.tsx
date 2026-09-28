@@ -1,60 +1,50 @@
-import { useEffect, useRef, type ReactElement, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import './Modal.css';
+import type { ReactElement, ReactNode } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 
 interface ModalProps {
   open: boolean;
   title: string;
+  description?: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** `wide` fits a payload or a result without scrolling sideways. */
+  size?: 'default' | 'wide';
 }
 
 /**
- * A native <dialog>, so focus trapping, Escape and the backdrop come from the
- * platform instead of from hand-written key handlers.
+ * A thin shape over the shadcn dialog, so pages open one with `open` and
+ * `onClose` and never repeat the header/footer scaffolding.
  */
 export const Modal = ({
   open,
   title,
+  description,
   onClose,
   children,
   footer,
-}: ModalProps): ReactElement | null => {
-  const ref = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (dialog === null) return;
-
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (dialog === null) return undefined;
-
-    const handleCancel = (event: Event): void => {
-      event.preventDefault();
-      onClose();
-    };
-
-    dialog.addEventListener('cancel', handleCancel);
-    return () => dialog.removeEventListener('cancel', handleCancel);
-  }, [onClose]);
-
-  return createPortal(
-    <dialog ref={ref} className="modal" onClose={onClose}>
-      <header className="modal__header">
-        <h2 className="modal__title">{title}</h2>
-        <button type="button" className="modal__close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-      </header>
-      <div className="modal__body">{children}</div>
-      {footer !== undefined && <footer className="modal__footer">{footer}</footer>}
-    </dialog>,
-    document.body,
-  );
-};
+  size = 'default',
+}: ModalProps): ReactElement => (
+  <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+    <DialogContent className={cn(size === 'wide' && 'sm:max-w-2xl')}>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        {description !== undefined ? (
+          <DialogDescription>{description}</DialogDescription>
+        ) : (
+          <DialogDescription className="sr-only">{title}</DialogDescription>
+        )}
+      </DialogHeader>
+      <div className="grid max-h-[60vh] gap-4 overflow-y-auto pr-1">{children}</div>
+      {footer !== undefined && <DialogFooter>{footer}</DialogFooter>}
+    </DialogContent>
+  </Dialog>
+);

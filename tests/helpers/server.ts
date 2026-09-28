@@ -44,6 +44,11 @@ export const testConfig = (directory: string): AppConfig => ({
     staleJobTimeoutMs: DEFAULTS.staleJobTimeoutMs,
     profileLockTtlMs: DEFAULTS.profileLockTtlMs,
   },
+  sheets: {
+    keyFile: join(directory, 'missing-service-account.json'),
+    sheetId: 'test-sheet',
+    tab: 'Sheet1',
+  },
 });
 
 /**

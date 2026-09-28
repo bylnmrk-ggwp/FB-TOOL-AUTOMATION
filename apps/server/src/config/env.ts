@@ -30,6 +30,12 @@ const EnvSchema = z.object({
   DEFAULT_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(DEFAULTS.maxRetries),
   STALE_JOB_TIMEOUT_MS: z.coerce.number().int().min(60_000).default(DEFAULTS.staleJobTimeoutMs),
   PROFILE_LOCK_TTL_MS: z.coerce.number().int().min(30_000).default(DEFAULTS.profileLockTtlMs),
+
+  // The roster Google Sheet. The key file is a service-account JSON that the
+  // sheet has been shared with; it is never committed.
+  SHEETS_SERVICE_ACCOUNT: z.string().default('./.secrets/sheets-service-account.json'),
+  SHEETS_SHEET_ID: z.string().default('1oKKPnfTCn7LXqO9kboS3Jx2Aw8aWYeVh9PordjNxFeM'),
+  SHEETS_TAB: z.string().default('Sheet1'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -60,6 +66,11 @@ export interface AppConfig {
     defaultMaxRetries: number;
     staleJobTimeoutMs: number;
     profileLockTtlMs: number;
+  };
+  sheets: {
+    keyFile: string;
+    sheetId: string;
+    tab: string;
   };
 }
 
@@ -107,6 +118,11 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
       defaultMaxRetries: env.DEFAULT_MAX_RETRIES,
       staleJobTimeoutMs: env.STALE_JOB_TIMEOUT_MS,
       profileLockTtlMs: env.PROFILE_LOCK_TTL_MS,
+    },
+    sheets: {
+      keyFile: resolveFromRoot(env.SHEETS_SERVICE_ACCOUNT),
+      sheetId: env.SHEETS_SHEET_ID,
+      tab: env.SHEETS_TAB,
     },
   };
 };

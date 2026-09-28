@@ -1,6 +1,8 @@
 import type {
   AccountRepository,
+  ActivityRepository,
   BrowserProfileRepository,
+  GroupRepository,
   JobRepository,
   LogRepository,
   SettingsRepository,
@@ -13,4 +15,6 @@ export interface Repositories {
   jobs: JobRepository;
   logs: LogRepository;
   settings: SettingsRepository;
+  groups: GroupRepository;
+  activities: ActivityRepository;
 }

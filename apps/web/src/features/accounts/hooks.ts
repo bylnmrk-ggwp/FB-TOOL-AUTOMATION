@@ -9,19 +9,27 @@ import type {
   Account,
   BrowserSessionView,
   CreateAccountInput,
+  Job,
   ListAccountsQuery,
   Paginated,
+  StorageState,
   UpdateAccountInput,
 } from '@fb/shared';
 import {
+  checkLoginAccounts,
   createAccount,
   deleteAccount,
+  importRosterCsv,
+  importRosterSheet,
+  importSession,
   listAccounts,
   listSessions,
+  loginAccounts,
   setAccountEnabled,
   startBrowser,
   stopBrowser,
   updateAccount,
+  type RosterImportResult,
 } from '../../api/accounts';
 
 export const accountKeys = {
@@ -57,6 +65,7 @@ const useAccountMutation = <TInput, TResult>(
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: accountKeys.all });
       void queryClient.invalidateQueries({ queryKey: accountKeys.sessions });
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
@@ -91,3 +100,31 @@ export const useStartBrowser = (): UseMutationResult<BrowserSessionView, Error, 
 
 export const useStopBrowser = (): UseMutationResult<null, Error, string> =>
   useAccountMutation(stopBrowser);
+
+export const useImportRosterSheet = (): UseMutationResult<RosterImportResult, Error, void> =>
+  useAccountMutation(() => importRosterSheet());
+
+export const useImportRosterCsv = (): UseMutationResult<RosterImportResult, Error, string> =>
+  useAccountMutation(importRosterCsv);
+
+export const useLoginAccounts = (): UseMutationResult<
+  Job[],
+  Error,
+  { accountIds: string[]; waitForOperator: boolean }
+> =>
+  useAccountMutation(
+    ({ accountIds, waitForOperator }: { accountIds: string[]; waitForOperator: boolean }) =>
+      loginAccounts(accountIds, waitForOperator),
+  );
+
+export const useCheckLoginAccounts = (): UseMutationResult<Job[], Error, string[]> =>
+  useAccountMutation(checkLoginAccounts);
+
+export const useImportSession = (): UseMutationResult<
+  null,
+  Error,
+  { id: string; state: StorageState }
+> =>
+  useAccountMutation(({ id, state }: { id: string; state: StorageState }) =>
+    importSession(id, state),
+  );
