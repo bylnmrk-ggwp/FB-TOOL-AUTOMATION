@@ -1,8 +1,16 @@
 # Database
 
-SQLite in WAL mode, one file at `data/database/fb-automation.sqlite`, accessed
-through Drizzle ORM and `better-sqlite3`. Migrations are generated from the
-schema and applied on startup.
+SQLite in WAL mode, one file at `data/database/fb-automation.sqlite`.
+
+The driver is `node:sqlite`, the SQLite built into Node, rather than a native
+addon: a clean checkout then needs no compiler toolchain, which is also what
+keeps Python out of the install. Drizzle builds the SQL through its proxy
+driver and one serialised connection executes it — serialised because SQLite
+itself is synchronous, and because a single queue is what makes `transaction()`
+safe when several requests overlap.
+
+Migrations are generated from the schema with drizzle-kit and applied at
+startup.
 
 ## Tables
 

@@ -28,6 +28,7 @@ contract is code, and this document describes it.
 | POST   | `/accounts/:id/browser/start` | `StartBrowserSchema`   | `BrowserSessionView` (202)                        |
 | POST   | `/accounts/:id/browser/stop`  | —                      | 204                                               |
 | GET    | `/accounts/:id/browser`       | —                      | `BrowserSessionView` or 404                       |
+| GET    | `/browser/sessions`           | —                      | `{ sessions: BrowserSessionView[] }`              |
 | POST   | `/accounts/import`            | `ImportAccountsSchema` | `ImportAccountsResult`                            |
 | GET    | `/accounts/export`            | —                      | JSON file download                                |
 

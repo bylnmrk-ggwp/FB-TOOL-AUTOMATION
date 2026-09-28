@@ -25,6 +25,8 @@
     "db:generate": "pnpm --filter @fb/database db:generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:backup": "tsx scripts/backup.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "accounts:import": "tsx scripts/import-accounts.ts",
     "clean": "pnpm -r exec rimraf dist .turbo && rimraf node_modules/.cache"
   },
   "devDependencies": {
