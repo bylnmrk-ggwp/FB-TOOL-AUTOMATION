@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
-import { AppError, ERROR_CODES, isAppError, ValidationError } from '@fb/shared';
+import { AppError, ERROR_CODES, firstIssue, isAppError, ValidationError } from '@fb/shared';
 import type { Logger } from '@fb/application';
 
 const NOT_FOUND = new AppError(ERROR_CODES.NOT_FOUND, 'Route not found', { status: 404 });
@@ -50,7 +50,7 @@ const toAppError = (error: unknown): AppError => {
   if (isAppError(error)) return error;
 
   if (error instanceof ZodError) {
-    return new ValidationError('Invalid request', error.flatten());
+    return new ValidationError(`Invalid request: ${firstIssue(error)}`, error.flatten());
   }
 
   // Fastify raises these for malformed bodies and unsupported media types.

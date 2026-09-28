@@ -112,7 +112,7 @@ export const ListAccountsQuerySchema = PaginationSchema.extend({
 export type ListAccountsQuery = z.infer<typeof ListAccountsQuerySchema>;
 
 export const AccountIdsSchema = z.object({
-  accountIds: z.array(IdSchema).min(1).max(500),
+  accountIds: z.array(IdSchema).min(1).max(5000),
 });
 export type AccountIdsInput = z.infer<typeof AccountIdsSchema>;
 

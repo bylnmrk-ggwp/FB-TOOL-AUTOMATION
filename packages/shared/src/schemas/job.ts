@@ -51,7 +51,7 @@ export type CreateJobInput = z.input<typeof CreateJobSchema>;
 
 /** Compose can fan one action out across several accounts in a single request. */
 export const CreateJobBatchSchema = z.object({
-  accountIds: z.array(IdSchema).min(1).max(200),
+  accountIds: z.array(IdSchema).min(1).max(5000),
   action: AutomationActionSchema,
   priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).default(0),
   maxRetries: z.number().int().min(0).max(10).optional(),
