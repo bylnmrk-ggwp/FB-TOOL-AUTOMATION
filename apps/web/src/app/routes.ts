@@ -11,4 +11,10 @@ export interface RouteDescriptor {
 
 export const NAV_ROUTES: readonly RouteDescriptor[] = [
   { path: '/', label: 'Dashboard', glyph: '◆' },
+  { path: '/accounts', label: 'Accounts', glyph: '◉' },
+  { path: '/compose', label: 'Compose', glyph: '✎' },
+  { path: '/queue', label: 'Queue', glyph: '≡' },
+  { path: '/monitor', label: 'Monitor', glyph: '◎' },
+  { path: '/logs', label: 'Logs', glyph: '⌇' },
+  { path: '/settings', label: 'Settings', glyph: '⚙' },
 ];

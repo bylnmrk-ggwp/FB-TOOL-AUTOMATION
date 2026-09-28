@@ -14,6 +14,7 @@ data/browser-profiles/*/
 data/uploads/*
 data/exports/*
 data/logs/*
+data/e2e/
 !data/**/.gitkeep
 
 test-results/

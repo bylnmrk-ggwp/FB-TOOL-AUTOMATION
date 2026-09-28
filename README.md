@@ -27,8 +27,9 @@ No Python. No shell glue. One pnpm workspace.
 ```bash
 pnpm install
 cp .env.example .env
-pnpm build          # packages must be built once before the apps resolve them
-pnpm dev            # API on :3001, web on :5173
+pnpm exec playwright install chromium   # the browser the automation drives
+pnpm build                              # packages are built before the apps resolve them
+pnpm dev                                # API on :3001, web on :5173
 ```
 
 Open http://localhost:5173.
@@ -84,10 +85,21 @@ the full list.
 Paths in `.env` are resolved against the repository root, so relative values
 work no matter where the process was started.
 
-## Status
+## How it fits together
 
-Built in phases. Completed so far:
+- A job is written to SQLite before it runs. Accepting one is a database write,
+  not a start signal, so a crash a moment later loses nothing.
+- A browser is a process handle, so it lives in memory only. What SQLite keeps
+  is the account, its profile, and the last observed status.
+- One account runs one job at a time. The profile lock in the database stops a
+  second process from opening the same profile; an in-memory lock stops two
+  workers in this process from queueing behind each other.
+- A job interrupted by a restart is not repeated automatically: it may already
+  have posted. It is failed with an explanation and offered for a deliberate
+  retry.
 
-- **Phase 1 — Foundation.** Workspace, TypeScript configuration, linting,
-  shared contracts, domain model, application ports, Fastify server with a
-  health endpoint, React application shell.
+## Signing in
+
+The system never types a password. Start a browser from the Accounts page, sign
+in by hand inside that window, and the persistent profile keeps the session for
+every job that follows.

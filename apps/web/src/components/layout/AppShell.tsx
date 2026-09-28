@@ -2,11 +2,16 @@ import type { ReactElement } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { NAV_ROUTES } from '../../app/routes';
 import { useTheme } from '../../hooks/useTheme';
+import { useLiveEvents } from '../../features/automation/useLiveEvents';
 import { ConnectionBadge } from './ConnectionBadge';
 import './AppShell.css';
 
 export const AppShell = (): ReactElement => {
   const { theme, toggle } = useTheme();
+
+  // One socket for the whole application, opened where the application lives
+  // rather than inside any one page.
+  useLiveEvents();
 
   return (
     <div className="shell">
@@ -18,7 +23,12 @@ export const AppShell = (): ReactElement => {
 
         <nav className="shell__nav" aria-label="Main">
           {NAV_ROUTES.map((route) => (
-            <NavLink key={route.path} to={route.path} end className="shell__nav-link">
+            <NavLink
+              key={route.path}
+              to={route.path}
+              end={route.path === '/'}
+              className="shell__nav-link"
+            >
               <span aria-hidden="true">{route.glyph}</span>
               {route.label}
             </NavLink>

@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 /**
  * Layer boundaries are enforced here, not by convention.
@@ -69,22 +70,26 @@ export default tseslint.config(
   // apps/web: browser only. Never reach server-side infrastructure.
   {
     files: ['apps/web/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
     ignores: ['apps/web/vite.config.ts'],
-    rules: boundary(
-      [
-        'playwright',
-        'drizzle-orm',
-        'better-sqlite3',
-        'fastify',
-        'node:*',
-        '@fb/database',
-        '@fb/automation',
-        '@fb/queue',
-        '@fb/application',
-        '@fb/domain',
-      ],
-      'the web app may only use @fb/shared and the HTTP/WebSocket API.',
-    ),
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      ...boundary(
+        [
+          'playwright',
+          'drizzle-orm',
+          'better-sqlite3',
+          'fastify',
+          'node:*',
+          '@fb/database',
+          '@fb/automation',
+          '@fb/queue',
+          '@fb/application',
+          '@fb/domain',
+        ],
+        'the web app may only use @fb/shared and the HTTP/WebSocket API.',
+      ),
+    },
   },
 
   {
