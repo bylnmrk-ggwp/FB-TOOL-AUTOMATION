@@ -16,6 +16,9 @@ export const createId = (prefix: string): string => {
 export const slugify = (value: string, fallback = 'account'): string => {
   const slug = value
     .normalize('NFKD')
+    // NFKD splits an accented letter into letter + combining mark; dropping the
+    // marks turns "Ünïcode" into "unicode" instead of "u-ni-code".
+    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')

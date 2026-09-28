@@ -33,7 +33,11 @@ export const jobTypeOf = (action: AutomationAction): JobType => action.type;
 export const hasRetriesLeft = (job: Job): boolean =>
   job.retryCount < job.maxRetries && (job.lastError?.retryable ?? true);
 
-export const nextAttemptAt = (job: Job, now: Date, baseDelayMs = DEFAULTS.retryBackoffMs): Date => {
+export const nextAttemptAt = (
+  job: Job,
+  now: Date,
+  baseDelayMs: number = DEFAULTS.retryBackoffMs,
+): Date => {
   const delay = backoffDelayMs(job.retryCount + 1, baseDelayMs, DEFAULTS.retryBackoffMaxMs);
   return new Date(now.getTime() + delay);
 };

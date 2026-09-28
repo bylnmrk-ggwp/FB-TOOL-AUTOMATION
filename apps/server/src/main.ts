@@ -16,6 +16,7 @@ const main = async (): Promise<void> => {
   loadEnvFile();
   const config = loadConfig();
   const container = createContainer(config);
+  await container.start();
   const app = await buildApp(container);
 
   const close = async (signal: string): Promise<void> => {
