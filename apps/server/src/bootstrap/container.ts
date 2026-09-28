@@ -2,21 +2,31 @@ import { join } from 'node:path';
 import {
   AccountService,
   BrowserService,
+  JobService,
   type EventBus,
+  type FileStore,
   type Logger,
   type Repositories,
 } from '@fb/application';
-import { BrowserManager, FileProfileLockManager, ProfileManager } from '@fb/automation';
+import {
+  BrowserManager,
+  FacebookAutomation,
+  FileProfileLockManager,
+  ProfileManager,
+} from '@fb/automation';
 import {
   createDatabase,
   createRepositories,
   runMigrations,
   type DatabaseHandle,
 } from '@fb/database';
+import type { AutomationGateway, BrowserController } from '@fb/domain';
 import { createLogger, InMemoryEventBus, PersistentLogger } from '@fb/observability';
-import type { BrowserController } from '@fb/domain';
+import { QueueManager } from '@fb/queue';
 import type { AppConfig } from '../config/index.js';
 import { HealthService } from '../modules/health/HealthService.js';
+import { UploadFileStore } from '../modules/media/UploadFileStore.js';
+import { DashboardService } from '../modules/monitoring/DashboardService.js';
 
 /**
  * Composition root. Every concrete implementation is chosen here and nowhere
@@ -30,9 +40,13 @@ export interface Container {
   repositories: Repositories;
   profiles: ProfileManager;
   locks: FileProfileLockManager;
+  files: FileStore;
   accounts: AccountService;
   browsers: BrowserService;
   browserManager: BrowserManager;
+  jobs: JobService;
+  queue: QueueManager;
+  dashboard: DashboardService;
   health: HealthService;
   /** Identifies this process in profile and job locks. */
   workerId: string;
@@ -43,6 +57,10 @@ export interface Container {
 export interface ContainerOverrides {
   /** Replaces the Playwright-backed controller, so tests can run without a browser. */
   browserController?: BrowserController;
+  /** Replaces the Facebook gateway, so tests can exercise the queue without a site. */
+  gateway?: AutomationGateway;
+  /** Leaves the queue stopped, for tests that drive it by hand. */
+  autoStartQueue?: boolean;
 }
 
 export const createContainer = (
@@ -73,13 +91,15 @@ export const createContainer = (
     logger,
     config.queue.profileLockTtlMs,
   );
+  const files = new UploadFileStore(config.paths.uploadDir);
 
   const accounts = new AccountService({ repositories, profiles, events, logger });
 
   const browserManager = new BrowserManager(logger);
+  const browserController = overrides.browserController ?? browserManager;
   const browsers = new BrowserService({
     repositories,
-    controller: overrides.browserController ?? browserManager,
+    controller: browserController,
     locks,
     profiles,
     events,
@@ -87,10 +107,16 @@ export const createContainer = (
     workerId,
   });
 
+  const gateway =
+    overrides.gateway ?? new FacebookAutomation({ contexts: browserManager, files, logger });
+
+  const queue = new QueueManager({ repositories, gateway, browsers, events, logger });
+  const jobs = new JobService({ repositories, queue, events, logger });
+  const dashboard = new DashboardService(repositories, queue);
+
   const health = new HealthService({
     database: () => database.connection.isHealthy(),
-    // Phase 7 replaces this with the queue's own readiness.
-    queue: () => true,
+    queue: () => queue.isRunning(),
   });
 
   const start = async (): Promise<void> => {
@@ -136,9 +162,13 @@ export const createContainer = (
     }
 
     browsers.listen();
+    if (overrides.autoStartQueue !== false) await queue.start();
   };
 
   const shutdown = async (): Promise<void> => {
+    // Order matters: stop taking work, let what is running finish, then close
+    // the browsers it was using, and only then the database it writes to.
+    await queue.stop();
     browsers.stopListening();
     await browsers.stopAll();
     await locks.releaseOwnedBy(workerId);
@@ -154,9 +184,13 @@ export const createContainer = (
     repositories,
     profiles,
     locks,
+    files,
     accounts,
     browsers,
     browserManager,
+    jobs,
+    queue,
+    dashboard,
     health,
     workerId,
     start,

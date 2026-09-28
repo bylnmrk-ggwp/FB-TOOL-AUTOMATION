@@ -7,14 +7,17 @@ import { createContainer, type Container } from '@fb/server/container';
 import type { AppConfig } from '@fb/server/config';
 import { DEFAULTS, type ServerEvent } from '@fb/shared';
 import { FakeBrowserController } from './fake-browser';
+import { FakeGateway } from './fake-gateway';
 
 export interface TestServer {
   app: FastifyInstance;
   container: Container;
   browser: FakeBrowserController;
+  gateway: FakeGateway;
   events: ServerEvent[];
   directory: string;
-  dispose: () => Promise<void>;
+  /** Pass true to keep the directory, for a test that restarts the server. */
+  dispose: (keepFiles?: boolean) => Promise<void>;
 }
 
 /** Config pointing at a throwaway directory, otherwise identical to production. */
@@ -48,10 +51,28 @@ export const testConfig = (directory: string): AppConfig => ({
  * engine — against a temporary directory, and drives it through `app.inject`
  * so no port is bound.
  */
-export const createTestServer = async (): Promise<TestServer> => {
-  const directory = mkdtempSync(join(tmpdir(), 'fb-automation-server-'));
+export interface TestServerOptions {
+  /** Reuse a directory to simulate a restart against the same database. */
+  directory?: string;
+  gateway?: FakeGateway;
+  /** Leave the queue stopped for tests that drive recovery by hand. */
+  autoStartQueue?: boolean;
+  concurrency?: number;
+}
+
+export const createTestServer = async (options: TestServerOptions = {}): Promise<TestServer> => {
+  const directory = options.directory ?? mkdtempSync(join(tmpdir(), 'fb-automation-server-'));
   const browser = new FakeBrowserController();
-  const container = createContainer(testConfig(directory), { browserController: browser });
+  const gateway = options.gateway ?? new FakeGateway();
+
+  const config = testConfig(directory);
+  if (options.concurrency !== undefined) config.queue.globalConcurrency = options.concurrency;
+
+  const container = createContainer(config, {
+    browserController: browser,
+    gateway,
+    ...(options.autoStartQueue === undefined ? {} : { autoStartQueue: options.autoStartQueue }),
+  });
   await container.start();
   const app = await buildApp(container);
   await app.ready();
@@ -65,12 +86,13 @@ export const createTestServer = async (): Promise<TestServer> => {
     app,
     container,
     browser,
+    gateway,
     events,
     directory,
-    dispose: async () => {
+    dispose: async (keepFiles = false) => {
       await app.close();
       await container.shutdown();
-      rmSync(directory, { recursive: true, force: true });
+      if (!keepFiles) rmSync(directory, { recursive: true, force: true });
     },
   };
 };

@@ -31,6 +31,7 @@
     "@fb/application": "workspace:*",
     "@fb/database": "workspace:*",
     "@fb/domain": "workspace:*",
+    "@fb/queue": "workspace:*",
     "@fb/server": "workspace:*",
     "fastify": "^5.2.0",
     "@fb/shared": "workspace:*",
