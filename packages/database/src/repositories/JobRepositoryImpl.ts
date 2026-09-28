@@ -18,6 +18,7 @@ import type { ClaimRequest, JobFilter, JobPatch, JobRepository, NewJob, Page } f
 import type { Database } from '../db.js';
 import type { SqliteConnection } from '../connection.js';
 import { jobs } from '../schema/jobs.js';
+import { chunked } from './chunk.js';
 import { toJob, toJsonColumn } from './mappers.js';
 
 const TERMINAL: readonly JobStatus[] = ['completed', 'failed', 'cancelled'];
@@ -40,30 +41,33 @@ export class JobRepositoryImpl implements JobRepository {
     if (newJobs.length === 0) return [];
     const now = nowIso();
 
-    await this.db.insert(jobs).values(
-      newJobs.map((job) => ({
-        id: job.id,
-        accountId: job.accountId,
-        type: job.type,
-        status: job.status,
-        payload: toJsonColumn(job.payload),
-        priority: job.priority,
-        retryCount: 0,
-        maxRetries: job.maxRetries,
-        progress: 0,
-        runAfter: job.runAfter,
-        result: null,
-        lastError: null,
-        lockedBy: null,
-        createdAt: now,
-        queuedAt: null,
-        startedAt: null,
-        finishedAt: null,
-        updatedAt: now,
-      })),
-    );
+    const rows = newJobs.map((job) => ({
+      id: job.id,
+      accountId: job.accountId,
+      type: job.type,
+      status: job.status,
+      payload: toJsonColumn(job.payload),
+      priority: job.priority,
+      retryCount: 0,
+      maxRetries: job.maxRetries,
+      progress: 0,
+      runAfter: job.runAfter,
+      result: null,
+      lastError: null,
+      lockedBy: null,
+      createdAt: now,
+      queuedAt: null,
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: now,
+    }));
+    for (const slice of chunked(rows)) await this.db.insert(jobs).values(slice);
 
-    return this.findAllByIds(newJobs.map((job) => job.id));
+    const created: Job[] = [];
+    for (const ids of chunked(newJobs.map((job) => job.id))) {
+      created.push(...(await this.findAllByIds(ids)));
+    }
+    return created;
   }
 
   async findById(id: string): Promise<Job | null> {

@@ -12,6 +12,7 @@ import type {
 import type { Database } from '../db.js';
 import type { SqliteConnection } from '../connection.js';
 import { accountActivity, groups } from '../schema/groups.js';
+import { chunked } from './chunk.js';
 import { toActivity, toGroup } from './mappers.js';
 
 export class GroupRepositoryImpl implements GroupRepository {
@@ -80,7 +81,7 @@ export class GroupRepositoryImpl implements GroupRepository {
         });
       }
 
-      await this.db.insert(groups).values(rows);
+      for (const slice of chunked(rows)) await this.db.insert(groups).values(slice);
       return rows.length;
     });
   }

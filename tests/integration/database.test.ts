@@ -156,6 +156,28 @@ describe('SQLite repositories', () => {
     expect((await repositories.jobs.stats()).pending).toBe(1);
   });
 
+  it('stores a roster-sized batch of jobs in one call', async () => {
+    // 2,500 rows of 18 columns is well past SQLite's 32,766 bound parameters
+    // for a single statement; the repository must slice the insert.
+    const account = await newAccount('alpha');
+    const batch = Array.from({ length: 2_500 }, () => ({
+      id: createId('job'),
+      accountId: account.id,
+      type: 'create_post' as const,
+      payload: POST,
+      priority: 0,
+      maxRetries: 2,
+      status: 'pending' as const,
+      runAfter: null,
+    }));
+
+    const created = await repositories.jobs.createMany(batch);
+
+    expect(created).toHaveLength(2_500);
+    expect(new Set(created.map((job) => job.id)).size).toBe(2_500);
+    expect((await repositories.jobs.stats()).pending).toBe(2_500);
+  });
+
   it('claims one job per account and skips busy accounts', async () => {
     const alpha = await newAccount('alpha');
     const beta = await newAccount('beta');
