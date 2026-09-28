@@ -5,11 +5,14 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '@fb/server/app';
 import { createContainer, type Container } from '@fb/server/container';
 import type { AppConfig } from '@fb/server/config';
-import { DEFAULTS } from '@fb/shared';
+import { DEFAULTS, type ServerEvent } from '@fb/shared';
+import { FakeBrowserController } from './fake-browser';
 
 export interface TestServer {
   app: FastifyInstance;
   container: Container;
+  browser: FakeBrowserController;
+  events: ServerEvent[];
   directory: string;
   dispose: () => Promise<void>;
 }
@@ -47,14 +50,22 @@ export const testConfig = (directory: string): AppConfig => ({
  */
 export const createTestServer = async (): Promise<TestServer> => {
   const directory = mkdtempSync(join(tmpdir(), 'fb-automation-server-'));
-  const container = createContainer(testConfig(directory));
+  const browser = new FakeBrowserController();
+  const container = createContainer(testConfig(directory), { browserController: browser });
   await container.start();
   const app = await buildApp(container);
   await app.ready();
 
+  // Every published event is captured so tests can assert on what the UI would
+  // have been told.
+  const events: ServerEvent[] = [];
+  container.events.subscribe((event) => events.push(event));
+
   return {
     app,
     container,
+    browser,
+    events,
     directory,
     dispose: async () => {
       await app.close();

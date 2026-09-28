@@ -16,9 +16,24 @@ export interface BrowserSession {
 
 export interface StartBrowserOptions {
   accountId: string;
-  headless?: boolean;
-  /** Identifies the lock owner, usually `${processId}:${sessionId}`. */
-  owner: string;
+  sessionId: string;
+  profileId: string;
+  /** Absolute path to the persistent profile directory. */
+  userDataDir: string;
+  channel: string;
+  executablePath: string | null;
+  headless: boolean;
+  timeoutMs: number;
+}
+
+/** Why a session ended, as far as the controller could tell. */
+export type SessionClosedReason = 'requested' | 'closed_by_user' | 'crashed';
+
+export interface SessionClosedEvent {
+  accountId: string;
+  sessionId: string;
+  reason: SessionClosedReason;
+  message: string | null;
 }
 
 /**
@@ -32,4 +47,10 @@ export interface BrowserController {
   get(accountId: string): BrowserSession | null;
   list(): BrowserSession[];
   isRunning(accountId: string): boolean;
+  /**
+   * Fires when a session ends without being asked to — a crash, or somebody
+   * closing the window. The application layer uses it to release the profile
+   * lock and correct the account status.
+   */
+  onClosed(listener: (event: SessionClosedEvent) => void): () => void;
 }

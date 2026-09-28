@@ -28,18 +28,21 @@ export class SettingsRepositoryImpl implements SettingsRepository {
     return parsed.success ? parsed.data : DEFAULT_SETTINGS;
   }
 
+  async isInitialised(): Promise<boolean> {
+    const rows = await this.db
+      .select({ key: settings.key })
+      .from(settings)
+      .where(eq(settings.key, ROW_KEY))
+      .limit(1);
+    return rows[0] !== undefined;
+  }
+
   async write(patch: Partial<Settings>): Promise<Settings> {
     const current = await this.read();
     const next = SettingsSchema.parse({ ...current, ...patch });
     const updatedAt = nowIso();
 
-    const existing = await this.db
-      .select({ key: settings.key })
-      .from(settings)
-      .where(eq(settings.key, ROW_KEY))
-      .limit(1);
-
-    if (existing[0] === undefined) {
+    if (!(await this.isInitialised())) {
       await this.db
         .insert(settings)
         .values({ key: ROW_KEY, value: JSON.stringify(next), updatedAt });

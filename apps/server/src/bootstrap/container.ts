@@ -1,6 +1,12 @@
 import { join } from 'node:path';
-import { AccountService, type EventBus, type Logger, type Repositories } from '@fb/application';
-import { FileProfileLockManager, ProfileManager } from '@fb/automation';
+import {
+  AccountService,
+  BrowserService,
+  type EventBus,
+  type Logger,
+  type Repositories,
+} from '@fb/application';
+import { BrowserManager, FileProfileLockManager, ProfileManager } from '@fb/automation';
 import {
   createDatabase,
   createRepositories,
@@ -8,6 +14,7 @@ import {
   type DatabaseHandle,
 } from '@fb/database';
 import { createLogger, InMemoryEventBus, PersistentLogger } from '@fb/observability';
+import type { BrowserController } from '@fb/domain';
 import type { AppConfig } from '../config/index.js';
 import { HealthService } from '../modules/health/HealthService.js';
 
@@ -24,6 +31,8 @@ export interface Container {
   profiles: ProfileManager;
   locks: FileProfileLockManager;
   accounts: AccountService;
+  browsers: BrowserService;
+  browserManager: BrowserManager;
   health: HealthService;
   /** Identifies this process in profile and job locks. */
   workerId: string;
@@ -31,7 +40,15 @@ export interface Container {
   shutdown: () => Promise<void>;
 }
 
-export const createContainer = (config: AppConfig): Container => {
+export interface ContainerOverrides {
+  /** Replaces the Playwright-backed controller, so tests can run without a browser. */
+  browserController?: BrowserController;
+}
+
+export const createContainer = (
+  config: AppConfig,
+  overrides: ContainerOverrides = {},
+): Container => {
   const workerId = `${process.pid}@${config.host}:${config.port}`;
 
   const consoleLogger = createLogger({
@@ -58,6 +75,17 @@ export const createContainer = (config: AppConfig): Container => {
   );
 
   const accounts = new AccountService({ repositories, profiles, events, logger });
+
+  const browserManager = new BrowserManager(logger);
+  const browsers = new BrowserService({
+    repositories,
+    controller: overrides.browserController ?? browserManager,
+    locks,
+    profiles,
+    events,
+    logger,
+    workerId,
+  });
 
   const health = new HealthService({
     database: () => database.connection.isHealthy(),
@@ -90,9 +118,29 @@ export const createContainer = (config: AppConfig): Container => {
         event: 'profile.locks.cleared',
       });
     }
+
+    // The environment seeds the settings once; after that the Settings page
+    // owns them and a changed .env no longer overwrites an operator's choice.
+    if (!(await repositories.settings.isInitialised())) {
+      await repositories.settings.write({
+        browserExecutablePath: config.browser.executablePath,
+        browserChannel: config.browser.channel,
+        headless: config.browser.headless,
+        globalConcurrency: config.queue.globalConcurrency,
+        defaultTimeoutMs: config.queue.defaultTimeoutMs,
+        defaultMaxRetries: config.queue.defaultMaxRetries,
+        staleJobTimeoutMs: config.queue.staleJobTimeoutMs,
+        profileLockTtlMs: config.queue.profileLockTtlMs,
+      });
+      logger.info('Seeded the settings from the environment', { event: 'settings.seeded' });
+    }
+
+    browsers.listen();
   };
 
   const shutdown = async (): Promise<void> => {
+    browsers.stopListening();
+    await browsers.stopAll();
     await locks.releaseOwnedBy(workerId);
     database.close();
     consoleLogger.info('Shutdown complete', { event: 'server.shutdown' });
@@ -107,6 +155,8 @@ export const createContainer = (config: AppConfig): Container => {
     profiles,
     locks,
     accounts,
+    browsers,
+    browserManager,
     health,
     workerId,
     start,

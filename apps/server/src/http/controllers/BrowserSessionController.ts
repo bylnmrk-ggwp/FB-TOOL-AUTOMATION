@@ -1,0 +1,45 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { AppError, ERROR_CODES, IdParamSchema, StartBrowserSchema } from '@fb/shared';
+import type { BrowserService } from '@fb/application';
+import { validateBody, validateParams } from '../middleware/validate.js';
+
+export class BrowserSessionController {
+  constructor(private readonly browsers: BrowserService) {}
+
+  /**
+   * 202: the browser is up, but the profile may still be restoring tabs, so
+   * the caller should watch the WebSocket rather than assume it is idle.
+   */
+  start = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const { id } = validateParams(IdParamSchema, request);
+    const body = validateBody(StartBrowserSchema, {
+      body: request.body === undefined || request.body === null ? {} : request.body,
+    });
+
+    const session = await this.browsers.start(id, body.headless);
+    await reply.status(202).send(session);
+  };
+
+  stop = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const { id } = validateParams(IdParamSchema, request);
+    await this.browsers.stop(id);
+    await reply.status(204).send();
+  };
+
+  get = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const { id } = validateParams(IdParamSchema, request);
+    const session = this.browsers.get(id);
+    // A missing session is a missing resource here, not a conflict.
+    if (session === null) {
+      throw new AppError(ERROR_CODES.BROWSER_NOT_RUNNING, `No browser is running for ${id}`, {
+        status: 404,
+        details: { accountId: id },
+      });
+    }
+    await reply.send(session);
+  };
+
+  list = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    await reply.send({ sessions: this.browsers.list() });
+  };
+}
