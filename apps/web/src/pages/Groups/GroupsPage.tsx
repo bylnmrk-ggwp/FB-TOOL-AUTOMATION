@@ -8,7 +8,7 @@ import { EmptyState, ErrorNotice, errorMessage } from '@/components/common/Feedb
 import { PageHeader } from '@/components/common/PageHeader';
 import { DataTable, type Column } from '@/components/tables/DataTable';
 import { NativeSelect } from '@/components/forms/Field';
-import { useAccounts } from '../../features/accounts/hooks';
+import { useAllAccounts } from '../../features/accounts/hooks';
 import { useFetchGroups, useGroupSummaries } from '../../features/groups/hooks';
 
 /**
@@ -20,12 +20,12 @@ export const GroupsPage = (): ReactElement => {
   const [search, setSearch] = useState('');
   const [accountId, setAccountId] = useState('');
 
-  const accounts = useAccounts({ limit: 200 });
+  const accounts = useAllAccounts();
   const summaries = useGroupSummaries();
   const fetch = useFetchGroups();
 
   const accountName = useMemo(
-    () => new Map((accounts.data?.items ?? []).map((account) => [account.id, account.displayName])),
+    () => new Map((accounts.data ?? []).map((account) => [account.id, account.displayName])),
     [accounts.data],
   );
 
@@ -41,7 +41,7 @@ export const GroupsPage = (): ReactElement => {
   }, [summaries.data, search, accountId]);
 
   const fetchAll = (): void => {
-    const ids = (accounts.data?.items ?? [])
+    const ids = (accounts.data ?? [])
       .filter((account) => account.enabled)
       .map((account) => account.id);
     if (ids.length === 0) {
@@ -122,7 +122,7 @@ export const GroupsPage = (): ReactElement => {
           value={accountId}
           options={[
             { value: '', label: 'Any account' },
-            ...(accounts.data?.items ?? []).map((account) => ({
+            ...(accounts.data ?? []).map((account) => ({
               value: account.id,
               label: account.displayName,
             })),

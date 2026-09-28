@@ -33,9 +33,10 @@ export const mapHeaders = (header: readonly string[]): Partial<Record<Field, num
       if (out[field] === undefined && labels.includes(label)) out[field] = index;
     }
   });
-  // A blank first header is the row-number column on the sheet this was
-  // written for; only the very first column may claim it that way.
-  if (out.sheetNo === undefined && header[0]?.trim() === '') out.sheetNo = 0;
+  // A blank or numeric first header is the row-number column on the sheet
+  // this was written for (Google's CSV export turns its label into "0");
+  // only the very first column may claim it that way.
+  if (out.sheetNo === undefined && /^\d*$/.test(header[0]?.trim() ?? '')) out.sheetNo = 0;
   return out;
 };
 

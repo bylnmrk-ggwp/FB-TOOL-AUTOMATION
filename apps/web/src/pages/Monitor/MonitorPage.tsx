@@ -10,7 +10,7 @@ import {
 } from '@/components/common/StatusDot';
 import { EmptyState } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
-import { useAccounts, useSessions } from '../../features/accounts/hooks';
+import { useAllAccounts, useSessions } from '../../features/accounts/hooks';
 import { OperatorPrompts } from '../../features/monitoring/components/OperatorPrompts';
 import { useJobs } from '../../features/queue/hooks';
 import { useLiveStore, type ConnectionState } from '../../features/automation/liveStore';
@@ -42,12 +42,10 @@ export const MonitorPage = (): ReactElement => {
   const recent = useLiveStore((state) => state.recent);
 
   const sessions = useSessions();
-  const accounts = useAccounts({ limit: 200 });
+  const accounts = useAllAccounts();
   const running = useJobs({ status: ['running', 'queued', 'retrying'], limit: 50 });
 
-  const names = new Map(
-    (accounts.data?.items ?? []).map((account) => [account.id, account.displayName]),
-  );
+  const names = new Map((accounts.data ?? []).map((account) => [account.id, account.displayName]));
   const accountName = (id: string): string => names.get(id) ?? id;
 
   const activeJobs = running.data?.items ?? [];

@@ -35,8 +35,40 @@ import {
 export const accountKeys = {
   all: ['accounts'] as const,
   list: (query: Partial<ListAccountsQuery>) => ['accounts', 'list', query] as const,
+  every: (query: AccountFilter) => ['accounts', 'every', query] as const,
   sessions: ['sessions'] as const,
 };
+
+export type AccountFilter = Omit<Partial<ListAccountsQuery>, 'limit' | 'offset'>;
+
+/** The largest page the server hands out; see PaginationSchema. */
+const PAGE_MAX = 500;
+
+/**
+ * Every account matching a filter, however many there are. Pages through the
+ * server's largest page size and joins the results, so a roster of two
+ * thousand appears as one list where a name lookup or a picker needs it.
+ */
+export const fetchAllAccounts = async (
+  query: AccountFilter,
+  signal?: AbortSignal,
+): Promise<Account[]> => {
+  const items: Account[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await listAccounts({ ...query, limit: PAGE_MAX, offset }, signal);
+    items.push(...page.items);
+    offset += page.items.length;
+    if (page.items.length === 0 || items.length >= page.total) return items;
+  }
+};
+
+export const useAllAccounts = (query: AccountFilter = {}): UseQueryResult<Account[]> =>
+  useQuery({
+    queryKey: accountKeys.every(query),
+    queryFn: ({ signal }) => fetchAllAccounts(query, signal),
+    placeholderData: (previous) => previous,
+  });
 
 export const useAccounts = (
   query: Partial<ListAccountsQuery> = {},

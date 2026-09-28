@@ -1,8 +1,9 @@
 import { createSign } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { WorkbookInvalidError } from '@fb/shared';
 import type { RosterSource } from '@fb/application';
+import { parseCsv } from './CsvSource.js';
 
 const ServiceAccountSchema = z.object({
   client_email: z.string().email(),
@@ -28,11 +29,13 @@ export interface GoogleSheetsOptions {
 }
 
 /**
- * Reads the roster tab of a Google Sheet with a service account.
+ * Reads the roster tab of a Google Sheet.
  *
- * One signed JWT is exchanged for an hour-long access token; one GET reads
- * the rows. No client library: the two calls are small, and a dependency
- * that pulls in a hundred more is the wrong trade for them.
+ * With a service-account key on disk: one signed JWT is exchanged for an
+ * hour-long access token; one GET reads the rows. Without one: the sheet is
+ * read as CSV through the link-sharing route, which works for any sheet
+ * shared with "anyone with the link". No client library: the calls are
+ * small, and a dependency that pulls in a hundred more is the wrong trade.
  *
  * Credentials read through here — passwords included — are held in memory
  * for the length of the import and never logged.
@@ -47,6 +50,10 @@ export class GoogleSheetsSource implements RosterSource {
   }
 
   async readRows(): Promise<string[][]> {
+    // No key on disk: the sheet may still be readable, if it is shared with
+    // "anyone with the link". That path needs no credentials at all.
+    if (!(await this.hasKeyFile())) return this.readPublicRows();
+
     const token = await this.accessToken();
     const range = encodeURIComponent(`${this.options.tab}!A1:Z`);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${this.options.sheetId}/values/${range}`;
@@ -63,6 +70,45 @@ export class GoogleSheetsSource implements RosterSource {
     if (!parsed.success)
       throw new WorkbookInvalidError('the Sheets API response had an unexpected shape');
     return parsed.data.values.map((row) => row.map((cell) => String(cell)));
+  }
+
+  /**
+   * The link-shared route: Google's visualisation endpoint hands out the tab
+   * as CSV to anyone who can view the sheet. `headers=1` keeps the first row
+   * as written — without it, a column of phone numbers loses its "NUMBER"
+   * label because the label is not a number.
+   *
+   * A private sheet answers with a sign-in page instead of CSV, which is the
+   * signal that a service-account key is needed after all.
+   */
+  private async readPublicRows(): Promise<string[][]> {
+    const query = new URLSearchParams({
+      tqx: 'out:csv',
+      sheet: this.options.tab,
+      headers: '1',
+    });
+    const url = `https://docs.google.com/spreadsheets/d/${this.options.sheetId}/gviz/tq?${query.toString()}`;
+
+    const response = await fetch(url, { redirect: 'follow' });
+    const type = response.headers.get('content-type') ?? '';
+    if (!response.ok || !type.includes('text/csv')) {
+      throw new WorkbookInvalidError(
+        `the sheet is not shared by link and there is no service account key at ${this.options.keyFile}. ` +
+          'Either share the sheet with "Anyone with the link can view", or place the key file there ' +
+          '(or point SHEETS_SERVICE_ACCOUNT at it) and share the sheet with that account.',
+      );
+    }
+
+    return parseCsv(await response.text());
+  }
+
+  private async hasKeyFile(): Promise<boolean> {
+    try {
+      await access(this.options.keyFile);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async accessToken(): Promise<string> {

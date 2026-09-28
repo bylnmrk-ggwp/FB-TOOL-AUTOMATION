@@ -15,12 +15,16 @@ export class CsvSource implements RosterSource {
   }
 
   async readRows(): Promise<string[][]> {
-    return this.contents
-      .split(/\r?\n/)
-      .filter((line) => line.trim() !== '')
-      .map(parseLine);
+    return parseCsv(this.contents);
   }
 }
+
+/** CSV text to rows. Blank lines are dropped; cells keep their whitespace. */
+export const parseCsv = (contents: string): string[][] =>
+  contents
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '')
+    .map(parseLine);
 
 const parseLine = (line: string): string[] => {
   const cells: string[] = [];

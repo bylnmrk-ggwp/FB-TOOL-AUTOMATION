@@ -7,7 +7,7 @@ import { EmptyState, ErrorNotice } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { NativeSelect } from '@/components/forms/Field';
 import { DataTable, type Column } from '@/components/tables/DataTable';
-import { useAccounts } from '../../features/accounts/hooks';
+import { useAllAccounts } from '../../features/accounts/hooks';
 import { useLogs } from '../../features/monitoring/hooks';
 import { clockTime, dateTime } from '../../lib/format';
 
@@ -20,7 +20,7 @@ export const LogsPage = (): ReactElement => {
   const [from, setFrom] = useState('');
   const [page, setPage] = useState(0);
 
-  const accounts = useAccounts({ limit: 200 });
+  const accounts = useAllAccounts();
 
   const query = useMemo(
     () => ({
@@ -40,7 +40,7 @@ export const LogsPage = (): ReactElement => {
 
   const accountOptions = [
     { value: '', label: 'Any account' },
-    ...(accounts.data?.items ?? []).map((account) => ({
+    ...(accounts.data ?? []).map((account) => ({
       value: account.id,
       label: account.displayName,
     })),

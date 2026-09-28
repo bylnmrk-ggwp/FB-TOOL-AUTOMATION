@@ -42,6 +42,7 @@ import { NativeSelect } from '@/components/forms/Field';
 import { AccountFormDialog } from '../../features/accounts/components/AccountFormDialog';
 import { ImportRosterDialog } from '../../features/accounts/components/ImportRosterDialog';
 import {
+  fetchAllAccounts,
   useAccounts,
   useCheckLoginAccounts,
   useDeleteAccount,
@@ -67,6 +68,7 @@ const LOGIN_OPTIONS = [
 ];
 
 const RUNNING: readonly AccountStatus[] = ['starting', 'online', 'busy'];
+const PAGE_SIZE = 100;
 
 export const AccountsPage = (): ReactElement => {
   const [params, setParams] = useSearchParams();
@@ -81,17 +83,21 @@ export const AccountsPage = (): ReactElement => {
   const sessionFile = useRef<HTMLInputElement>(null);
   const [sessionTarget, setSessionTarget] = useState<string | null>(null);
 
-  const query = useMemo(
+  const filter = useMemo(
     () => ({
-      limit: 200,
       ...(search.trim() === '' ? {} : { search: search.trim() }),
       ...(status === '' ? {} : { status: status as AccountStatus }),
       ...(loginStatus === '' ? {} : { loginStatus: loginStatus as LoginStatus }),
     }),
     [search, status, loginStatus],
   );
+  const page = Math.max(1, Number(params.get('page')) || 1);
+  const pageQuery = useMemo(
+    () => ({ ...filter, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    [filter, page],
+  );
 
-  const accounts = useAccounts(query);
+  const accounts = useAccounts(pageQuery);
   const startBrowser = useStartBrowser();
   const stopBrowser = useStopBrowser();
   const setEnabled = useSetAccountEnabled();
@@ -103,15 +109,39 @@ export const AccountsPage = (): ReactElement => {
   const importSession = useImportSession();
 
   const rows = accounts.data?.items ?? [];
+  const total = accounts.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const visibleIds = rows.map((account) => account.id);
-  const chosen = visibleIds.filter((id) => selected.has(id));
-  const allChosen = visibleIds.length > 0 && chosen.length === visibleIds.length;
+  // Selection is kept across pages; the bulk buttons act on all of it.
+  const chosen = [...selected];
+  const allVisibleChosen = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const [selectingAll, setSelectingAll] = useState(false);
 
   const setParam = (key: string, value: string): void => {
     const next = new URLSearchParams(params);
     if (value === '') next.delete(key);
     else next.set(key, value);
+    // A new filter starts from the first page; the old page number means nothing now.
+    if (key !== 'page') next.delete('page');
     setParams(next, { replace: true });
+  };
+
+  const changeSearch = (value: string): void => {
+    setSearch(value);
+    if (params.has('page')) setParam('page', '');
+  };
+
+  /** Every account the current filter matches, on every page. */
+  const selectAllMatching = async (): Promise<void> => {
+    setSelectingAll(true);
+    try {
+      const all = await fetchAllAccounts(filter);
+      setSelected(new Set(all.map((account) => account.id)));
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setSelectingAll(false);
+    }
   };
 
   const toggle = (id: string): void =>
@@ -399,7 +429,7 @@ export const AccountsPage = (): ReactElement => {
           aria-label="Search"
           placeholder="Search name, username, email"
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => changeSearch(event.target.value)}
           className="w-full sm:max-w-xs"
         />
         <NativeSelect
@@ -421,17 +451,39 @@ export const AccountsPage = (): ReactElement => {
       {rows.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
           <Checkbox
-            checked={allChosen}
+            checked={allVisibleChosen}
             onCheckedChange={(value) =>
-              setSelected(value === true ? new Set(visibleIds) : new Set())
+              setSelected((state) => {
+                const next = new Set(state);
+                for (const id of visibleIds) {
+                  if (value === true) next.add(id);
+                  else next.delete(id);
+                }
+                return next;
+              })
             }
-            aria-label="Select every visible account"
+            aria-label="Select every account on this page"
           />
           <span className="text-sm text-muted-foreground">
             {chosen.length === 0
               ? 'Select accounts to act on them together'
               : `${chosen.length} selected`}
           </span>
+          {total > visibleIds.length && chosen.length < total && (
+            <Button
+              size="xs"
+              variant="link"
+              disabled={selectingAll}
+              onClick={() => void selectAllMatching()}
+            >
+              Select all {total}
+            </Button>
+          )}
+          {chosen.length > 0 && (
+            <Button size="xs" variant="link" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+          )}
           <div className="ml-auto flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" disabled={chosen.length === 0} onClick={many.login}>
               <LogIn /> Log in
@@ -507,6 +559,32 @@ export const AccountsPage = (): ReactElement => {
           />
         }
       />
+
+      {total > PAGE_SIZE && (
+        <nav className="flex items-center justify-between gap-3 text-sm" aria-label="Pages">
+          <span className="text-muted-foreground">
+            {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page <= 1}
+              onClick={() => setParam('page', page <= 2 ? '' : String(page - 1))}
+            >
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page >= pageCount}
+              onClick={() => setParam('page', String(page + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </nav>
+      )}
 
       <input
         ref={sessionFile}

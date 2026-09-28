@@ -56,8 +56,9 @@ export const ImportRosterDialog = ({ open, onClose }: ImportRosterDialogProps): 
 
         <TabsContent value="sheet" className="grid gap-4 pt-2">
           <InfoNotice>
-            Reads the sheet set in the server's SHEETS_SHEET_ID, using the service-account key at
-            SHEETS_SERVICE_ACCOUNT. The sheet must be shared with that service account.
+            Reads the sheet set in the server's SHEETS_SHEET_ID. A sheet shared with "anyone with
+            the link" needs nothing else; a private sheet needs the service-account key at
+            SHEETS_SERVICE_ACCOUNT and must be shared with that account.
           </InfoNotice>
           <div>
             <Button

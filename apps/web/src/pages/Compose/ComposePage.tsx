@@ -14,13 +14,14 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ErrorNotice, InfoNotice } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { AccountStatusDot, LoginStatusDot } from '@/components/common/StatusDot';
 import { CheckboxField, SelectField, TextAreaField, TextField } from '@/components/forms/Field';
 import { cn } from '@/lib/utils';
-import { useAccounts } from '../../features/accounts/hooks';
+import { useAllAccounts } from '../../features/accounts/hooks';
 import { useGroupSummaries } from '../../features/groups/hooks';
 import { useCreateJobs, useJoinGroups, useShareToGroups } from '../../features/queue/hooks';
 import { uploadMedia } from '../../api/system';
@@ -195,7 +196,7 @@ const buildAction = (form: FormState, media: MediaRef[]): AutomationActionInput 
 
 export const ComposePage = (): ReactElement => {
   const navigate = useNavigate();
-  const accounts = useAccounts({ limit: 200, enabled: true });
+  const accounts = useAllAccounts({ enabled: true });
   const groupSummaries = useGroupSummaries();
   const createJobs = useCreateJobs();
   const shareToGroups = useShareToGroups();
@@ -203,6 +204,7 @@ export const ComposePage = (): ReactElement => {
 
   const [form, setForm] = useState<FormState>(initialForm);
   const [selected, setSelected] = useState<string[]>([]);
+  const [accountSearch, setAccountSearch] = useState('');
   const [pickedGroups, setPickedGroups] = useState<Set<string>>(new Set());
   const [groupSearch, setGroupSearch] = useState('');
   const [media, setMedia] = useState<MediaRef[]>([]);
@@ -228,8 +230,19 @@ export const ComposePage = (): ReactElement => {
   const pending =
     createJobs.isPending || shareToGroups.isPending || joinGroups.isPending || uploading;
 
-  const availableAccounts = accounts.data?.items ?? [];
-  const allSelected = selected.length > 0 && selected.length === availableAccounts.length;
+  const availableAccounts = useMemo(() => {
+    const needle = accountSearch.trim().toLowerCase();
+    return (accounts.data ?? []).filter(
+      (account) =>
+        needle === '' ||
+        account.displayName.toLowerCase().includes(needle) ||
+        (account.facebookName ?? '').toLowerCase().includes(needle) ||
+        (account.username ?? '').toLowerCase().includes(needle),
+    );
+  }, [accounts.data, accountSearch]);
+  const allSelected =
+    availableAccounts.length > 0 &&
+    availableAccounts.every((account) => selected.includes(account.id));
 
   const groups = useMemo(() => {
     const needle = groupSearch.trim().toLowerCase();
@@ -702,18 +715,34 @@ export const ComposePage = (): ReactElement => {
                   variant="ghost"
                   size="sm"
                   onClick={() =>
-                    setSelected(allSelected ? [] : availableAccounts.map((account) => account.id))
+                    setSelected((state) => {
+                      const shown = availableAccounts.map((account) => account.id);
+                      if (allSelected) return state.filter((id) => !shown.includes(id));
+                      return [...new Set([...state, ...shown])];
+                    })
                   }
                 >
-                  {allSelected ? 'Clear' : 'Select all'}
+                  {allSelected ? 'Clear shown' : `Select all ${availableAccounts.length}`}
                 </Button>
               )}
             </CardHeader>
             <CardContent className="px-0 py-0">
+              {(accounts.data?.length ?? 0) > 8 && (
+                <div className="border-b px-3 py-2">
+                  <Input
+                    aria-label="Filter accounts"
+                    placeholder="Filter by name or username"
+                    value={accountSearch}
+                    onChange={(event) => setAccountSearch(event.target.value)}
+                  />
+                </div>
+              )}
               {availableAccounts.length === 0 ? (
                 <div className="p-4">
                   <InfoNotice>
-                    No enabled accounts. Import the roster or add one on the Accounts page.
+                    {accountSearch.trim() === ''
+                      ? 'No enabled accounts. Import the roster or add one on the Accounts page.'
+                      : 'No account matches that filter.'}
                   </InfoNotice>
                 </div>
               ) : (

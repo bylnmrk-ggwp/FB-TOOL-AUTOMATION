@@ -13,7 +13,7 @@ No Python. No shell glue. One pnpm workspace.
 | Frontend   | React 19, TypeScript, Vite, React Router, TanStack Query, Zustand, Zod, Tailwind CSS 4, shadcn/ui |
 | Backend    | Node 22.5+, TypeScript, Fastify 5, REST + WebSocket                                               |
 | Automation | Playwright, persistent Chromium/Brave profiles                                                    |
-| Roster     | Google Sheets through a service account, or a pasted CSV                                          |
+| Roster     | Google Sheets (link-shared, or through a service account), or a pasted CSV                        |
 | Database   | SQLite, Drizzle ORM                                                                               |
 | Testing    | Vitest, Playwright Test                                                                           |
 | Workspace  | pnpm monorepo                                                                                     |
@@ -86,12 +86,14 @@ the full list.
 Paths in `.env` are resolved against the repository root, so relative values
 work no matter where the process was started.
 
-The roster Google Sheet is configured the same way. `SHEETS_SERVICE_ACCOUNT`
-points at a service-account JSON key the sheet has been shared with (default
-`./.secrets/sheets-service-account.json`), `SHEETS_SHEET_ID` names the
-spreadsheet and `SHEETS_TAB` the tab to read (default `Sheet1`). The
-`.secrets/` directory is ignored by git, so the key never leaves the machine
-it was placed on.
+The roster Google Sheet is configured the same way. `SHEETS_SHEET_ID` names
+the spreadsheet and `SHEETS_TAB` the tab to read (default `Sheet1`). A sheet
+shared with "anyone with the link can view" needs nothing more: it is read as
+CSV without credentials. A private sheet needs `SHEETS_SERVICE_ACCOUNT` to
+point at a service-account JSON key the sheet has been shared with (default
+`./.secrets/sheets-service-account.json`); when that file exists it is used
+instead. The `.secrets/` directory is ignored by git, so the key never leaves
+the machine it was placed on.
 
 ## How it fits together
 

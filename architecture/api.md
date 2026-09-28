@@ -68,8 +68,11 @@ synonyms) and keys every row on its username. A known username updates the
 roster fields and leaves status, profile and login verdict alone; a new one
 creates an account; a row with no username is skipped. The result is the usual
 `created` / `updated` / `skipped` counts plus `rows`, the number of roster rows
-read. A missing key file, a service account Google refuses or a response of the
-wrong shape all come back as `WORKBOOK_INVALID`.
+read. Without a key file the sheet is fetched as CSV through Google's
+link-sharing route, which works for any sheet shared with "anyone with the
+link"; a private sheet answers that route with a sign-in page, which is
+reported as `WORKBOOK_INVALID` with both remedies named. A service account
+Google refuses or a response of the wrong shape come back the same way.
 
 ### Login, login checks and sessions
 

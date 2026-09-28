@@ -13,7 +13,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { Modal } from '@/components/dialogs/Modal';
 import { DataTable, type Column } from '@/components/tables/DataTable';
 import { cn } from '@/lib/utils';
-import { useAccounts } from '../../features/accounts/hooks';
+import { useAllAccounts } from '../../features/accounts/hooks';
 import {
   useCancelAllJobs,
   useCancelJob,
@@ -48,7 +48,7 @@ export const QueuePage = (): ReactElement => {
 
   const jobs = useJobs(useMemo(() => ({ status: statusesFor(filter), limit: 100 }), [filter]));
   const stats = useQueueStats();
-  const accounts = useAccounts({ limit: 200 });
+  const accounts = useAllAccounts();
   const cancel = useCancelJob();
   const cancelAll = useCancelAllJobs();
   const retry = useRetryJob();
@@ -63,7 +63,7 @@ export const QueuePage = (): ReactElement => {
 
   const accountName = useMemo(() => {
     const names = new Map<string, string>();
-    for (const account of accounts.data?.items ?? []) names.set(account.id, account.displayName);
+    for (const account of accounts.data ?? []) names.set(account.id, account.displayName);
     return names;
   }, [accounts.data]);
 
