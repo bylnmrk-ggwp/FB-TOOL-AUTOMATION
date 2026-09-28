@@ -150,9 +150,10 @@ export type ImportAccountsResult = z.infer<typeof ImportAccountsResultSchema>;
  * never by position, so the sheet can be reordered freely.
  */
 export const RosterRowSchema = z.object({
+  /** Column A on the sheet: the row's number, and the key an import matches on. */
   sheetNo: z.number().int().nullable(),
   facebookName: z.string().nullable(),
-  username: z.string().min(1),
+  username: z.string().nullable(),
   password: z.string().nullable(),
   gmail: z.string().nullable(),
   gmailPassword: z.string().nullable(),

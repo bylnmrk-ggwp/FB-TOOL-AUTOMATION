@@ -19,7 +19,8 @@ const HEADERS = {
   gmail: ['GMAIL', 'GMAIL ACCOUNT'],
   gmailPassword: ['PASS FOR GMAIL', 'GMAIL PASSWORD', 'GMAIL PASS'],
   phone: ['NUMBER', 'PHONE', 'MOBILE'],
-  sheetNo: ['NO', 'NO.', '#', ''],
+  // A blank or numeric label counts only in the first column; see mapHeaders.
+  sheetNo: ['NO', 'NO.', '#'],
 } as const;
 
 type Field = keyof typeof HEADERS;
@@ -46,9 +47,9 @@ const cell = (row: readonly string[], index: number | undefined): string =>
 const orNull = (value: string): string | null => (value === '' ? null : value);
 
 /**
- * Sheet rows -> roster rows. Rows without a username are skipped: the
- * username is the key an import matches on, and a row without one is a
- * heading, a note or an empty line.
+ * Sheet rows -> roster rows. Column A (the row number) is the key an import
+ * matches on; a row with neither a number nor a username is a heading, a
+ * note or an empty line and is skipped.
  */
 export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] => {
   const header = rows[0];
@@ -62,16 +63,20 @@ export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] =
   }
 
   const parsed: RosterRow[] = [];
-  rows.slice(1).forEach((row, offset) => {
+  rows.slice(1).forEach((row) => {
     const username = cleanUsername(cell(row, columns.username));
-    if (username === '') return;
+    const numbered = Number.parseInt(cell(row, columns.sheetNo), 10);
+    const sheetNo = Number.isFinite(numbered) ? numbered : null;
+    // A row counts when column A numbers it or it names an account; a line
+    // with neither is a heading, a note or an empty row.
+    if (sheetNo === null && username === '') return;
 
-    const rawNo = cell(row, columns.sheetNo);
-    const numbered = Number.parseInt(rawNo, 10);
+    // A name that is only digits is a placeholder on the sheet, not a name.
+    const facebookName = cell(row, columns.facebookName);
     parsed.push({
-      sheetNo: Number.isFinite(numbered) ? numbered : offset + 1,
-      facebookName: orNull(cell(row, columns.facebookName)),
-      username,
+      sheetNo,
+      facebookName: /^\d*$/.test(facebookName) ? null : facebookName,
+      username: orNull(username),
       password: orNull(cell(row, columns.password)),
       gmail: orNull(cell(row, columns.gmail)),
       gmailPassword: orNull(cell(row, columns.gmailPassword)),
@@ -83,8 +88,8 @@ export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] =
 };
 
 /**
- * Pulls the roster in and reconciles it with the accounts table. The
- * username is the key; a row already known updates its roster fields and
+ * Pulls the roster in and reconciles it with the accounts table. The row
+ * number is the key; a row already known updates its roster fields and
  * leaves everything this machine owns — status, profile, login verdict —
  * untouched.
  */

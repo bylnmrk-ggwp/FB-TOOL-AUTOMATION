@@ -127,7 +127,7 @@ export const GroupsPage = (): ReactElement => {
               label: account.displayName,
             })),
           ]}
-          onChange={(event) => setAccountId(event.target.value)}
+          onValueChange={(value) => setAccountId(value)}
           className="w-full sm:w-56"
         />
       </div>

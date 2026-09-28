@@ -89,6 +89,16 @@ export class AccountRepositoryImpl implements AccountRepository {
     return row === undefined ? null : toAccount(row);
   }
 
+  async findBySheetNo(sheetNo: number): Promise<Account | null> {
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.sheetNo, sheetNo))
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toAccount(row);
+  }
+
   async findByIds(ids: readonly string[]): Promise<Account[]> {
     if (ids.length === 0) return [];
     const rows = await this.db

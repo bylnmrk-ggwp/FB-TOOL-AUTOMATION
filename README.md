@@ -127,9 +127,10 @@ the import dialog; both go through the same `RosterService`. Columns are matched
 by their header label, never by position, so the sheet can be reordered: the
 labels it looks for are `FACEBOOK NAME`, `USERNAME`, `PASSWORD`, `GMAIL`,
 `PASS FOR GMAIL`, `NUMBER` and `NO` (a blank first header is also taken as the
-row number). The username is the key: a row already known updates its roster
-fields, a new one creates an account with its own browser profile, and a row
-without a username is skipped as a heading or a note.
+row number). Column A — the row number — is the key: a row already known
+updates its roster fields, a new one creates an account with its own browser
+profile (so the account count follows column A), and a row with neither a
+number nor a username is skipped as a heading or a note.
 
 Passwords are stored so that the login job can type them, but they never come
 back out. The API reports `hasPassword` and `hasGmailPassword` and nothing more,

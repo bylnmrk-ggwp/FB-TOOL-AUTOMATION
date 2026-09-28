@@ -372,8 +372,8 @@ export const ComposePage = (): ReactElement => {
         description="Queue one action for one account or many. The queue runs it — this page never drives a browser."
       />
 
-      <form className="grid gap-4 lg:grid-cols-[1fr_380px]" onSubmit={submit}>
-        <div className="grid content-start gap-4">
+      <form className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]" onSubmit={submit}>
+        <div className="grid min-w-0 content-start gap-4">
           <Card>
             <CardHeader>
               <CardTitle>Action</CardTitle>
@@ -389,7 +389,7 @@ export const ComposePage = (): ReactElement => {
                   value: option.value,
                   label: option.label,
                 }))}
-                onChange={(event) => set('kind', event.target.value as ComposeKind)}
+                onValueChange={(value) => set('kind', value as ComposeKind)}
               />
 
               {usesPostUrl && (
@@ -461,7 +461,7 @@ export const ComposePage = (): ReactElement => {
                                 onCheckedChange={() => toggleGroup(group.url)}
                                 aria-label={group.name}
                               />
-                              <span className="flex-1 truncate">{group.name}</span>
+                              <span className="min-w-0 flex-1 truncate">{group.name}</span>
                               <span className="text-xs text-muted-foreground">
                                 {group.accountIds.length} acc.
                               </span>
@@ -508,7 +508,7 @@ export const ComposePage = (): ReactElement => {
                   label="Reaction"
                   value={form.reaction}
                   options={REACTION_OPTIONS}
-                  onChange={(event) => set('reaction', event.target.value)}
+                  onValueChange={(value) => set('reaction', value)}
                 />
               )}
 
@@ -526,7 +526,7 @@ export const ComposePage = (): ReactElement => {
                   label="Audience"
                   value={form.audience}
                   options={POST_AUDIENCES.map((value) => ({ value, label: humanise(value) }))}
-                  onChange={(event) => set('audience', event.target.value)}
+                  onValueChange={(value) => set('audience', value)}
                 />
               )}
 
@@ -705,8 +705,8 @@ export const ComposePage = (): ReactElement => {
           </Card>
         </div>
 
-        <div className="grid content-start gap-4">
-          <Card className="gap-0 py-0">
+        <div className="grid min-w-0 content-start gap-4">
+          <Card className="min-w-0 gap-0 py-0">
             <CardHeader className="flex flex-row items-center justify-between border-b px-5 py-3">
               <CardTitle className="text-sm">Accounts</CardTitle>
               {availableAccounts.length > 0 && (
@@ -761,10 +761,10 @@ export const ComposePage = (): ReactElement => {
                             onCheckedChange={() => toggleAccount(account.id)}
                             aria-label={account.displayName}
                           />
-                          <span className="flex-1 truncate">
+                          <span className="min-w-0 flex-1 truncate">
                             {account.facebookName ?? account.displayName}
                           </span>
-                          <span className="hidden sm:block">
+                          <span className="hidden shrink-0 sm:block">
                             <LoginStatusDot status={account.loginStatus} />
                           </span>
                           <AccountStatusDot status={account.status} />

@@ -436,14 +436,14 @@ export const AccountsPage = (): ReactElement => {
           aria-label="Login state"
           value={loginStatus}
           options={LOGIN_OPTIONS}
-          onChange={(event) => setParam('login', event.target.value)}
+          onValueChange={(value) => setParam('login', value)}
           className="w-full sm:w-48"
         />
         <NativeSelect
           aria-label="Browser state"
           value={status}
           options={STATUS_OPTIONS}
-          onChange={(event) => setParam('status', event.target.value)}
+          onValueChange={(value) => setParam('status', value)}
           className="w-full sm:w-48"
         />
       </div>

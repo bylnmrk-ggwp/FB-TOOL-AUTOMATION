@@ -252,17 +252,23 @@ export class AccountService {
   }
 
   /**
-   * Reconciles the roster with the accounts table. The username is the key:
-   * a known username has its roster fields refreshed and keeps everything
-   * this machine decided — status, profile, login verdict. A new username
+   * Reconciles the roster with the accounts table. The sheet's row number
+   * (column A) is the key: a known number has its roster fields refreshed
+   * and keeps everything this machine decided — status, profile, login
+   * verdict. A new number
    * becomes an account named after the person, with a profile of its own.
    */
   async importRoster(rows: readonly RosterRow[]): Promise<ImportAccountsResult> {
     const result: ImportAccountsResult = { created: 0, updated: 0, skipped: [] };
 
     for (const row of rows) {
+      const label = row.facebookName ?? row.username ?? `No. ${String(row.sheetNo)}`;
       try {
-        const existing = await this.deps.repositories.accounts.findByUsername(row.username);
+        // Column A is the key: the row number is what the team counts by.
+        // An account that has no number yet (imported before numbers were
+        // kept, or added by hand) is still claimed through its username, so a
+        // re-import adopts it instead of creating a twin.
+        const existing = await this.findRosterMatch(row);
         const fields: AccountCredentialsInput = {
           sheetNo: row.sheetNo,
           username: row.username,
@@ -275,23 +281,45 @@ export class AccountService {
         };
 
         if (existing !== null) {
-          await this.update(existing.id, fields);
+          // The sheet's name wins over a placeholder, never over a name a
+          // person typed in here.
+          const displayName =
+            row.facebookName ?? (/^\d*$/.test(existing.displayName) ? label : undefined);
+          await this.update(existing.id, {
+            ...fields,
+            ...(displayName === undefined ? {} : { displayName }),
+          });
           result.updated += 1;
           continue;
         }
 
-        const name = await this.uniqueName(row.facebookName ?? row.username);
+        const name = await this.uniqueName(label);
         await this.create({ name, displayName: row.facebookName ?? name, ...fields });
         result.created += 1;
       } catch (error) {
         result.skipped.push({
-          name: row.username,
+          name: label,
           reason: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     }
 
     return result;
+  }
+
+  /** The account a roster row refers to, by row number first, then username. */
+  private async findRosterMatch(row: RosterRow): Promise<Account | null> {
+    const { accounts } = this.deps.repositories;
+    if (row.sheetNo !== null) {
+      const numbered = await accounts.findBySheetNo(row.sheetNo);
+      if (numbered !== null) return numbered;
+    }
+    if (row.username === null) return null;
+    const named = await accounts.findByUsername(row.username);
+    // A username already tied to another row number belongs to that row.
+    return named !== null && (named.sheetNo === null || named.sheetNo === row.sheetNo)
+      ? named
+      : null;
   }
 
   /** Records what a login or login check found. */

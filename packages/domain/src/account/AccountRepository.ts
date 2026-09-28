@@ -14,6 +14,7 @@ export interface AccountRepository {
   findById(id: string): Promise<Account | null>;
   findByName(name: string): Promise<Account | null>;
   findByUsername(username: string): Promise<Account | null>;
+  findBySheetNo(sheetNo: number): Promise<Account | null>;
   findByIds(ids: readonly string[]): Promise<Account[]>;
   list(filter: AccountFilter): Promise<Page<Account>>;
   update(id: string, patch: AccountPatch): Promise<Account>;

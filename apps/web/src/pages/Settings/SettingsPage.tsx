@@ -88,8 +88,8 @@ export const SettingsPage = (): ReactElement => {
                 label="Channel"
                 value={draft.browserChannel}
                 options={BROWSER_CHANNELS.map((value) => ({ value, label: value }))}
-                onChange={(event) =>
-                  set('browserChannel', event.target.value as Settings['browserChannel'])
+                onValueChange={(value) =>
+                  set('browserChannel', value as Settings['browserChannel'])
                 }
               />
               <TextField

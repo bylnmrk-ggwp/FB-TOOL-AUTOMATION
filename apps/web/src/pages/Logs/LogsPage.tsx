@@ -109,13 +109,13 @@ export const LogsPage = (): ReactElement => {
             { value: '', label: 'Any level' },
             ...LOG_LEVELS.map((value) => ({ value, label: value })),
           ]}
-          onChange={(event) => resetPageAnd(() => setLevel(event.target.value))}
+          onValueChange={(value) => resetPageAnd(() => setLevel(value))}
         />
         <NativeSelect
           aria-label="Account"
           value={accountId}
           options={accountOptions}
-          onChange={(event) => resetPageAnd(() => setAccountId(event.target.value))}
+          onValueChange={(value) => resetPageAnd(() => setAccountId(value))}
         />
         <Input
           aria-label="Search"

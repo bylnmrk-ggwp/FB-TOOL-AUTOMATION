@@ -138,7 +138,8 @@ test.describe('Compose', () => {
   test('will not queue work without an account chosen', async ({ page }) => {
     await page.goto('/compose');
 
-    await page.getByLabel('Type').selectOption('create_post');
+    await page.getByLabel('Type').click();
+    await page.getByRole('option', { name: 'Post text and photos' }).click();
     await page.getByLabel('Text', { exact: true }).fill('A post that should not be queued');
     await page.getByRole('button', { name: 'Queue work' }).click();
 
@@ -150,7 +151,8 @@ test.describe('Compose', () => {
     await createAccount(page, name);
 
     await page.goto('/compose');
-    await page.getByLabel('Type').selectOption('create_post');
+    await page.getByLabel('Type').click();
+    await page.getByRole('option', { name: 'Post text and photos' }).click();
     await page.getByLabel('Text', { exact: true }).fill('Queued by an end-to-end test');
     await page.getByRole('checkbox', { name }).click();
     await page.getByRole('button', { name: 'Queue work' }).click();
@@ -199,7 +201,8 @@ test.describe('Logs', () => {
     await page.goto('/logs');
     await expect(page.getByRole('cell', { name: 'account.created' }).first()).toBeVisible();
 
-    await page.getByLabel('Level').selectOption('error');
+    await page.getByLabel('Level').click();
+    await page.getByRole('option', { name: /^error$/i }).click();
     await expect(page.getByRole('cell', { name: 'account.created' })).toHaveCount(0);
 
     await page.goto('/accounts');

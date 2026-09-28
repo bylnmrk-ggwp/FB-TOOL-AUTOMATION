@@ -1,15 +1,15 @@
-import type {
-  InputHTMLAttributes,
-  ReactElement,
-  ReactNode,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
-} from 'react';
+import type { InputHTMLAttributes, ReactElement, ReactNode, TextareaHTMLAttributes } from 'react';
 import { useId } from 'react';
-import { ChevronDown } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -90,37 +90,62 @@ export const TextAreaField = ({
   </FieldShell>
 );
 
+interface NativeSelectProps {
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onValueChange: (value: string) => void;
+  id?: string;
+  className?: string;
+  disabled?: boolean;
+  'aria-label'?: string;
+  'aria-invalid'?: boolean;
+  'aria-describedby'?: string | undefined;
+}
+
 /**
- * A native <select>, styled to match the inputs. Native because filters are
- * changed constantly and keyboard users expect the platform control there;
- * the Radix select is reserved for places where option rendering matters.
+ * The list cannot carry an empty value ("any", "no reaction"), so the empty
+ * string travels under a stand-in and is translated back at the edges.
+ */
+const EMPTY = '__empty__';
+const toItem = (value: string): string => (value === '' ? EMPTY : value);
+const fromItem = (value: string): string => (value === EMPTY ? '' : value);
+
+/**
+ * The application's one dropdown: a styled list that opens the same way in
+ * every theme, instead of the platform's own control, which drew a light
+ * list under a dark page.
  */
 export const NativeSelect = ({
-  className,
+  value,
   options,
-  ...rest
-}: SelectHTMLAttributes<HTMLSelectElement> & {
-  options: ReadonlyArray<{ value: string; label: string }>;
-}): ReactElement => (
-  <div className="relative">
-    <select
-      className={cn(
-        'h-9 w-full appearance-none rounded-md border border-input bg-transparent py-1 pr-8 pl-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30',
-        className,
-      )}
-      {...rest}
+  onValueChange,
+  id,
+  className,
+  disabled,
+  ...aria
+}: NativeSelectProps): ReactElement => (
+  <Select
+    value={toItem(value)}
+    onValueChange={(next) => onValueChange(fromItem(next))}
+    {...(disabled === undefined ? {} : { disabled })}
+  >
+    <SelectTrigger
+      {...(id === undefined ? {} : { id })}
+      className={cn('w-full', className)}
+      aria-label={aria['aria-label']}
+      aria-invalid={aria['aria-invalid']}
+      aria-describedby={aria['aria-describedby']}
     >
+      <SelectValue />
+    </SelectTrigger>
+    <SelectContent>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>
+        <SelectItem key={option.value} value={toItem(option.value)}>
           {option.label}
-        </option>
+        </SelectItem>
       ))}
-    </select>
-    <ChevronDown
-      className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-      aria-hidden="true"
-    />
-  </div>
+    </SelectContent>
+  </Select>
 );
 
 export const SelectField = ({
@@ -129,8 +154,7 @@ export const SelectField = ({
   error,
   options,
   ...rest
-}: Omit<SelectHTMLAttributes<HTMLSelectElement>, 'id'> &
-  FieldProps & { options: ReadonlyArray<{ value: string; label: string }> }): ReactElement => (
+}: Omit<NativeSelectProps, 'id'> & FieldProps): ReactElement => (
   <FieldShell
     label={label}
     {...(hint === undefined ? {} : { hint })}

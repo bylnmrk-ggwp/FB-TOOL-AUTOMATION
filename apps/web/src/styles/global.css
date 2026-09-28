@@ -10,6 +10,7 @@
  * sidebar stays black in both themes, the way the wordmark does.
  */
 :root {
+  color-scheme: light;
   --radius: 0.5rem;
 
   --background: oklch(0.985 0 0);
@@ -55,6 +56,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.15 0 0);
   --foreground: oklch(0.93 0 0);
 
