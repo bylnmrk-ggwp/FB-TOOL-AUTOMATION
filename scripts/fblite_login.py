@@ -37,6 +37,7 @@ except Exception:
 
 from src.mobile.adb import Device, find  # noqa: E402
 from src.mobile import session_bank  # noqa: E402
+from src.storage import sheet_status  # noqa: E402
 
 PACKAGE = "com.facebook.lite"
 
@@ -81,15 +82,33 @@ def on_login_form(dev: Device) -> bool:
     return "mobile number or email" in blob
 
 
+# Buttons on the post-login setup screens that decline and move on. Tapping
+# one of these by its exact label is safe - Skip and Not now can only decline
+# - and clears a screen that BACK sometimes re-shows.
+SKIP_HINTS = ("skip", "not now", "maybe later")
+
+
 def leave_onboarding(dev: Device, user: int | None = None,
                      rounds: int = 10, log=print) -> bool:
-    """Back out of the post-login setup screens, accepting nothing.
+    """Clear the post-login setup screens, accepting nothing.
 
-    Returns True when the app is no longer showing the login form, i.e. the
-    session took.
+    Prefers a Skip / Not now button when one is on screen, and falls back to
+    BACK. Only ever declines - never Continue, Upload or Add. Returns True
+    when the app is no longer showing the login form, i.e. the session took.
     """
     for _ in range(rounds):
-        dev.key("KEYCODE_BACK")
+        nodes = dev.screen()
+        skip = None
+        for hint in SKIP_HINTS:
+            hits = find(nodes, text=hint) + find(nodes, desc=hint)
+            if hits:
+                skip = next((n for n in hits if n.cls.endswith("Button")),
+                            hits[0])
+                break
+        if skip is not None:
+            dev.tap_node(skip)
+        else:
+            dev.key("KEYCODE_BACK")
         time.sleep(3)
         foc = dev.shell("dumpsys window | grep mCurrentFocus")
         if PACKAGE not in foc:                  # dropped out to the launcher
@@ -211,11 +230,7 @@ def login_one(dev: Device, username: str, password: str, log=print,
     # null) for far longer than a warm launch - measured past 15s. Polling for
     # a text field to actually exist, rather than sleeping a fixed time and
     # reading once, is the difference between "no form" and a login.
-    def _login_field():
-        boxes = [n for n in dev.screen()
-                 if n.cls.endswith("EditText") and not n.password]
-        return boxes[0] if boxes else None
-
+    #
     # A `pm clear` cold start rebuilds dex and modules and can sit on the
     # "from Meta" splash well past a minute on a low-RAM image, so the wait
     # for the form has to outlast that - a short deadline reads as "no form"
@@ -226,8 +241,20 @@ def login_one(dev: Device, username: str, password: str, log=print,
         # Already signed in (a restored session) - no form will ever appear.
         if dev.fblite_user_id(PACKAGE):
             return "ok", f"already signed in (fb id {dev.fblite_user_id(PACKAGE)})"
-        user_field = _login_field()
-        if user_field:
+        nodes = dev.screen()
+        # Google's "Choose an account to continue to Lite" dialog pops over the
+        # form when a Google account is on the device. It is not the login: it
+        # would sign in with Google, not the roster credentials. Dismiss it
+        # with BACK, which drops to the Facebook email/password form beneath.
+        blob = " ".join((n.text or n.desc).lower() for n in nodes)
+        if "choose an account" in blob or "to continue to lite" in blob:
+            dev.key("KEYCODE_BACK")
+            time.sleep(2)
+            continue
+        boxes = [n for n in nodes
+                 if n.cls.endswith("EditText") and not n.password]
+        if boxes:
+            user_field = boxes[0]
             break
         time.sleep(3)
     if user_field is None:
@@ -328,6 +355,9 @@ def main(argv) -> int:
     ap.add_argument("--not-logged-in", action="store_true",
                     help="only the roster rows the sheet does not already "
                          "call LOGGED IN")
+    ap.add_argument("--no-sheet", action="store_true",
+                    help="do not write LOGGED IN back to the roster sheet's "
+                         "STATUS column as accounts sign in")
     ap.add_argument("--clones", type=int, default=1, metavar="N",
                     help="hold N sessions at once, one per Android user "
                          "(Owner counts as the first). The device caps this: "
@@ -383,6 +413,18 @@ def main(argv) -> int:
     if args.clear:
         dev.disable_backup()
 
+    # Write LOGGED IN back to the roster sheet's STATUS column as each account
+    # signs in, so a long run is durable: --not-logged-in on a later run skips
+    # what is already done. The sheet is a mirror - a write failure is logged
+    # and never stops a login. Off with --no-sheet or when sheet_sync is off.
+    writer = None
+    if not args.no_sheet:
+        writer = sheet_status.SheetWriter()
+        if writer.on:
+            print("Sheet STATUS write-back: on (LOGGED IN on success)")
+        else:
+            print(f"Sheet STATUS write-back: off ({writer.error})")
+
     slots: list[int | None] = [None]
     if args.clones > 1:
         print(f"\nProvisioning up to {args.clones} sessions...")
@@ -426,6 +468,11 @@ def main(argv) -> int:
         results.setdefault(verdict, []).append(username)
         if verdict == "ok":
             placed.append((username, slot))
+            if writer is not None and writer.on:
+                if writer.write(username, sheet_status.LOGGED_IN):
+                    print("    sheet: STATUS -> LOGGED IN")
+                else:
+                    print(f"    sheet: STATUS not written ({writer.error})")
 
     print("\n" + "=" * 60)
     for verdict, names in sorted(results.items()):
