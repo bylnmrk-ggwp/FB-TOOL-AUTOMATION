@@ -216,8 +216,12 @@ def login_one(dev: Device, username: str, password: str, log=print,
                  if n.cls.endswith("EditText") and not n.password]
         return boxes[0] if boxes else None
 
+    # A `pm clear` cold start rebuilds dex and modules and can sit on the
+    # "from Meta" splash well past a minute on a low-RAM image, so the wait
+    # for the form has to outlast that - a short deadline reads as "no form"
+    # when the app was merely still starting.
     user_field = None
-    deadline = time.time() + 75
+    deadline = time.time() + 150
     while time.time() < deadline:
         # Already signed in (a restored session) - no form will ever appear.
         if dev.fblite_user_id(PACKAGE):
@@ -233,10 +237,14 @@ def login_one(dev: Device, username: str, password: str, log=print,
     dev.clear_field()
     dev.type_text(username)
 
-    secret = find(dev.screen(), password=True)
+    # The password field can be a beat behind on a slow image - a soft
+    # keyboard is animating up over it and one dump taken now comes back
+    # without it. Poll for it rather than reading once, so a slow render is
+    # not mistaken for a missing field.
+    secret = dev.wait_for(timeout=20, password=True)
     if not secret:
         return "no form", "no password field on screen"
-    dev.tap_node(secret[0])
+    dev.tap_node(secret)
     dev.clear_field()
     dev.type_text(password)
 
@@ -367,6 +375,13 @@ def main(argv) -> int:
         print("Install it from the Play Store inside LDPlayer, or adb install "
               "an APK you trust. This script will not fetch one.")
         return 1
+
+    # A `pm clear` only reaches the login form if Android does not restore the
+    # session straight back. With the Backup Manager on, a cleared Facebook
+    # Lite reopens on its saved-account picker and reports a phantom sign-in
+    # for an account never typed, so turn it off once before any clearing.
+    if args.clear:
+        dev.disable_backup()
 
     slots: list[int | None] = [None]
     if args.clones > 1:

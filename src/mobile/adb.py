@@ -134,10 +134,26 @@ class Device:
         # back stdout=None, so the failure surfaces as a baffling
         # AttributeError three frames away instead of as a decoding problem.
         env = {**os.environ, **_NO_PATH_CONV}
-        proc = subprocess.run([self._adb, "-s", self.serial, *args],
-                              capture_output=True, timeout=timeout, env=env)
+
+        def _once() -> subprocess.CompletedProcess:
+            return subprocess.run([self._adb, "-s", self.serial, *args],
+                                  capture_output=True, timeout=timeout, env=env)
+
+        proc = _once()
         out = (proc.stdout or b"").decode("utf-8", errors="replace")
         err = (proc.stderr or b"").decode("utf-8", errors="replace")
+        # The LDPlayer bridge drops the connection under uiautomator load and
+        # adb reports the instance "offline" for a few seconds while the VM
+        # keeps running. Re-attach and retry once rather than failing the
+        # whole login: `adb connect` on an already-known serial is a no-op
+        # when it is healthy, and revives it when it is not.
+        if proc.returncode != 0 and "offline" in (err + out).lower():
+            subprocess.run([self._adb, "connect", self.serial],
+                           capture_output=True, timeout=30, env=env)
+            time.sleep(3)
+            proc = _once()
+            out = (proc.stdout or b"").decode("utf-8", errors="replace")
+            err = (proc.stderr or b"").decode("utf-8", errors="replace")
         if proc.returncode != 0:
             raise RuntimeError(
                 f"adb {' '.join(args)} failed: {(err or out).strip()[:200]}")
@@ -168,9 +184,12 @@ class Device:
 
     # -- screen -----------------------------------------------------------
 
-    def screen(self, attempts: int = 3) -> list[Node]:
+    def screen(self, attempts: int = 6) -> list[Node]:
         """The current screen. Retries: a dump taken while the screen is
-        still animating comes back truncated or empty."""
+        still animating comes back truncated or empty, and on a low-RAM
+        Android 14 image the accessibility bridge often throws
+        `UiAutomation.connect` TimeoutException on the first one or two tries
+        before it answers - so retry generously, backing off between."""
         for attempt in range(1, attempts + 1):
             try:
                 self.shell("uiautomator dump /sdcard/_screen.xml", timeout=30)
@@ -181,7 +200,7 @@ class Device:
                 if attempt == attempts:
                     raise
                 self.log(f"  screen dump failed ({type(e).__name__}), retrying")
-            time.sleep(1.5)
+            time.sleep(2.5)
         return []
 
     def wait_for(self, timeout: float = 30, **criteria) -> Node | None:
@@ -249,23 +268,21 @@ class Device:
                    for line in listed.splitlines())
 
     def launch(self, package: str, user: int | None = None) -> None:
-        if user is None:
-            self.shell(
-                f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
-                timeout=60)
-            return
-        # monkey rejects --user on this image ("args: [--user, 12, -p, ...]"),
-        # so a clone is started by resolving its launcher component and asking
-        # am to start that component as the given user.
+        # monkey is absent on this LDPlayer 14 image and rejects --user on
+        # others, so both Owner and clones start the same way: resolve the
+        # launcher component and ask am to start it. --user is added only when
+        # a clone is meant; Owner launches with no --user at all.
+        scope = f"--user {user} " if user is not None else ""
         brief = self.shell(
-            f"cmd package resolve-activity --brief --user {user} {package}")
+            f"cmd package resolve-activity --brief {scope}{package}")
         component = next((ln.strip() for ln in brief.splitlines()
                           if "/" in ln and ln.strip().startswith(package)), "")
         if not component:
+            who = f"user {user}" if user is not None else "Owner"
             raise RuntimeError(
-                f"no launcher activity for {package} as user {user}: "
+                f"no launcher activity for {package} as {who}: "
                 f"{brief.strip()[:160]}")
-        self.shell(f"am start --user {user} -a android.intent.action.MAIN "
+        self.shell(f"am start {scope}-a android.intent.action.MAIN "
                    f"-c android.intent.category.LAUNCHER -n {component}",
                    timeout=60)
 
@@ -298,6 +315,18 @@ class Device:
 
     def rooted(self) -> bool:
         return "uid=0" in self.su("id")
+
+    def disable_backup(self) -> None:
+        """Stop Android restoring an app's data after `pm clear`.
+
+        `pm clear` wipes /data/data/<pkg>, but the Backup Manager restores the
+        session straight back on next launch, so Facebook Lite comes up on its
+        saved-account picker instead of the blank login form - which reads as a
+        phantom "already signed in" for an account whose credentials were never
+        typed. Turning the Backup Manager off makes a clear actually stick.
+        Root only; a no-op message on an unrooted device is harmless.
+        """
+        self.su("bmgr enable false")
 
     def raise_user_limit(self, wanted: int) -> int:
         """Lift Android's cap on how many users - i.e. clones - can exist.
