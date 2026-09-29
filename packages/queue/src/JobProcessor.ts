@@ -3,6 +3,7 @@ import {
   JobCancelledError,
   nowIso,
   ShareRestrictedError,
+  type BrowserSessionView,
   type Job,
   type JobError,
   type LoginStatus,
@@ -73,13 +74,16 @@ export class JobProcessor {
     events.publish({ type: 'job.started', timestamp: nowIso(), payload: started });
 
     const startedAtMs = Date.now();
+    let openedHere = false;
 
     try {
       await this.refuseIfShareRestricted(started);
 
       // A job needs a browser. Starting one here — rather than refusing —
       // means a queued job survives an operator having closed the window.
-      const session = await this.ensureBrowser(started.accountId);
+      const browser = await this.ensureBrowser(started.accountId);
+      const session = browser.session;
+      openedHere = browser.openedHere;
       await this.setAccountStatus(started.accountId, 'busy');
 
       const result = await this.deps.gateway.execute(started.payload, {
@@ -125,6 +129,21 @@ export class JobProcessor {
       await this.applyFailure(started, error);
       return this.handleFailure(started, error, signal);
     } finally {
+      // Close the browser this job opened, so a batch across many accounts
+      // does not leave a Chromium per account running until the machine is
+      // out of memory. A browser opened by an operator (openedHere false) is
+      // left alone — a person may still be in it.
+      if (openedHere && this.deps.browsers.isRunning(started.accountId)) {
+        try {
+          await this.deps.browsers.stop(started.accountId, 'job finished');
+        } catch (error) {
+          this.deps.logger.warn('Could not close the job browser', {
+            event: 'browser.close_failed',
+            accountId: started.accountId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       // The account goes back to idle whatever happened, so one bad job does
       // not leave an account looking busy for ever.
       await this.setAccountStatus(started.accountId, 'online');
@@ -299,10 +318,19 @@ export class JobProcessor {
     return { job: cancelled, status: 'cancelled' };
   }
 
-  private async ensureBrowser(accountId: string) {
+  /**
+   * The browser a job runs in. Reuses one already open — an operator's window,
+   * or a browser a previous job left for reuse — and otherwise opens one,
+   * reporting which, so the caller closes only what it opened. Without that a
+   * batch across many accounts opens a browser per account and never closes
+   * one, and the machine runs out of memory long before the queue drains.
+   */
+  private async ensureBrowser(
+    accountId: string,
+  ): Promise<{ session: BrowserSessionView; openedHere: boolean }> {
     const existing = this.deps.browsers.get(accountId);
-    if (existing !== null) return existing;
-    return this.deps.browsers.start(accountId);
+    if (existing !== null) return { session: existing, openedHere: false };
+    return { session: await this.deps.browsers.start(accountId), openedHere: true };
   }
 
   private async reportProgress(job: Job, progress: number, step: string): Promise<void> {

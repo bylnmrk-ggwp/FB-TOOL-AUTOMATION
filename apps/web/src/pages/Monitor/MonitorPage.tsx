@@ -2,19 +2,15 @@ import type { ReactElement } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  AccountStatusDot,
-  JobStatusDot,
-  StatusDot,
-  type StatusTone,
-} from '@/components/common/StatusDot';
+import { JobStatusDot, StatusDot, type StatusTone } from '@/components/common/StatusDot';
 import { EmptyState } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { useAllAccounts, useSessions } from '../../features/accounts/hooks';
 import { OperatorPrompts } from '../../features/monitoring/components/OperatorPrompts';
+import { BrowserGrid } from '../../features/monitoring/components/BrowserGrid';
 import { useJobs } from '../../features/queue/hooks';
 import { useLiveStore, type ConnectionState } from '../../features/automation/liveStore';
-import { clockTime, humanise, relativeTime } from '../../lib/format';
+import { clockTime, humanise } from '../../lib/format';
 
 const CONNECTION: Record<ConnectionState, { tone: StatusTone; label: string }> = {
   connecting: { tone: 'warn', label: 'Connecting to the live feed' },
@@ -67,68 +63,48 @@ export const MonitorPage = (): ReactElement => {
 
       <OperatorPrompts accountName={accountName} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title={`Running work (${activeJobs.length})`}>
-          {activeJobs.length === 0 ? (
-            <div className="p-4">
-              <EmptyState title="Nothing is running" description="Queued work appears here." />
-            </div>
-          ) : (
-            <ul className="divide-y">
-              {activeJobs.map((job) => {
-                const live = progress[job.id];
-                const value = live?.progress ?? job.progress;
-                return (
-                  <li key={job.id} className="grid gap-2 px-5 py-3">
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="font-medium">{humanise(job.type)}</span>
-                      <JobStatusDot status={job.status} />
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {accountName(job.accountId)}
-                    </span>
-                    <Progress value={value} className="h-1.5" />
-                    <span className="text-xs text-muted-foreground">
-                      {live?.step ?? 'Waiting for a worker'}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel title={`Browsers (${openSessions.length})`}>
-          {openSessions.length === 0 ? (
-            <div className="p-4">
-              <EmptyState
-                title="No browser is open"
-                description="Start one from the Accounts page."
-              />
-            </div>
-          ) : (
-            <ul className="divide-y">
-              {openSessions.map((session) => (
-                <li key={session.sessionId} className="grid gap-1 px-5 py-3">
+      <Panel title={`Running work (${activeJobs.length})`}>
+        {activeJobs.length === 0 ? (
+          <div className="p-4">
+            <EmptyState title="Nothing is running" description="Queued work appears here." />
+          </div>
+        ) : (
+          <ul className="divide-y">
+            {activeJobs.map((job) => {
+              const live = progress[job.id];
+              const value = live?.progress ?? job.progress;
+              return (
+                <li key={job.id} className="grid gap-2 px-5 py-3">
                   <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="font-medium">{accountName(session.accountId)}</span>
-                    <AccountStatusDot status={session.status} />
+                    <span className="font-medium">{humanise(job.type)}</span>
+                    <JobStatusDot status={job.status} />
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    {session.headless ? 'Headless' : 'Visible window'}, started{' '}
-                    {relativeTime(session.startedAt)}
+                    {accountName(job.accountId)}
                   </span>
-                  {session.currentUrl !== null && (
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      {session.currentUrl}
-                    </span>
-                  )}
+                  <Progress value={value} className="h-1.5" />
+                  <span className="text-xs text-muted-foreground">
+                    {live?.step ?? 'Waiting for a worker'}
+                  </span>
                 </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </div>
+              );
+            })}
+          </ul>
+        )}
+      </Panel>
+
+      <Panel title={`Browsers (${openSessions.length})`}>
+        {openSessions.length === 0 ? (
+          <div className="p-4">
+            <EmptyState
+              title="No browser is open"
+              description="Start one from the Accounts page, or run a batch."
+            />
+          </div>
+        ) : (
+          <BrowserGrid sessions={openSessions} accountName={accountName} />
+        )}
+      </Panel>
 
       <Panel title="Event stream">
         {recent.length === 0 ? (

@@ -65,6 +65,10 @@ export class FakeBrowserController implements BrowserController {
     return [...this.sessions.values()];
   }
 
+  async screenshot(accountId: string): Promise<Uint8Array | null> {
+    return this.isRunning(accountId) ? new Uint8Array([0xff, 0xd8, 0xff]) : null;
+  }
+
   isRunning(accountId: string): boolean {
     return this.sessions.has(accountId);
   }

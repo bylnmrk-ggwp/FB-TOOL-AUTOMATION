@@ -30,7 +30,9 @@ export class SqliteConnection {
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA synchronous = NORMAL');
     this.db.exec('PRAGMA foreign_keys = ON');
-    this.db.exec('PRAGMA busy_timeout = 5000');
+    // Generous, because a busy wait is cheaper than a failed write when
+    // several workers commit at once.
+    this.db.exec('PRAGMA busy_timeout = 15000');
   }
 
   get path(): string {
@@ -57,7 +59,16 @@ export class SqliteConnection {
           this.db.exec('COMMIT');
           return result;
         } catch (error) {
-          this.db.exec('ROLLBACK');
+          // The original error is what the caller must see. A ROLLBACK that
+          // itself throws — because BEGIN never took, or COMMIT already ran —
+          // must not replace it, and above all must not escape unhandled and
+          // kill the process, which is what a bare ROLLBACK here once did
+          // under concurrent load.
+          try {
+            this.db.exec('ROLLBACK');
+          } catch {
+            // No transaction was active; nothing to undo.
+          }
           throw error;
         }
       }),

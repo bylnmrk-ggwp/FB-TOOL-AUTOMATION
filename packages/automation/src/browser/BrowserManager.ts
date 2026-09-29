@@ -142,6 +142,22 @@ export class BrowserManager implements BrowserController {
     return this.sessions.get(accountId)?.context ?? null;
   }
 
+  /**
+   * A JPEG of the account's active page, for the live grid. Small and lossy
+   * on purpose — it is a thumbnail refreshed every few seconds, not a record.
+   * A page mid-navigation can refuse the shot; that is a null, not an error.
+   */
+  async screenshot(accountId: string): Promise<Uint8Array | null> {
+    const running = this.sessions.get(accountId);
+    if (running === undefined) return null;
+    try {
+      const page = await this.contexts.activePage(running.context);
+      return await page.screenshot({ type: 'jpeg', quality: 45, timeout: 5_000 });
+    } catch {
+      return null;
+    }
+  }
+
   /** Refreshes the recorded URL, which the Monitor page displays. */
   async refreshUrl(accountId: string): Promise<string | null> {
     const running = this.sessions.get(accountId);

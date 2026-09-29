@@ -70,7 +70,7 @@ const Brand = (): ReactElement => (
       alt="MCARSPH"
       width={381}
       height={132}
-      className="h-auto w-full max-w-[170px]"
+      className="h-auto w-full max-w-[112px]"
     />
   </div>
 );

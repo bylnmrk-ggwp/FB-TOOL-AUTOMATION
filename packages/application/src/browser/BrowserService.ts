@@ -188,6 +188,11 @@ export class BrowserService {
     return this.deps.controller.isRunning(accountId);
   }
 
+  /** A JPEG of the account's live page for the grid, or null if none is open. */
+  screenshot(accountId: string): Promise<Uint8Array | null> {
+    return this.deps.controller.screenshot(accountId);
+  }
+
   /**
    * A browser that went away on its own still has to leave the system tidy:
    * the lock goes back, the account stops claiming to be online, and the UI is

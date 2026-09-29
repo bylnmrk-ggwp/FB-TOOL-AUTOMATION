@@ -84,6 +84,9 @@ export const useSessions = (): UseQueryResult<BrowserSessionView[]> =>
   useQuery({
     queryKey: accountKeys.sessions,
     queryFn: async ({ signal }) => (await listSessions(signal)).sessions,
+    // The Monitor grid needs the roster of open browsers fresh, since a
+    // headless batch opens and closes them without any WebSocket frame.
+    refetchInterval: 3_000,
   });
 
 /** Every account mutation invalidates the same set, so they share one helper. */
