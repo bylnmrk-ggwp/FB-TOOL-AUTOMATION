@@ -20,6 +20,7 @@ export interface NewAccount {
   phone?: string | null;
   facebookName?: string | null;
   proxyUrl?: string | null;
+  totpSecret?: string | null;
 }
 
 export interface AccountPatch {
@@ -38,6 +39,7 @@ export interface AccountPatch {
   facebookName?: string | null;
   profileUrl?: string | null;
   proxyUrl?: string | null;
+  totpSecret?: string | null;
   loginStatus?: LoginStatus;
   loginReason?: string | null;
   lastLoginCheckAt?: string | null;
@@ -55,6 +57,8 @@ export interface AccountCredentials {
   gmailPassword: string | null;
   /** The raw proxy string, credentials included; parsed at launch. */
   proxyUrl: string | null;
+  /** Base32 authenticator secret, for answering two-factor. */
+  totpSecret: string | null;
 }
 
 export const assertAccountUsable = (account: Account): void => {

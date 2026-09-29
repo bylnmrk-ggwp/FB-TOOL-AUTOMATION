@@ -23,6 +23,10 @@ export const authenticationSelectors = {
   /** Shown when Facebook wants a checkpoint or a code before letting us in. */
   checkpointHeading: { role: 'heading', name: /we need to confirm|checkpoint|suspicious/i },
   twoFactorPrompt: { role: 'heading', name: /two-factor|enter (login|security) code/i },
+  /** The 6-digit login-code field on the two-factor page. */
+  twoFactorCodeField:
+    'input[name="approvals_code"], input[autocomplete="one-time-code"], input[name="code"], input[type="tel"][maxlength="6"], input[aria-label*="code" i]',
+  twoFactorContinue: { role: 'button', name: /continue|submit|next|confirm/i },
 
   /** The reCAPTCHA checkbox lives in the anchor frame; the puzzle in bframe. */
   recaptchaAnchor: '#recaptcha-anchor',

@@ -20,7 +20,11 @@ export class FakeBrowserController implements BrowserController {
   /** Set to make the next launch fail, the way a missing binary would. */
   failNextLaunch: Error | null = null;
 
+  /** How many times a browser was launched, so a test can prove one started. */
+  startCount = 0;
+
   async start(options: StartBrowserOptions): Promise<BrowserSession> {
+    this.startCount += 1;
     if (this.failNextLaunch !== null) {
       const error = this.failNextLaunch;
       this.failNextLaunch = null;

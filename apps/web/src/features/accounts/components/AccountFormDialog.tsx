@@ -26,6 +26,7 @@ interface FormState {
   phone: string;
   facebookName: string;
   proxyUrl: string;
+  totpSecret: string;
 }
 
 const emptyForm: FormState = {
@@ -39,6 +40,7 @@ const emptyForm: FormState = {
   phone: '',
   facebookName: '',
   proxyUrl: '',
+  totpSecret: '',
 };
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim());
@@ -82,6 +84,7 @@ export const AccountFormDialog = ({
             phone: account.phone ?? '',
             facebookName: account.facebookName ?? '',
             proxyUrl: '',
+            totpSecret: '',
           },
     );
     // Resetting depends only on which account the dialog was opened for.
@@ -102,6 +105,7 @@ export const AccountFormDialog = ({
       phone: orNull(form.phone),
       facebookName: orNull(form.facebookName),
       proxyUrl: form.proxyUrl.trim() === '' ? undefined : form.proxyUrl.trim(),
+      totpSecret: form.totpSecret.trim() === '' ? undefined : form.totpSecret.trim(),
     };
 
     // Validated with the same schema the server uses, so the message a person
@@ -241,6 +245,15 @@ export const AccountFormDialog = ({
           autoComplete="off"
           hint="This account's browser sends every request through it. Formats: host:port, host:port:user:pass, or scheme://user:pass@host:port."
           onChange={(event) => set('proxyUrl', event.target.value)}
+        />
+
+        <TextField
+          label="Authenticator secret"
+          value={form.totpSecret}
+          placeholder={account?.hasTotp ? '•••••••••••• (stored)' : 'base32, e.g. JBSWY3DPEHPK3PXP'}
+          autoComplete="off"
+          hint="The two-factor secret an authenticator app would scan. Stored, and used to answer a login code automatically."
+          onChange={(event) => set('totpSecret', event.target.value)}
         />
 
         <CheckboxField

@@ -20,6 +20,8 @@ const HEADERS = {
   gmailPassword: ['PASS FOR GMAIL', 'GMAIL PASSWORD', 'GMAIL PASS'],
   phone: ['NUMBER', 'PHONE', 'MOBILE'],
   proxy: ['PROXY', 'PROXIES', 'IP'],
+  // The authenticator secret column: the base32 an app would scan from a QR.
+  totp: ['2FA', '2FA SECRET', 'TOTP', 'TOTP SECRET', 'AUTHENTICATOR', '2FA KEY', 'OTP'],
   // A blank or numeric label counts only in the first column; see mapHeaders.
   sheetNo: ['NO', 'NO.', '#'],
 } as const;
@@ -83,6 +85,7 @@ export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] =
       gmailPassword: orNull(cell(row, columns.gmailPassword)),
       phone: orNull(cell(row, columns.phone)),
       proxyUrl: orNull(cell(row, columns.proxy)),
+      totpSecret: orNull(cell(row, columns.totp)),
     });
   });
 

@@ -45,6 +45,8 @@ export const AccountSchema = z.object({
   /** The proxy server (scheme://host:port), never its credentials. */
   proxyServer: z.string().max(300).nullable(),
   hasProxy: z.boolean(),
+  /** Whether an authenticator secret is stored; the secret itself never leaves the server. */
+  hasTotp: z.boolean(),
 
   loginStatus: LoginStatusSchema,
   loginReason: z.string().nullable(),
@@ -86,6 +88,8 @@ export const AccountCredentialsSchema = z.object({
   sheetNo: z.number().int().nullable().optional(),
   /** One string: host:port, host:port:user:pass, or scheme://user:pass@host:port. Empty leaves it; null clears it. */
   proxyUrl: z.string().trim().max(300).nullable().optional(),
+  /** Base32 authenticator secret for two-factor. Empty leaves it; null clears it. */
+  totpSecret: z.string().trim().max(200).nullable().optional(),
 });
 export type AccountCredentialsInput = z.infer<typeof AccountCredentialsSchema>;
 
@@ -167,6 +171,7 @@ export const RosterRowSchema = z.object({
   gmailPassword: z.string().nullable(),
   phone: z.string().nullable(),
   proxyUrl: z.string().nullable(),
+  totpSecret: z.string().nullable(),
 });
 export type RosterRow = z.infer<typeof RosterRowSchema>;
 

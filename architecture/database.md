@@ -33,6 +33,7 @@ startup.
 | `facebook_name`            | text, null                       | The name Facebook shows, as last read from the profile                                                                                 |
 | `profile_url`              | text, null                       |                                                                                                                                        |
 | `proxy_url`                | text, null                       | The account's proxy, credentials included; parsed at launch. Every request from its browser goes through it. Never returned by the API |
+| `totp_secret`              | text, null                       | Base32 authenticator secret. The login job generates the current code from it to answer a two-factor prompt. Never returned by the API |
 | `login_status`             | text                             | `unknown` `logged_in` `logged_out` `checkpoint` `two_factor` `email_confirmation` `captcha` `disabled` `restricted`                    |
 | `login_reason`             | text, null                       | The verdict in words                                                                                                                   |
 | `last_login_check_at`      | text, null                       | ISO-8601                                                                                                                               |

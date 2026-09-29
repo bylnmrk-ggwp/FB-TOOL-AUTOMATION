@@ -28,6 +28,8 @@ export const accounts = sqliteTable(
     profileUrl: text('profile_url'),
     // The proxy string with its credentials, as pasted; parsed at launch.
     proxyUrl: text('proxy_url'),
+    // Base32 authenticator secret, for answering two-factor at login.
+    totpSecret: text('totp_secret'),
 
     loginStatus: text('login_status', { enum: LOGIN_STATUSES }).notNull().default('unknown'),
     loginReason: text('login_reason'),

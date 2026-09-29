@@ -30,6 +30,7 @@ const DIRECT_FIELDS = [
   'facebookName',
   'profileUrl',
   'proxyUrl',
+  'totpSecret',
   'loginStatus',
   'loginReason',
   'lastLoginCheckAt',
@@ -59,6 +60,7 @@ export class AccountRepositoryImpl implements AccountRepository {
       facebookName: account.facebookName ?? null,
       profileUrl: null,
       proxyUrl: account.proxyUrl ?? null,
+      totpSecret: account.totpSecret ?? null,
       loginStatus: 'unknown',
       loginReason: null,
       lastLoginCheckAt: null,
@@ -190,6 +192,7 @@ export class AccountRepositoryImpl implements AccountRepository {
         gmail: accounts.gmail,
         gmailPassword: accounts.gmailPassword,
         proxyUrl: accounts.proxyUrl,
+        totpSecret: accounts.totpSecret,
       })
       .from(accounts)
       .where(eq(accounts.id, id))

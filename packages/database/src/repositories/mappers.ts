@@ -44,6 +44,7 @@ export const toAccount = (row: AccountRow): Account => ({
   profileUrl: row.profileUrl,
   proxyServer: proxyDisplay(row.proxyUrl),
   hasProxy: row.proxyUrl !== null && row.proxyUrl !== '',
+  hasTotp: row.totpSecret !== null && row.totpSecret !== '',
   loginStatus: row.loginStatus,
   loginReason: row.loginReason,
   lastLoginCheckAt: row.lastLoginCheckAt,

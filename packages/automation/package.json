@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./totp": {
+      "types": "./dist/totp/totp.d.ts",
+      "default": "./dist/totp/totp.js"
     }
   },
   "files": [

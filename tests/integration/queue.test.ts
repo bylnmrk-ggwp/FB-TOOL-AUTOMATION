@@ -65,11 +65,15 @@ describe('Queue', () => {
     expect(server.gateway.executions).toHaveLength(1);
   });
 
-  it('starts a browser for a job when none is running', async () => {
+  it('starts a browser for a job, then closes it when the job finishes', async () => {
     const created = await createJob({ accountId, action: POST });
     await waitForStatus(server, created.json().id, ['completed']);
 
-    expect(server.browser.isRunning(accountId)).toBe(true);
+    // The queue opened a browser for the job...
+    expect(server.browser.startCount).toBeGreaterThan(0);
+    // ...and closed the one it opened, so a batch cannot leave a browser per
+    // account running until the machine is out of memory.
+    expect(server.browser.isRunning(accountId)).toBe(false);
   });
 
   it('reports progress and the finished state over the event bus', async () => {

@@ -39,7 +39,7 @@ export const ImportRosterDialog = ({ open, onClose }: ImportRosterDialogProps): 
     <Modal
       open={open}
       title="Import the roster"
-      description="Columns are matched by their header — FACEBOOK NAME, USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER, PROXY. Only rows with both a username and a password count. The row number in column A is the key; a known number is updated, a new one becomes an account, and a roster account whose row stops counting is removed."
+      description="Columns are matched by their header — FACEBOOK NAME, USERNAME, PASSWORD, GMAIL, PASS FOR GMAIL, NUMBER, PROXY, 2FA. Only rows with both a username and a password count. The row number in column A is the key; a known number is updated, a new one becomes an account, and a roster account whose row stops counting is removed."
       onClose={onClose}
       size="wide"
       footer={

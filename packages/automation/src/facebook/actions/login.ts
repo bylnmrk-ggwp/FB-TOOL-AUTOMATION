@@ -13,6 +13,7 @@ import {
 } from '../selectors/authentication.selectors.js';
 import { navigationSelectors } from '../selectors/navigation.selectors.js';
 import { clickLike, humanType, settle } from '../humanInput.js';
+import { generateTotp } from '../../totp/totp.js';
 import { readMyProfile } from './profile.js';
 import { firstVisible, step, throwIfCancelled, type ActionContext } from './types.js';
 
@@ -136,6 +137,25 @@ export const login = async (
   step(context, 75, 'Checking for a checkpoint or code prompt');
   const gate = gateOf(page.url());
   if (gate !== null) {
+    // A two-factor prompt with a stored authenticator secret is answered here,
+    // from the secret, without a person or a phone. Anything else — a
+    // checkpoint, an email confirmation, or 2FA with no secret — still needs
+    // the operator or fails, exactly as before.
+    if (gate.status === 'two_factor' && input.credentials.totpSecret !== null) {
+      step(context, 80, 'Entering the authenticator code');
+      if (await enterTotp(context, input.credentials.totpSecret)) {
+        if (await session.isLoggedIn(page, 10_000)) {
+          const me = await readMyProfile(context);
+          return verdictResult(startedAt, {
+            loginStatus: 'logged_in',
+            loginReason: 'signed in with a two-factor code',
+            facebookName: me.name,
+            profileUrl: me.url,
+          });
+        }
+      }
+      // The code did not clear it: fall through to the operator or the verdict.
+    }
     if (!input.waitForOperator) {
       // A gate URL can clear itself within seconds; judging the first frame
       // reported working accounts as gated.
@@ -189,6 +209,45 @@ export const login = async (
     throw new LoginFailedError(`left Facebook for ${where.slice(0, 80)}`);
   }
   throw new LoginFailedError('the page ended somewhere that is not a signed-in Facebook');
+};
+
+/**
+ * Types the current authenticator code into the two-factor field and submits.
+ * Two codes are tried across a fresh 30-second window, since the first can
+ * land in the last second of a step; false means neither was accepted or the
+ * field never appeared, and the caller falls back.
+ */
+const enterTotp = async (context: ActionContext, secret: string): Promise<boolean> => {
+  const { page } = context;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const field = await firstVisible(
+      [page.locator(authenticationSelectors.twoFactorCodeField)],
+      8_000,
+    );
+    if (field === null) return false;
+
+    const code = generateTotp(secret);
+    await field.fill('');
+    await humanType(page, field, code);
+    await sleep(400 + Math.random() * 500);
+
+    const button = await firstVisible(
+      [page.getByRole('button', authenticationSelectors.twoFactorContinue)],
+      4_000,
+    );
+    if (button === null) await page.keyboard.press('Enter');
+    else await clickLike(page, button);
+    await sleep(4_000 + Math.random() * 2_000);
+
+    if (await context.session.isLoggedIn(page, 6_000)) return true;
+    // Still on the code page: a wrong or stale code. Wait out the step and
+    // try once more with a freshly generated one.
+    if (attempt === 0) {
+      context.log('The first authenticator code was not accepted; trying the next window');
+      await sleep(Math.max(0, 30_000 - (Math.floor(Date.now() / 1000) % 30) * 1_000));
+    }
+  }
+  return false;
 };
 
 /**
