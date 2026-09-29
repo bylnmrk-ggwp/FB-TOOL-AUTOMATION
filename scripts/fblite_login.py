@@ -361,6 +361,10 @@ def main(argv) -> int:
                     help="adb serial of the LDPlayer instance")
     ap.add_argument("--only", nargs="*", metavar="USERNAME", default=None)
     ap.add_argument("--count", type=int, default=None)
+    ap.add_argument("--shard", metavar="i/m", default=None,
+                    help="run only shard i of m (0-based), so several "
+                         "instances split the roster without overlap, e.g. "
+                         "--shard 0/2 on one and --shard 1/2 on another")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--clear", action="store_true",
                     help="wipe Facebook Lite between accounts - DESTROYS the "
@@ -397,6 +401,22 @@ def main(argv) -> int:
         accounts = [a for a in accounts
                     if (a.get("sheet_status") or "").strip().upper()
                     not in _done]
+    if args.shard:
+        try:
+            i, m = (int(x) for x in args.shard.split("/"))
+        except ValueError:
+            print(f"--shard must be i/m, e.g. 0/2; got {args.shard!r}")
+            return 1
+        if not (m > 0 and 0 <= i < m):
+            print(f"--shard i/m needs 0 <= i < m and m > 0; got {args.shard!r}")
+            return 1
+        # Partition by a stable hash of the username, not list position or the
+        # built-in hash() (which is per-process randomized), so two instances
+        # reading the roster independently agree on who owns each account -
+        # never the same one twice, never a gap.
+        import zlib
+        accounts = [a for a in accounts
+                    if zlib.crc32(a["username"].encode()) % m == i]
     if args.only:
         wanted = {u.strip().lower() for u in args.only if u.strip()}
         accounts = [a for a in accounts if a["username"].lower() in wanted]
