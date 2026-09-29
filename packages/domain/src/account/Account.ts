@@ -19,6 +19,7 @@ export interface NewAccount {
   gmailPassword?: string | null;
   phone?: string | null;
   facebookName?: string | null;
+  proxyUrl?: string | null;
 }
 
 export interface AccountPatch {
@@ -36,6 +37,7 @@ export interface AccountPatch {
   phone?: string | null;
   facebookName?: string | null;
   profileUrl?: string | null;
+  proxyUrl?: string | null;
   loginStatus?: LoginStatus;
   loginReason?: string | null;
   lastLoginCheckAt?: string | null;
@@ -51,6 +53,8 @@ export interface AccountCredentials {
   password: string | null;
   gmail: string | null;
   gmailPassword: string | null;
+  /** The raw proxy string, credentials included; parsed at launch. */
+  proxyUrl: string | null;
 }
 
 export const assertAccountUsable = (account: Account): void => {

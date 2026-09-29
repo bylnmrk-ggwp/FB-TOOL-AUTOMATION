@@ -26,6 +26,8 @@ export const accounts = sqliteTable(
     phone: text('phone'),
     facebookName: text('facebook_name'),
     profileUrl: text('profile_url'),
+    // The proxy string with its credentials, as pasted; parsed at launch.
+    proxyUrl: text('proxy_url'),
 
     loginStatus: text('login_status', { enum: LOGIN_STATUSES }).notNull().default('unknown'),
     loginReason: text('login_reason'),

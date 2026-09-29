@@ -5,6 +5,7 @@ import {
   BrowserNotRunningError,
   createId,
   nowIso,
+  parseProxy,
   ProfileNotFoundError,
   type AccountStatus,
   type BrowserSessionView,
@@ -82,6 +83,11 @@ export class BrowserService {
     const profile = await repositories.profiles.findByAccountId(accountId);
     if (profile === null) throw new ProfileNotFoundError(account.profileId);
 
+    // Read separately: the proxy string carries a password, so it lives with
+    // the credentials the API never returns, not on the account view.
+    const credentials = await repositories.accounts.credentials(accountId);
+    const proxy = parseProxy(credentials?.proxyUrl ?? null);
+
     const sessionId = createId('ses');
     const owner = `${workerId}:${sessionId}`;
 
@@ -99,6 +105,7 @@ export class BrowserService {
         executablePath: settings.browserExecutablePath,
         headless: headless ?? settings.headless,
         timeoutMs: settings.defaultTimeoutMs,
+        ...(proxy === null ? {} : { proxy }),
       });
 
       await this.setStatus(account.id, 'online', null);

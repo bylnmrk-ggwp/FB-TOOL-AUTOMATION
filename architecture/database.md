@@ -16,29 +16,30 @@ startup.
 
 ### `accounts`
 
-| Column                     | Type                             | Notes                                                                                                               |
-| -------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `id`                       | text, PK                         | `acc_<time>_<random>`                                                                                               |
-| `name`                     | text, unique                     | Operator-facing identifier                                                                                          |
-| `display_name`             | text                             | Shown in the UI                                                                                                     |
-| `profile_id`               | text, FK → `browser_profiles.id` | One profile per account                                                                                             |
-| `status`                   | text                             | `offline` `starting` `online` `busy` `stopping` `error`                                                             |
-| `enabled`                  | integer (0/1)                    | Disabled accounts are never scheduled                                                                               |
-| `sheet_no`                 | integer, null                    | Row number on the roster sheet                                                                                      |
-| `username`                 | text, null                       | Facebook sign-in identifier; the key a roster import matches on                                                     |
-| `password`                 | text, null                       | As the roster supplied it; typed by the login job, never returned                                                   |
-| `gmail`                    | text, null                       |                                                                                                                     |
-| `gmail_password`           | text, null                       | As supplied; never returned                                                                                         |
-| `phone`                    | text, null                       |                                                                                                                     |
-| `facebook_name`            | text, null                       | The name Facebook shows, as last read from the profile                                                              |
-| `profile_url`              | text, null                       |                                                                                                                     |
-| `login_status`             | text                             | `unknown` `logged_in` `logged_out` `checkpoint` `two_factor` `email_confirmation` `captcha` `disabled` `restricted` |
-| `login_reason`             | text, null                       | The verdict in words                                                                                                |
-| `last_login_check_at`      | text, null                       | ISO-8601                                                                                                            |
-| `share_restricted_until`   | text, null                       | Share jobs are refused until this passes; set for twelve hours when Facebook refuses a share by naming the account  |
-| `last_error`               | text, null                       | Set when `status = 'error'`                                                                                         |
-| `last_active_at`           | text, null                       | ISO-8601                                                                                                            |
-| `created_at`, `updated_at` | text                             | ISO-8601                                                                                                            |
+| Column                     | Type                             | Notes                                                                                                                                  |
+| -------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                       | text, PK                         | `acc_<time>_<random>`                                                                                                                  |
+| `name`                     | text, unique                     | Operator-facing identifier                                                                                                             |
+| `display_name`             | text                             | Shown in the UI                                                                                                                        |
+| `profile_id`               | text, FK → `browser_profiles.id` | One profile per account                                                                                                                |
+| `status`                   | text                             | `offline` `starting` `online` `busy` `stopping` `error`                                                                                |
+| `enabled`                  | integer (0/1)                    | Disabled accounts are never scheduled                                                                                                  |
+| `sheet_no`                 | integer, null                    | Row number on the roster sheet                                                                                                         |
+| `username`                 | text, null                       | Facebook sign-in identifier; the key a roster import matches on                                                                        |
+| `password`                 | text, null                       | As the roster supplied it; typed by the login job, never returned                                                                      |
+| `gmail`                    | text, null                       |                                                                                                                                        |
+| `gmail_password`           | text, null                       | As supplied; never returned                                                                                                            |
+| `phone`                    | text, null                       |                                                                                                                                        |
+| `facebook_name`            | text, null                       | The name Facebook shows, as last read from the profile                                                                                 |
+| `profile_url`              | text, null                       |                                                                                                                                        |
+| `proxy_url`                | text, null                       | The account's proxy, credentials included; parsed at launch. Every request from its browser goes through it. Never returned by the API |
+| `login_status`             | text                             | `unknown` `logged_in` `logged_out` `checkpoint` `two_factor` `email_confirmation` `captcha` `disabled` `restricted`                    |
+| `login_reason`             | text, null                       | The verdict in words                                                                                                                   |
+| `last_login_check_at`      | text, null                       | ISO-8601                                                                                                                               |
+| `share_restricted_until`   | text, null                       | Share jobs are refused until this passes; set for twelve hours when Facebook refuses a share by naming the account                     |
+| `last_error`               | text, null                       | Set when `status = 'error'`                                                                                                            |
+| `last_active_at`           | text, null                       | ISO-8601                                                                                                                               |
+| `created_at`, `updated_at` | text                             | ISO-8601                                                                                                                               |
 
 Indexes: unique on `name`, index on `status`, `enabled`, `username` and
 `login_status`.

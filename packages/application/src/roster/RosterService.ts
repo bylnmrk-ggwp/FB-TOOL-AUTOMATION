@@ -19,6 +19,7 @@ const HEADERS = {
   gmail: ['GMAIL', 'GMAIL ACCOUNT'],
   gmailPassword: ['PASS FOR GMAIL', 'GMAIL PASSWORD', 'GMAIL PASS'],
   phone: ['NUMBER', 'PHONE', 'MOBILE'],
+  proxy: ['PROXY', 'PROXIES', 'IP'],
   // A blank or numeric label counts only in the first column; see mapHeaders.
   sheetNo: ['NO', 'NO.', '#'],
 } as const;
@@ -81,6 +82,7 @@ export const parseRoster = (rows: readonly (readonly string[])[]): RosterRow[] =
       gmail: orNull(cell(row, columns.gmail)),
       gmailPassword: orNull(cell(row, columns.gmailPassword)),
       phone: orNull(cell(row, columns.phone)),
+      proxyUrl: orNull(cell(row, columns.proxy)),
     });
   });
 

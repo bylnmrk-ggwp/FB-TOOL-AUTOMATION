@@ -42,6 +42,9 @@ export const AccountSchema = z.object({
   /** The name Facebook shows, as last read from the profile. */
   facebookName: z.string().max(200).nullable(),
   profileUrl: z.string().max(500).nullable(),
+  /** The proxy server (scheme://host:port), never its credentials. */
+  proxyServer: z.string().max(300).nullable(),
+  hasProxy: z.boolean(),
 
   loginStatus: LoginStatusSchema,
   loginReason: z.string().nullable(),
@@ -81,6 +84,8 @@ export const AccountCredentialsSchema = z.object({
   phone: z.string().trim().max(60).nullable().optional(),
   facebookName: z.string().trim().max(200).nullable().optional(),
   sheetNo: z.number().int().nullable().optional(),
+  /** One string: host:port, host:port:user:pass, or scheme://user:pass@host:port. Empty leaves it; null clears it. */
+  proxyUrl: z.string().trim().max(300).nullable().optional(),
 });
 export type AccountCredentialsInput = z.infer<typeof AccountCredentialsSchema>;
 
@@ -161,6 +166,7 @@ export const RosterRowSchema = z.object({
   gmail: z.string().nullable(),
   gmailPassword: z.string().nullable(),
   phone: z.string().nullable(),
+  proxyUrl: z.string().nullable(),
 });
 export type RosterRow = z.infer<typeof RosterRowSchema>;
 

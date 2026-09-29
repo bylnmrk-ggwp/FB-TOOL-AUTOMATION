@@ -11,6 +11,7 @@ import {
   type Job,
   type JobError,
   type LogEntry,
+  proxyDisplay,
 } from '@fb/shared';
 import type { AccountRow } from '../schema/accounts.js';
 import type { BrowserProfileRow } from '../schema/browserProfiles.js';
@@ -41,6 +42,8 @@ export const toAccount = (row: AccountRow): Account => ({
   phone: row.phone,
   facebookName: row.facebookName,
   profileUrl: row.profileUrl,
+  proxyServer: proxyDisplay(row.proxyUrl),
+  hasProxy: row.proxyUrl !== null && row.proxyUrl !== '',
   loginStatus: row.loginStatus,
   loginReason: row.loginReason,
   lastLoginCheckAt: row.lastLoginCheckAt,

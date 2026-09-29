@@ -24,6 +24,8 @@ export interface StartBrowserOptions {
   executablePath: string | null;
   headless: boolean;
   timeoutMs: number;
+  /** The account's proxy, already parsed; every request from this browser goes through it. */
+  proxy?: { server: string; username?: string; password?: string };
 }
 
 /** Why a session ended, as far as the controller could tell. */

@@ -25,6 +25,7 @@ interface FormState {
   gmailPassword: string;
   phone: string;
   facebookName: string;
+  proxyUrl: string;
 }
 
 const emptyForm: FormState = {
@@ -37,6 +38,7 @@ const emptyForm: FormState = {
   gmailPassword: '',
   phone: '',
   facebookName: '',
+  proxyUrl: '',
 };
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim());
@@ -79,6 +81,7 @@ export const AccountFormDialog = ({
             gmailPassword: '',
             phone: account.phone ?? '',
             facebookName: account.facebookName ?? '',
+            proxyUrl: '',
           },
     );
     // Resetting depends only on which account the dialog was opened for.
@@ -98,6 +101,7 @@ export const AccountFormDialog = ({
       gmailPassword: form.gmailPassword,
       phone: orNull(form.phone),
       facebookName: orNull(form.facebookName),
+      proxyUrl: form.proxyUrl.trim() === '' ? undefined : form.proxyUrl.trim(),
     };
 
     // Validated with the same schema the server uses, so the message a person
@@ -225,6 +229,19 @@ export const AccountFormDialog = ({
             onChange={(event) => set('facebookName', event.target.value)}
           />
         </div>
+
+        <TextField
+          label="Proxy"
+          value={form.proxyUrl}
+          placeholder={
+            account?.hasProxy
+              ? `${account.proxyServer ?? 'stored'} (stored)`
+              : 'host:port:user:pass'
+          }
+          autoComplete="off"
+          hint="This account's browser sends every request through it. Formats: host:port, host:port:user:pass, or scheme://user:pass@host:port."
+          onChange={(event) => set('proxyUrl', event.target.value)}
+        />
 
         <CheckboxField
           label="Enabled"

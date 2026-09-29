@@ -51,6 +51,9 @@ export class BrowserLauncher {
         // A locale the timezone and Accept-Language agree with; a missing or
         // mismatched one is itself a signal.
         locale: 'en-US',
+        // Every request from this profile leaves through the account's proxy,
+        // so its Facebook traffic shares one steady IP.
+        ...(options.proxy === undefined ? {} : { proxy: options.proxy }),
         ignoreDefaultArgs: ['--enable-automation'],
         ...binary,
         // A background browser must still look like the one a person opens:

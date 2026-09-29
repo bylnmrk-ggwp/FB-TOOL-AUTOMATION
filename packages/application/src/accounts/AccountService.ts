@@ -47,6 +47,9 @@ const credentialPatch = (input: AccountCredentialsInput): AccountPatch => {
   if (input.phone !== undefined) patch.phone = input.phone;
   if (input.facebookName !== undefined) patch.facebookName = input.facebookName;
   if (input.sheetNo !== undefined) patch.sheetNo = input.sheetNo;
+  // Empty leaves the stored proxy alone (the form cannot show it); null clears.
+  if (input.proxyUrl !== undefined && input.proxyUrl !== '') patch.proxyUrl = input.proxyUrl;
+  if (input.proxyUrl === null) patch.proxyUrl = null;
   if (input.password !== undefined && input.password !== '') patch.password = input.password;
   if (input.gmailPassword !== undefined && input.gmailPassword !== '') {
     patch.gmailPassword = input.gmailPassword;
@@ -104,6 +107,7 @@ export class AccountService {
       gmailPassword: credentials.gmailPassword ?? null,
       phone: credentials.phone ?? null,
       facebookName: credentials.facebookName ?? null,
+      proxyUrl: credentials.proxyUrl ?? null,
     });
 
     await repositories.profiles.create({
@@ -278,6 +282,7 @@ export class AccountService {
           // Null on the sheet means "not given", never "clear the stored one".
           ...(row.password === null ? {} : { password: row.password }),
           ...(row.gmailPassword === null ? {} : { gmailPassword: row.gmailPassword }),
+          ...(row.proxyUrl === null ? {} : { proxyUrl: row.proxyUrl }),
         };
 
         if (existing !== null) {
