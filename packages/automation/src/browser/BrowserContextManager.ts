@@ -11,10 +11,34 @@ export interface PreparedContext {
  * to work in, timeouts that match the configured budget, and no dialog left
  * blocking the thread.
  */
+/** Request types a login does not need to see; blocking them is memory and speed. */
+const HEAVY_RESOURCES = new Set(['image', 'media', 'font']);
+
 export class BrowserContextManager {
-  async prepare(context: BrowserContext, timeoutMs: number): Promise<PreparedContext> {
+  /**
+   * @param lite  Drop images, media and fonts. A headless batch does not look
+   *   at them, so this both frees the memory each browser holds and cuts the
+   *   time a page takes to settle — which is what lets more log in at once and
+   *   each one finish sooner. A visible browser keeps everything, so a person
+   *   watching sees a normal page.
+   */
+  async prepare(
+    context: BrowserContext,
+    timeoutMs: number,
+    lite = false,
+  ): Promise<PreparedContext> {
     context.setDefaultTimeout(timeoutMs);
     context.setDefaultNavigationTimeout(timeoutMs);
+
+    if (lite) {
+      await context.route('**/*', (route) => {
+        if (HEAVY_RESOURCES.has(route.request().resourceType())) {
+          void route.abort().catch(() => undefined);
+        } else {
+          void route.continue().catch(() => undefined);
+        }
+      });
+    }
 
     // Injected before any page script, on every page and frame, so Facebook
     // never sees the automation fingerprint. See stealth.ts for what and why.

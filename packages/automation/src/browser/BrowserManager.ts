@@ -47,7 +47,10 @@ export class BrowserManager implements BrowserController {
     }
 
     const context = await this.launcher.launch(options);
-    await this.contexts.prepare(context, options.timeoutMs);
+    // A headless browser runs lite: no images, media or fonts. It is invisible
+    // and only signs in, so it needs none of them, and dropping them is what
+    // lets more run at once and each finish sooner.
+    await this.contexts.prepare(context, options.timeoutMs, options.headless);
 
     const session: BrowserSession = {
       sessionId: options.sessionId,
