@@ -37,21 +37,46 @@ Open http://localhost:5173.
 
 ## Commands
 
-| Command                 | Does                                                                |
-| ----------------------- | ------------------------------------------------------------------- |
-| `pnpm dev`              | Watch-build the packages, then run the API and the web app together |
-| `pnpm dev:server`       | API only                                                            |
-| `pnpm dev:web`          | Web app only                                                        |
-| `pnpm build`            | Build every package and app in dependency order                     |
-| `pnpm typecheck`        | `tsc --noEmit` everywhere                                           |
-| `pnpm lint`             | ESLint, including the layer-boundary rules                          |
-| `pnpm format`           | Prettier                                                            |
-| `pnpm test`             | Unit and integration tests                                          |
-| `pnpm test:unit`        | Unit tests only                                                     |
-| `pnpm test:integration` | Integration tests only                                              |
-| `pnpm test:e2e`         | Playwright end-to-end tests                                         |
-| `pnpm db:generate`      | Generate a migration from the Drizzle schema                        |
-| `pnpm db:migrate`       | Apply pending migrations                                            |
+| Command                  | Does                                                                |
+| ------------------------ | ------------------------------------------------------------------- |
+| `pnpm dev`               | Watch-build the packages, then run the API and the web app together |
+| `pnpm dev:server`        | API only                                                            |
+| `pnpm dev:web`           | Web app only                                                        |
+| `pnpm build`             | Build every package and app in dependency order                     |
+| `pnpm typecheck`         | `tsc --noEmit` everywhere                                           |
+| `pnpm lint`              | ESLint, including the layer-boundary rules                          |
+| `pnpm format`            | Prettier                                                            |
+| `pnpm test`              | Unit and integration tests                                          |
+| `pnpm test:unit`         | Unit tests only                                                     |
+| `pnpm test:integration`  | Integration tests only                                              |
+| `pnpm test:e2e`          | Playwright end-to-end tests                                         |
+| `pnpm service:install`   | Register the built system as a Windows service (see below)          |
+| `pnpm service:uninstall` | Remove that service; data and profiles stay                         |
+| `pnpm db:generate`       | Generate a migration from the Drizzle schema                        |
+| `pnpm db:migrate`        | Apply pending migrations                                            |
+
+## Running as a Windows service
+
+`pnpm dev` stops when its terminal closes. For a machine that should keep
+sharing overnight, register the built system as a service:
+
+```bash
+winget install --id NSSM.NSSM -e      # once: the service wrapper
+pnpm build
+pnpm service:install                  # asks for administrator rights
+```
+
+The service (`FBAutomation`) starts with Windows, restarts itself if it
+crashes, and runs one process: the API, which also serves the built control
+panel. Open http://localhost:3001 (or the `PORT` in `.env`). Logs are written
+to `data/logs/service.out.log` and `service.err.log`. Re-run
+`pnpm service:install` after every `pnpm build` to pick up changes;
+`pnpm service:uninstall` removes it and leaves the database and profiles alone.
+
+A service has no desktop, so nothing it opens can be seen. Keep **Run
+headless** on in Settings while it runs. When an account needs a captcha or
+checkpoint solved by hand, stop the service (`nssm stop FBAutomation`), run
+`pnpm dev` with headless off for that session, then start the service again.
 
 ## Layout
 

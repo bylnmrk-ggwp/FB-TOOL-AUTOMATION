@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   EXPORT_DIR: z.string().default('./data/exports'),
   IMPORT_DIR: z.string().default('./data/imports'),
   LOG_DIR: z.string().default('./data/logs'),
+  /** The built web app; served by the API when the directory exists. */
+  WEB_DIST: z.string().default('./apps/web/dist'),
 
   BROWSER_EXECUTABLE_PATH: z.string().optional(),
   BROWSER_CHANNEL: z.enum(BROWSER_CHANNELS).default('chromium'),
@@ -54,6 +56,7 @@ export interface AppConfig {
     exportDir: string;
     importDir: string;
     logDir: string;
+    webDist: string;
   };
   browser: {
     executablePath: string | null;
@@ -106,6 +109,7 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
       exportDir: resolveFromRoot(env.EXPORT_DIR),
       importDir: resolveFromRoot(env.IMPORT_DIR),
       logDir: resolveFromRoot(env.LOG_DIR),
+      webDist: resolveFromRoot(env.WEB_DIST),
     },
     browser: {
       executablePath: executablePath === undefined || executablePath === '' ? null : executablePath,

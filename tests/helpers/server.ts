@@ -35,6 +35,8 @@ export const testConfig = (directory: string): AppConfig => ({
     exportDir: join(directory, 'exports'),
     importDir: join(directory, 'imports'),
     logDir: join(directory, 'logs'),
+    // No build here, so the API never serves a page and the JSON 404 stays testable.
+    webDist: join(directory, 'web-dist'),
   },
   browser: { executablePath: null, channel: 'chromium', headless: true },
   queue: {

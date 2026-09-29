@@ -22,6 +22,8 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
+    "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/install.ps1",
+    "service:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/uninstall.ps1",
     "db:generate": "pnpm --filter @fb/database db:generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:backup": "tsx scripts/backup.ts",
