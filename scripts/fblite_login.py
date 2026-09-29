@@ -120,8 +120,8 @@ def leave_onboarding(dev: Device, user: int | None = None,
     return not on_login_form(dev)
 
 
-CHALLENGE = ("not a robot", "captcha", "security check",
-             "two-factor", "authentication", "checkpoint")
+CHALLENGE = ("not a robot", "a robot", "confirm you're", "captcha",
+             "security check", "two-factor", "authentication", "checkpoint")
 REJECTED = ("incorrect", "wrong password", "invalid", "didn't match",
             "isn't connected", "couldn't find")
 
@@ -373,9 +373,13 @@ def main(argv) -> int:
     # roster; --not-logged-in narrows to the ones the sheet still calls out.
     accounts = list(db.list_accounts(include_disabled=False))
     if args.not_logged_in:
+        # Skip what the sheet already resolves: a signed-in account (LOGGED
+        # IN) and one Facebook has flagged (DISABLED, e.g. a robot check) both
+        # have nothing to gain from another attempt.
+        _done = {"LOGGED IN", "DISABLED"}
         accounts = [a for a in accounts
                     if (a.get("sheet_status") or "").strip().upper()
-                    != "LOGGED IN"]
+                    not in _done]
     if args.only:
         wanted = {u.strip().lower() for u in args.only if u.strip()}
         accounts = [a for a in accounts if a["username"].lower() in wanted]
@@ -471,6 +475,15 @@ def main(argv) -> int:
             if writer is not None and writer.on:
                 if writer.write(username, sheet_status.LOGGED_IN):
                     print("    sheet: STATUS -> LOGGED IN")
+                else:
+                    print(f"    sheet: STATUS not written ({writer.error})")
+        elif verdict == "challenge":
+            # A "confirm you're a robot" gate means Facebook has flagged the
+            # account; it is dead weight for this run and later ones. Mark it
+            # DISABLED on the sheet so --not-logged-in skips it next time.
+            if writer is not None and writer.on:
+                if writer.write(username, sheet_status.DISABLED):
+                    print("    sheet: STATUS -> DISABLED (robot check)")
                 else:
                     print(f"    sheet: STATUS not written ({writer.error})")
 

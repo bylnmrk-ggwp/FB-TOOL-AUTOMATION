@@ -15,6 +15,7 @@ exactly that and nothing more.
 from __future__ import annotations
 
 import os
+import random
 import re
 import subprocess
 import time
@@ -219,7 +220,16 @@ class Device:
         self.shell(f"input tap {int(x)} {int(y)}")
 
     def tap_node(self, node: Node) -> None:
-        x, y = node.centre
+        """Tap the node like a finger would: a random point inside its middle
+        area rather than the exact geometric centre, after a short random
+        settle. A real person never hits the same pixel twice, and a stream of
+        pixel-perfect centre taps is one of the cheapest bot tells there is."""
+        left, top, right, bottom = node.bounds
+        w, h = right - left, bottom - top
+        # Stay in the middle 50% so the point is always well inside the target.
+        x = left + w * random.uniform(0.25, 0.75) if w > 4 else (left + right) / 2
+        y = top + h * random.uniform(0.25, 0.75) if h > 4 else (top + bottom) / 2
+        time.sleep(random.uniform(0.2, 0.7))
         self.tap(x, y)
 
     # What `input text` can carry through a shell argument without ambiguity.
