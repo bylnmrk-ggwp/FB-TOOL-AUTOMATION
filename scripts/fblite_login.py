@@ -87,25 +87,42 @@ def on_login_form(dev: Device) -> bool:
 # - and clears a screen that BACK sometimes re-shows.
 SKIP_HINTS = ("skip", "not now", "maybe later")
 
+# Android runtime-permission dialogs (notifications, contacts, location) block
+# the flow until answered, and the operator wants them granted, not declined.
+# "Allow" grants; "while using the app" is Android 14's Allow variant. Matched
+# ahead of Skip so a permission prompt is answered before anything is skipped.
+ALLOW_HINTS = ("allow", "while using the app", "only this time")
+
 
 def leave_onboarding(dev: Device, user: int | None = None,
                      rounds: int = 10, log=print) -> bool:
-    """Clear the post-login setup screens, accepting nothing.
+    """Clear the post-login setup screens.
 
-    Prefers a Skip / Not now button when one is on screen, and falls back to
-    BACK. Only ever declines - never Continue, Upload or Add. Returns True
-    when the app is no longer showing the login form, i.e. the session took.
+    Grants a runtime-permission dialog by tapping Allow, otherwise declines a
+    setup screen with Skip / Not now, and falls back to BACK. Never taps
+    Continue, Upload or Add. Returns True when the app is no longer showing the
+    login form, i.e. the session took.
     """
     for _ in range(rounds):
         nodes = dev.screen()
-        skip = None
-        for hint in SKIP_HINTS:
+        allow = None
+        for hint in ALLOW_HINTS:
             hits = find(nodes, text=hint) + find(nodes, desc=hint)
             if hits:
-                skip = next((n for n in hits if n.cls.endswith("Button")),
-                            hits[0])
+                allow = next((n for n in hits if n.cls.endswith("Button")),
+                             hits[0])
                 break
-        if skip is not None:
+        skip = None
+        if allow is None:
+            for hint in SKIP_HINTS:
+                hits = find(nodes, text=hint) + find(nodes, desc=hint)
+                if hits:
+                    skip = next((n for n in hits if n.cls.endswith("Button")),
+                                hits[0])
+                    break
+        if allow is not None:
+            dev.tap_node(allow)
+        elif skip is not None:
             dev.tap_node(skip)
         else:
             dev.key("KEYCODE_BACK")
