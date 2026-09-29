@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from 'playwright';
+import { STEALTH_INIT_SCRIPT } from './stealth.js';
 
 export interface PreparedContext {
   context: BrowserContext;
@@ -14,6 +15,10 @@ export class BrowserContextManager {
   async prepare(context: BrowserContext, timeoutMs: number): Promise<PreparedContext> {
     context.setDefaultTimeout(timeoutMs);
     context.setDefaultNavigationTimeout(timeoutMs);
+
+    // Injected before any page script, on every page and frame, so Facebook
+    // never sees the automation fingerprint. See stealth.ts for what and why.
+    await context.addInitScript(STEALTH_INIT_SCRIPT);
 
     const existing = context.pages()[0];
     const page = existing ?? (await context.newPage());

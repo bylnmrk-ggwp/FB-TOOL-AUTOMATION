@@ -20,9 +20,15 @@ const PLATFORM =
 const LAUNCH_ARGS = [
   '--no-first-run',
   '--no-default-browser-check',
+  // The single most-read automation flag; without it navigator.webdriver is
+  // true and the "controlled by automated software" state is advertised.
   '--disable-blink-features=AutomationControlled',
-  '--disable-features=PasswordLeakDetection,AutofillServerCommunication',
+  '--disable-features=PasswordLeakDetection,AutofillServerCommunication,IsolateOrigins,site-per-process',
   '--disable-infobars',
+  // Headless Chromium reports a software GPU; enabling a real one removes a
+  // WebGL tell that the init-script patch would otherwise have to fake alone.
+  '--use-gl=angle',
+  '--use-angle=default',
 ];
 
 /**
@@ -42,6 +48,9 @@ export class BrowserLauncher {
         timeout: options.timeoutMs,
         args: LAUNCH_ARGS,
         viewport: { width: 1366, height: 800 },
+        // A locale the timezone and Accept-Language agree with; a missing or
+        // mismatched one is itself a signal.
+        locale: 'en-US',
         ignoreDefaultArgs: ['--enable-automation'],
         ...binary,
         // A background browser must still look like the one a person opens:
