@@ -25,10 +25,35 @@ const LAUNCH_ARGS = [
   '--disable-blink-features=AutomationControlled',
   '--disable-features=PasswordLeakDetection,AutofillServerCommunication,IsolateOrigins,site-per-process',
   '--disable-infobars',
-  // Headless Chromium reports a software GPU; enabling a real one removes a
-  // WebGL tell that the init-script patch would otherwise have to fake alone.
-  '--use-gl=angle',
-  '--use-angle=default',
+];
+
+/**
+ * A visible browser gets a real GPU, which removes a WebGL tell. Headless
+ * skips it: the init script fakes the WebGL vendor anyway, and a GPU process
+ * per browser is memory a batch cannot spare.
+ */
+const HEADED_ARGS = ['--use-gl=angle', '--use-angle=default'];
+
+/**
+ * What a headless browser drops to fit many at once. None of it shows on the
+ * page Facebook sees — no window chrome, no extensions, no background chatter,
+ * a smaller renderer heap — so twenty lean browsers cost what a handful of
+ * default ones would. Images stay: a page with none is its own signal.
+ */
+const HEADLESS_LEAN_ARGS = [
+  '--disable-dev-shm-usage',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-component-extensions-with-background-pages',
+  '--disable-default-apps',
+  '--disable-component-update',
+  '--disable-sync',
+  '--disable-breakpad',
+  '--mute-audio',
+  '--metrics-recording-only',
+  '--no-pings',
+  // Caps each renderer's JS heap; a login page needs far less than the default.
+  '--js-flags=--max-old-space-size=256',
 ];
 
 /**
@@ -46,7 +71,7 @@ export class BrowserLauncher {
       return await chromium.launchPersistentContext(options.userDataDir, {
         headless: options.headless,
         timeout: options.timeoutMs,
-        args: LAUNCH_ARGS,
+        args: [...LAUNCH_ARGS, ...(options.headless ? HEADLESS_LEAN_ARGS : HEADED_ARGS)],
         viewport: { width: 1366, height: 800 },
         // A locale the timezone and Accept-Language agree with; a missing or
         // mismatched one is itself a signal.
