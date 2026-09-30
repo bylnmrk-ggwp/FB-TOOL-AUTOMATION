@@ -122,6 +122,10 @@ class EventBridge(threading.Thread):
         # Items reported ok since the batch began; batch_result carries only
         # the total, so the summary is counted here.
         self._batch_ok = 0
+        # Items no account could have acted on - a checkpoint or a session
+        # Facebook stopped accepting. Counted apart so they are not reported
+        # as failures of the run.
+        self._batch_skipped = 0
         self._system_at = 0.0
         self._system_error = None
 
@@ -362,11 +366,16 @@ class EventBridge(threading.Thread):
     def _on_batch_progress(self, r: dict, ok: bool) -> None:
         if r.get("current", 0) == 0:
             self._batch_ok = 0          # a new batch: start the count over
+            self._batch_skipped = 0
         self._log(r.get("message", ""))
 
     def _on_batch_item_result(self, r: dict, ok: bool) -> None:
         pname = r.get("profile_name", "")
         msg = r.get("message", "")
+        if r.get("skipped", False):
+            self._log(f"⊘ {pname}: {msg}")
+            self._batch_skipped += 1
+            return
         if r.get("rate_limited", False):
             self._log(f"{_WARN} {pname}: {msg}")
         elif r.get("needs_login", False):
@@ -468,12 +477,18 @@ class EventBridge(threading.Thread):
         self._log(f"Batch complete: {total} item(s) processed")
         # Every queue item ends in exactly one batch_item_result (the worker
         # reports the ones whose profile never opened too), so the failures
-        # are what is left of the total once the ok items are taken out.
+        # are what is left of the total once the ok items and the gated ones
+        # are taken out. Counting a gated account as a failure read as
+        # something the run did wrong, when the account never acted at all.
         ok_count = self._batch_ok
-        summary = data.summary_line(ok_count, max(total - ok_count, 0))
+        skipped = r.get("skipped", self._batch_skipped)
+        summary = data.summary_line(ok_count,
+                                    max(total - ok_count - skipped, 0),
+                                    skipped=skipped)
         self.state.last_run_summary = summary
         cfg.save_setting(LAST_RUN_SUMMARY_KEY, summary)
         self._batch_ok = 0
+        self._batch_skipped = 0
         # queue_tab.clear_all(), as the window called it on this branch. On
         # one desktop the emptied list was simply the next thing the
         # operator saw; here it also stops a second device from pressing Run

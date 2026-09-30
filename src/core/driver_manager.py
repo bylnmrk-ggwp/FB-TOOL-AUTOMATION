@@ -3613,6 +3613,15 @@ class DriverManager:
         # 53 accounts having acted, when it only ever meant 53 items tried.
         success_count = 0
         handled: set[str] = set()  # profiles that actually produced a result
+        # Profiles Facebook has shut the door on for this run: a checkpoint it
+        # wants a human to clear, or a session it no longer accepts. The first
+        # item proves it; every later item for that profile is a launch, a
+        # navigation and a wait that can only reach the same verdict, so they
+        # are skipped. They are also not failures of the run - the account was
+        # never able to act - so they come out of the denominator instead of
+        # being counted against it.
+        gated: dict[str, str] = {}
+        skipped_count = 0
 
         for batch_idx, batch_profiles in enumerate(batches):
             if self._stop_batch.is_set():
@@ -3862,6 +3871,16 @@ class DriverManager:
                 if self._stop_batch.is_set():
                     self.log("  ⏹ Stop requested - no further items in this batch")
                     break
+                # Before the delay, not after: a skipped item costs nothing and
+                # must not also spend the anti-spam pause meant for real work.
+                gate = gated.get(item.get("profile_name", ""))
+                if gate:
+                    batch_results.append({
+                        "profile_name": item.get("profile_name", ""),
+                        "ok": False, "skipped": True,
+                        "message": f"Skipped - {gate}",
+                    })
+                    continue
                 # Delay between actions (except before the first one)
                 if i > 0:
                     delay = random.uniform(
@@ -3874,6 +3893,9 @@ class DriverManager:
 
                 result = await _process_one(idx, item)
                 batch_results.append(result)
+                reason = self._gate_reason(result)
+                if reason:
+                    gated[result.get("profile_name", "")] = reason
             
             # Clean up contexts after all are done
             for idx, item in batch_items:
@@ -3895,6 +3917,26 @@ class DriverManager:
                 # return_exceptions=True), so a raise propagates out of the
                 # loop instead of arriving as a result.
                 if isinstance(result, dict):
+                    if result.get("skipped"):
+                        # Already proven unable to act by an earlier item of
+                        # the same profile. Reported so the queue row gets a
+                        # terminal status, counted apart from the failures.
+                        skipped_count += 1
+                        self.result_queue.put({
+                            "type": "batch_item_result", "ok": False,
+                            "skipped": True,
+                            "profile_name": result.get("profile_name", "?"),
+                            "message": result.get("message", "Skipped"),
+                        })
+                        self.result_queue.put({
+                            "type": "batch_progress",
+                            "current": processed, "total": total,
+                            "succeeded": success_count,
+                            "skipped": skipped_count,
+                            "message": f"{processed}/{total} attempted, "
+                                       f"{success_count} ok, {skipped_count} skipped",
+                        })
+                        continue
                     if result.get("ok"):
                         success_count += 1
                     msg = result.get("message", "")
@@ -3983,6 +4025,7 @@ class DriverManager:
         self.state = DriverState.STOPPED
         self.result_queue.put({
             "type": "batch_result", "ok": True, "total": total,
+            "skipped": skipped_count,
         })
         # Now that the shared browser is closed, nothing holds Brave's
         # singleton lock, so expired sessions can be restored in place.
@@ -3997,7 +4040,24 @@ class DriverManager:
                 if await self._relogin_profile(name):
                     restored += 1
             self.log(f"↻ Auto re-login: {restored}/{len(names)} restored")
-        self.log(f"Batch complete: {success_count}/{total} successful")
+        countable = max(0, total - skipped_count)
+        if skipped_count:
+            gated_now = sorted(gated.items())
+            checkpoints = sum(1 for _, why in gated_now
+                              if why == self._GATE_CHECKPOINT)
+            expired = len(gated_now) - checkpoints
+            parts = []
+            if checkpoints:
+                parts.append(f"{checkpoints} at a checkpoint")
+            if expired:
+                parts.append(f"{expired} with an expired session")
+            self.log(f"Batch complete: {success_count}/{countable} successful "
+                     f"({skipped_count} item(s) skipped - "
+                     f"{', '.join(parts)}; not counted against the run)")
+            for name, why in gated_now:
+                self.log(f"  ⊘ '{name}' took no part: {why}")
+        else:
+            self.log(f"Batch complete: {success_count}/{countable} successful")
 
         if watch_items and self._stop_batch.is_set():
             self.log("⏹ Stopped before the watch - nothing is left on the post")
@@ -4867,6 +4927,38 @@ class DriverManager:
     RECHECK_GATED_HOURS = 6
     GATED_REASONS = ("checkpoint or verification required",
                      "email confirmation required")
+
+    # What Facebook says when it will not let an account act at all, as
+    # opposed to an action that merely did not land. A checkpoint wants a human
+    # (an ID photo, a code, "confirm it's you") and has no password form, so
+    # nothing this program does clears it. An expired session needs a re-login,
+    # which cannot happen mid-batch - this browser holds Brave's singleton lock
+    # on the shared User Data tree. Either way the remaining items for that
+    # profile can only reach the same verdict.
+    _GATE_CHECKPOINT = "checkpoint or verification required"
+    _GATE_EXPIRED = "session expired"
+    _EXPIRED_PHRASES = ("logged out or session expired", "session expired",
+                        "logged out", "not logged in", "not logged-in",
+                        "login overlay")
+
+    @classmethod
+    def _gate_reason(cls, result) -> str | None:
+        """Why this profile cannot act at all, or None if it still can.
+
+        Read from the message as well as the flag: each action phrases it
+        differently - the comment path says "logged out or session expired",
+        share and timeline say "not logged in", a non-Like reaction says
+        "login overlay" - and a run that only understood one of them kept
+        launching the other two.
+        """
+        if not isinstance(result, dict) or result.get("ok"):
+            return None
+        low = (result.get("message") or "").lower()
+        if cls._GATE_CHECKPOINT in low or "email confirmation required" in low:
+            return cls._GATE_CHECKPOINT
+        if result.get("needs_login") or any(p in low for p in cls._EXPIRED_PHRASES):
+            return cls._GATE_EXPIRED
+        return None
 
     def _report_task_death(self, what: str):
         """A done-callback that says when a background task ended on an error.
