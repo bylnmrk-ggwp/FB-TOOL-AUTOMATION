@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ERROR_CODES, type Job, type JobStatus } from '@fb/shared';
-import { AutomationBlockedError } from '@fb/shared';
+import { AutomationBlockedError, AutomationTimeoutError, LoginFailedError } from '@fb/shared';
 import { FakeGateway } from '../helpers/fake-gateway';
 import { createTestServer, type TestServer } from '../helpers/server';
 
@@ -201,6 +201,38 @@ describe('Queue', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().error.code).toBe(ERROR_CODES.JOB_NOT_RETRYABLE);
+  });
+
+  it('leaves the login verdict alone when the failure says nothing about the account', async () => {
+    // A browser that would not launch or a page that timed out is the machine
+    // failing, not Facebook refusing: the roster must not call it logged out.
+    server.gateway.alwaysFail(new AutomationTimeoutError('navigate to facebook', 30_000));
+
+    const created = await createJob({ accountId, action: { type: 'login' }, maxRetries: 0 });
+    await waitForStatus(server, created.json().id, ['failed']);
+
+    const account = await server.app.inject({
+      method: 'GET',
+      url: `/api/v1/accounts/${accountId}`,
+    });
+    expect(account.statusCode).toBe(200);
+    expect(account.json().loginStatus).toBe('unknown');
+    expect(account.json().lastLoginCheckAt).toBeNull();
+  });
+
+  it('records logged out when Facebook itself refused the login', async () => {
+    server.gateway.alwaysFail(new LoginFailedError('wrong password'));
+
+    const created = await createJob({ accountId, action: { type: 'login' }, maxRetries: 0 });
+    await waitForStatus(server, created.json().id, ['failed']);
+
+    const account = await server.app.inject({
+      method: 'GET',
+      url: `/api/v1/accounts/${accountId}`,
+    });
+    expect(account.statusCode).toBe(200);
+    expect(account.json().loginStatus).toBe('logged_out');
+    expect(account.json().loginReason).toBe('Login failed: wrong password');
   });
 
   it('does not retry an error that says it cannot be retried', async () => {

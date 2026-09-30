@@ -1,5 +1,7 @@
 import {
   createId,
+  ERROR_CODES,
+  isAppError,
   JobCancelledError,
   nowIso,
   ShareRestrictedError,
@@ -220,13 +222,24 @@ export class JobProcessor {
         error.message,
       );
     }
-    if ((job.type === 'login' || job.type === 'check_login') && error instanceof Error) {
-      const details = (error as { details?: { gate?: string } }).details;
-      const gate = details?.gate;
-      await this.deps.accounts.recordLoginVerdict(job.accountId, {
-        loginStatus: isLoginStatus(gate) ? gate : 'logged_out',
-        loginReason: error.message,
-      });
+    if ((job.type === 'login' || job.type === 'check_login') && isAppError(error)) {
+      const gate = (error.details as { gate?: unknown } | undefined)?.gate;
+      if (isLoginStatus(gate)) {
+        await this.deps.accounts.recordLoginVerdict(job.accountId, {
+          loginStatus: gate,
+          loginReason: error.message,
+        });
+      } else if (error.code === ERROR_CODES.AUTOMATION_LOGIN_FAILED && !error.retryable) {
+        // Facebook itself refused: wrong password, or the form never left.
+        await this.deps.accounts.recordLoginVerdict(job.accountId, {
+          loginStatus: 'logged_out',
+          loginReason: error.message,
+        });
+      }
+      // Anything else — a browser that would not launch, a page that timed
+      // out, the server stopping — is the machine failing, not the account.
+      // The last real verdict stands, so an overloaded batch cannot mark a
+      // working account as logged out.
     }
   }
 

@@ -18,7 +18,7 @@ export const SettingsSchema = z.object({
   browserExecutablePath: z.string().max(1024).nullable(),
   browserChannel: BrowserChannelSchema,
   headless: z.boolean(),
-  globalConcurrency: z.number().int().min(1).max(32),
+  globalConcurrency: z.number().int().min(1).max(64),
   defaultTimeoutMs: z.number().int().min(1_000).max(600_000),
   defaultMaxRetries: z.number().int().min(0).max(10),
   retryBackoffMs: z.number().int().min(1_000).max(3_600_000),

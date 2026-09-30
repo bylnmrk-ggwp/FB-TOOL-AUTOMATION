@@ -170,7 +170,7 @@ export const SettingsPage = (): ReactElement => {
               label="Global concurrency"
               type="number"
               min={1}
-              max={32}
+              max={64}
               value={String(draft.globalConcurrency)}
               hint="Jobs that may run at the same time, across all accounts."
               onChange={(event) =>
