@@ -233,6 +233,7 @@ def auto_sync_brave_profiles() -> list[str]:
     old_profiles = _reload_config().get("profiles", {})
     new_profiles: dict[str, str] = {}
     added: list[str] = []
+    renamed: list[tuple[str, str]] = []
 
     # 1. Rename/update existing profiles to match Brave's current names
     for old_name, old_path in old_profiles.items():
@@ -279,12 +280,13 @@ def auto_sync_brave_profiles() -> list[str]:
                 counter += 1
             new_profiles[f"{correct_name} ({counter})"] = old_path
 
-        # Update facebook_urls key if renamed
-        if old_name != correct_name and "facebook_urls" in config:
-            fb_urls = config.get("facebook_urls", {})
-            if old_name in fb_urls and correct_name not in fb_urls:
-                fb_urls[correct_name] = fb_urls.pop(old_name)
-                config["facebook_urls"] = fb_urls
+        # A renamed profile has to take its saved Facebook URL with it, but
+        # the config is only reopened inside `change` below - touching a name
+        # called `config` here raised NameError and aborted the whole sync,
+        # which is why Brave's profiles never made it into the map. Collect
+        # the renames and apply them where the config actually exists.
+        if old_name != correct_name:
+            renamed.append((old_name, correct_name))
 
     # 2. Add every Brave profile that isn't saved yet
     existing_paths = set(new_profiles.values())
@@ -324,6 +326,12 @@ def auto_sync_brave_profiles() -> list[str]:
 
     def change(config):
         config["profiles"] = new_profiles
+        fb_urls = config.get("facebook_urls")
+        if not fb_urls:
+            return
+        for old_name, correct_name in renamed:
+            if old_name in fb_urls and correct_name not in fb_urls:
+                fb_urls[correct_name] = fb_urls.pop(old_name)
 
     _mutate(change)
 
