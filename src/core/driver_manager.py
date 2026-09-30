@@ -4302,6 +4302,36 @@ class DriverManager:
         except Exception:
             return None
 
+    def _grid_scale_for(self, count: int) -> float:
+        """The device scale factor that lets `count` pages tile un-clamped.
+
+        Chromium refuses a window narrower than about 515 of its own units, and
+        a scale factor is what buys those units: at scale s the desktop is
+        1/s times as wide in the browser's space. WATCH_GRID_SCALE is enough
+        for a 1920x1080 desktop, where 30 pages tile at 692 units - but the
+        same 5x6 grid on a 1366x768 screen computes a 484-unit tile, and every
+        window comes back clamped to the minimum, piling up instead of tiling.
+
+        So start from the configured scale and shrink until a tile clears the
+        minimum. Returning the scale rather than applying it matters: the
+        factor is fixed when the browser launches, and _tile_watch_windows has
+        to convert the desktop with the very same number or the two disagree.
+        """
+        native = self._desktop_size()
+        if not native:
+            return self.WATCH_GRID_SCALE
+        cols = max(1, self.WATCH_GRID_COLS)
+        rows = max(1, math.ceil(max(1, int(count)) / cols))
+        gap = self.WATCH_GRID_GAP
+        scale = self.WATCH_GRID_SCALE
+        while scale > 0.05:
+            side = min((native[0] / scale - gap * (cols + 1)) // cols,
+                       (native[1] / scale - gap * (rows + 1)) // rows)
+            if side >= self.WATCH_GRID_MIN_TILE:
+                return scale
+            scale = round(scale * 0.8, 4)
+        return scale
+
     async def _tile_watch_windows(self):
         """Lay the visible watch windows out as a grid filling the screen.
 
@@ -4310,9 +4340,10 @@ class DriverManager:
         Browser.setWindowBounds. Headless modes have no windows to place, so
         the caller only runs this for the visible mode.
 
-        The grid is the squarest one that holds every page - 11 pages become
-        4 columns by 3 rows - and the screen size comes from the browser
-        itself, so nothing here needs the UI toolkit or a guess about DPI.
+        The grid is WATCH_GRID_COLS wide and as many rows as the pages need -
+        30 pages become 5 columns by 6 rows - and the screen size comes from
+        the browser itself, so nothing here needs the UI toolkit or a guess
+        about DPI.
         """
         autos = list(self._watch_autos.items())
         if not autos:
@@ -4327,10 +4358,10 @@ class DriverManager:
                      f"where they are: {str(e)[:80]}")
             return
 
-        # Ten to a row, square tiles, a gap between them - the layout in the
+        # Five to a row, square tiles, a gap between them - the layout in the
         # icon the operator drew, not a screen chopped into whatever
         # rectangles happened to fit. Square means one side governs: take the
-        # smaller of "a tenth of the width" and "one row's share of the
+        # smaller of "a fifth of the width" and "one row's share of the
         # height", and the leftover becomes the margin the grid is centred in.
         # What the page reports as its screen cannot be trusted here: a
         # context opened with a storage state came back saying 1280x800 while
@@ -4340,9 +4371,10 @@ class DriverManager:
         # factor the browser was launched with - the two numbers then agree
         # by construction rather than by hope.
         native = self._desktop_size()
+        scale = getattr(self, "_watch_scale", None) or self.WATCH_GRID_SCALE
         if native:
-            sw = int(native[0] / self.WATCH_GRID_SCALE)
-            sh = int(native[1] / self.WATCH_GRID_SCALE)
+            sw = int(native[0] / scale)
+            sh = int(native[1] / scale)
             sx = sy = 0
 
         count = len(autos)
@@ -4687,11 +4719,15 @@ class DriverManager:
             self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
                                       flags=WATCH_FLAGS)
         if mode == "visible":
-            # Shrink the browser's own unit so a 10x10 cell clears Chromium's
-            # minimum window width; without this every window comes back
-            # clamped and the grid is a pile.
+            # Shrink the browser's own unit so one cell of the grid clears
+            # Chromium's minimum window width; without this every window comes
+            # back clamped and the grid is a pile. How far it has to shrink
+            # depends on the row count and the desktop, so the count decides -
+            # 30 pages at five to a row is six rows, and six rows of a small
+            # screen is what runs out of height first.
+            self._watch_scale = self._grid_scale_for(len(active))
             launch_args = [*launch_args,
-                           f"--force-device-scale-factor={self.WATCH_GRID_SCALE:g}"]
+                           f"--force-device-scale-factor={self._watch_scale:g}"]
         await self._close_watch_pages(active)
 
         if not getattr(self, "_watch_browser", None):
@@ -4789,13 +4825,20 @@ class DriverManager:
     # app itself.
     WATCH_RESERVE_MB = 2048
 
-    # The visible watch lays its windows out ten to a row, as many rows as it
-    # takes. Chromium refuses a window under about 515 of its own units wide
-    # and a tenth of a screen is far below that, so the watch browser is
-    # launched with a scale factor that makes its unit smaller than a screen
-    # pixel - the same trick the login grid uses.
-    WATCH_GRID_COLS = 10
+    # The visible watch lays its windows out five to a row, as many rows as it
+    # takes: a wave of 30 is 5 across and 6 down, which is the shape the
+    # operator watches. Chromium refuses a window under about 515 of its own
+    # units wide, so the watch browser is launched with a scale factor that
+    # makes its unit smaller than a screen pixel - the same trick the login
+    # grid uses. Five columns and six rows of a 1536x864 desktop at
+    # WATCH_GRID_SCALE gives a ~575-unit tile, which clears that minimum;
+    # height is what governs at this shape, so more rows is what shrinks a
+    # tile, not more columns.
+    WATCH_GRID_COLS = 5
     WATCH_GRID_SCALE = 0.25
+    # Chromium's own floor on window width, in its own units. A cell under
+    # this comes back clamped, which turns the grid into a pile.
+    WATCH_GRID_MIN_TILE = 520
     # The gutter between tiles, in the browser's own units. Without it the
     # windows touch and read as one sheet instead of a grid.
     WATCH_GRID_GAP = 24
