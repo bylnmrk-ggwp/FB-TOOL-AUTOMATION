@@ -97,8 +97,8 @@ def fetch_facebook_name_sync(brave_profile_path: str) -> str | None:
             _log("Starting Playwright...")
             pw = await async_playwright().start()
             
-            # A Chromium profile IS its own user-data directory; only Brave
-            # keeps profiles inside one shared tree and selects one by name.
+            # Brave keeps profiles inside one shared tree and selects one by
+            # name, so the saved path splits - the shared rule does it.
             user_data_dir, profile_dir_name = FacebookAutomation._profile_layout(
                 brave_profile_path)
 
@@ -720,15 +720,9 @@ class FacebookAutomation:
         """(user_data_dir, profile_directory) for opening one account.
 
         Brave keeps every profile inside one shared "User Data" tree and
-        selects one with --profile-directory. A Chromium profile IS its own
-        user-data directory, and its data lives in the "Default" folder the
-        browser creates inside it - so passing Brave's split for Chromium
-        opens the PARENT of the profile and finds no cookies at all. That is
-        what made every comment report "logged out or session expired" for
-        accounts that had just logged in.
+        selects one with --profile-directory, so the saved path splits into
+        the tree and the profile folder's own name.
         """
-        if browser_choice.current_browser() == browser_choice.CHROMIUM:
-            return profile_path, None
         return os.path.dirname(profile_path), os.path.basename(profile_path)
 
     async def start_browser(self, profile_path: str, headless: bool = True,
@@ -774,20 +768,16 @@ class FacebookAutomation:
         """
         self.log("Starting browser...")
 
-        # Brave shares one User Data tree, so a running Brave locks the
-        # profile. A Chromium profile is private to this launch; killing the
-        # user's other browsers would be gratuitous.
-        if browser_choice.current_browser() != browser_choice.CHROMIUM:
-            _close_brave_if_running()
-            await asyncio.sleep(1)
+        # Brave shares one User Data tree, so any running Brave holds the
+        # ProcessSingleton lock on it and this launch would be handed to that
+        # instance instead ("Opening in existing browser session").
+        _close_brave_if_running()
+        await asyncio.sleep(1)
 
         self._pw = await async_playwright().start()
 
         # Split profile path into User Data directory and profile directory name
         # e.g. "C:/.../Brave-Browser/User Data/Default" → parent="C:/.../User Data", name="Default"
-        # Brave selects a profile inside one shared "User Data" tree; a
-        # Chromium profile IS its own user-data directory. Passing Brave's
-        # split to Chromium would open the parent folder and lose the session.
         user_data_dir, profile_dir_name = self._profile_layout(profile_path)
 
         self.log(f"Using profile directory: {profile_dir_name}")
@@ -1950,10 +1940,10 @@ class FacebookAutomation:
 
                 const text  = (el.innerText  || '').trim();
                 const label = (el.getAttribute('aria-label') || '').trim();
-                const data-testid = (el.getAttribute('data-testid') || '').trim();
+                const testId = (el.getAttribute('data-testid') || '').trim();
                 const low_t = text.toLowerCase();
                 const low_l = label.toLowerCase();
-                const low_d = data-testid.toLowerCase();
+                const low_d = testId.toLowerCase();
 
                 /* Skip invisible elements */
                 if (el.offsetParent === null && el.getBoundingClientRect().width === 0) continue;

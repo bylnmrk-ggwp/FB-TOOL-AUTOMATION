@@ -22,29 +22,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 from src.core.driver_manager import DriverManager  # noqa: E402
 from src.server.routes import accounts as accounts_routes  # noqa: E402
 from src.server.state import AppState, RunState  # noqa: E402
-from src.core import browser_choice as bc  # noqa: E402
 from src.storage import config_manager as cfg  # noqa: E402
 
 # This route provisions Brave profiles, and the "close Brave first" guard is
-# Brave's alone - Chromium writes no Local State and shares no directory. Pin
-# the browser so the proof tests the Brave path whatever the PC is set to.
-_saved_browser = cfg.get_setting(bc.SETTING_KEY, None)
-cfg.save_setting(bc.SETTING_KEY, bc.BRAVE)
-
-
-def _restore_browser():
-    """Put the PC's browser back even when a check below raises: leaving it on
-    Brave silently switches every later run away from Chromium."""
-    if _saved_browser is None:
-        conf = cfg._load_config()
-        conf.pop(bc.SETTING_KEY, None)
-        cfg._save_config(conf)
-    else:
-        cfg.save_setting(bc.SETTING_KEY, _saved_browser)
-
-
-import atexit  # noqa: E402
-atexit.register(_restore_browser)
+# Brave's: it rewrites Local State on exit and would discard whatever was
+# registered while it was open. Brave is the only browser driven, so there is
+# no setting to pin - the guard applies to every run.
 
 
 class _Bridge:
@@ -155,7 +138,5 @@ if _c.post("/api/accounts/setup-and-login", json={"usernames": []}).status_code 
 _app, _c = _client(brave_running=True)
 if _c.post("/api/accounts/setup-and-login", json={"usernames": ["a@example.com"]}).status_code != 409:
     failures.append("setup-and-login with Brave open should be 409")  # noqa: F821
-
-_restore_browser()
 
 print("FAILED" if [f for f in failures if "setup-and-login" in f] else "ok")  # noqa: F821

@@ -2150,15 +2150,18 @@ class DriverManager:
         jobs = list(enumerate(usernames, 1))
         try:
             if browser_choice.supports_parallel_login():
-                # Chromium: a directory per account, so nothing is shared and a
-                # wave can run together. Waves, not a rolling pool, because each
+                # Only for a browser that keeps a directory per account, so
+                # nothing is shared and a wave can run together. Brave is not
+                # one, so this arm is the seam a future one would use rather
+                # than a path today's runs take.
+                # Waves, not a rolling pool, because each
                 # account must reach a definitive verdict - logged in, disabled,
                 # needs an authenticator - before the next wave starts.
                 # Never run more at once than one batch: batch_size is what
                 # spaces the run, so a wave that outran it would skip the pause.
                 width = max(1, min(int(self.LOGIN_PARALLEL), total,
                                    batch_size or int(self.LOGIN_PARALLEL)))
-                self.log(f"  Chromium: logging in {width} at a time")
+                self.log(f"  Logging in {width} at a time")
                 for start in range(0, len(jobs), width):
                     wave = jobs[start:start + width]
                     await asyncio.gather(*(_login_one(i, u) for i, u in wave))
@@ -2418,13 +2421,25 @@ class DriverManager:
         else:
             self.log(f"\n⏭️  No profile pictures needed - skipping Pinterest download")
         
-        # ── CONCURRENT PROFILE PROCESSING ──────────────────────────────
-        # All profiles run simultaneously with tiny viewports
-        MAX_CONCURRENT = 2  # Run up to 2 profiles at a time to avoid browser crashes
+        # ── PROFILE PROCESSING ─────────────────────────────
+        # Each profile here gets its OWN launch_persistent_context, and Brave
+        # keeps every profile inside one shared User Data tree. The first
+        # launch takes that tree's ProcessSingleton lock, so a second
+        # overlapping launch is handed to the running instance instead and
+        # fails with "Opening in existing browser session" - which is every
+        # profile but the first. One at a time is the only setting that works
+        # on Brave; the semaphore stays so a browser able to overlap only has
+        # to say so through supports_parallel_login().
+        MAX_CONCURRENT = 2 if browser_choice.supports_parallel_login() else 1
         _sem = asyncio.Semaphore(MAX_CONCURRENT)
         success_count = 0  # Initialize success counter
-        
-        self.log(f"\n🚀 Launching all {total} profiles CONCURRENTLY (max {MAX_CONCURRENT} at a time, micro viewport)")
+
+        if MAX_CONCURRENT == 1:
+            self.log(f"\n🚀 Setting up {total} profiles one at a time "
+                     f"(Brave locks its shared User Data tree)")
+        else:
+            self.log(f"\n🚀 Launching all {total} profiles CONCURRENTLY "
+                     f"(max {MAX_CONCURRENT} at a time, micro viewport)")
         
         async def _setup_one(idx: int, profile_name: str) -> dict:
             """Set up a single profile — runs concurrently with others."""

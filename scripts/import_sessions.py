@@ -131,11 +131,8 @@ def _profile_layout(profile_path: str) -> tuple[str, str | None]:
     """(user_data_dir, profile_directory) for opening one account.
 
     Same split FacebookAutomation uses: Brave keeps every profile inside one
-    shared User Data tree and selects one with --profile-directory, while a
-    Chromium profile IS its own user-data directory.
+    shared User Data tree and selects one with --profile-directory.
     """
-    if browser_choice.current_browser() == browser_choice.CHROMIUM:
-        return profile_path, None
     return os.path.dirname(profile_path), os.path.basename(profile_path)
 
 

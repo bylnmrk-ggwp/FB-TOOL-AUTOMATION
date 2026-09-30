@@ -1,13 +1,15 @@
-"""On Chromium the login run drives several accounts at once.
+"""The login run drives exactly one account at a time.
 
 Brave binds the cookie key to one shared User Data tree and Chromium's
-ProcessSingleton locks it, so a Brave run must stay sequential - that is not
-a tuning choice, it is the reason copied profiles come back dead. With one
-self-contained directory per account nothing is shared, so the run may open
-several at a time.
+ProcessSingleton locks that tree, so an overlapping login is handed to the
+running instance and reports "Opening in existing browser session" - and a
+profile copied out of the tree comes back with cookies nothing can decrypt.
+Sequential is not a tuning choice here, it is the reason those sessions die.
 
-The switch is per browser, never a flag someone can set wrongly: ask
-browser_choice.supports_parallel_login().
+A second browser without that binding existed for a while and is gone, so the
+worker count must stay behind browser_choice.supports_parallel_login() rather
+than become a number someone can raise: the check is the thing that keeps a
+wave from being opened.
 """
 import asyncio
 import queue as _queue
@@ -24,7 +26,6 @@ from src.storage import database as db  # noqa: E402
 import src.storage.sheet_status as sheet_status  # noqa: E402
 
 USERS = [f"verify_p{i}@example.com" for i in range(6)]
-_saved_browser = cfg.get_setting(bc.SETTING_KEY, None)
 _real_writer = sheet_status.SheetWriter
 _real_path = cfg.get_profile_path
 
@@ -43,6 +44,10 @@ try:
         db.link_account(u, u)
     sheet_status.SheetWriter = lambda *a, **k: _NoWriter()
     cfg.get_profile_path = lambda name: "C:/verify/" + str(name)
+
+    if bc.supports_parallel_login():
+        failures.append("parallel login: the only browser driven is Brave, which "  # noqa: F821
+                        "cannot overlap logins")
 
     width = getattr(DriverManager, "LOGIN_PARALLEL", None)
     if not isinstance(width, int) or not (2 <= width <= 32):
@@ -68,8 +73,6 @@ try:
     m._relogin_profile = _relogin
     m._batch_pause = lambda seconds: asyncio.sleep(0)
 
-    # Chromium: several at once.
-    cfg.save_setting(bc.SETTING_KEY, "chromium")
     asyncio.run(m._do_login_accounts({"type": "login_accounts", "usernames": list(USERS)}))
     result = None
     while True:
@@ -79,36 +82,15 @@ try:
             break
         if r.get("type") == "login_accounts_result":
             result = r
-    if state["peak"] < 2:
-        failures.append(f"parallel login: on Chromium the run stayed sequential "  # noqa: F821
-                        f"(peak {state['peak']})")
-    if width and state["peak"] > width:
-        failures.append(f"parallel login: {state['peak']} logins at once exceeds the "  # noqa: F821
-                        f"{width} worker limit")
-    if not result or len(result.get("logged_in", [])) != len(USERS):
-        failures.append(f"parallel login: not every account was attempted: {result}")  # noqa: F821
 
-    # Brave: strictly one at a time, whatever the worker count says.
-    state.update(now=0, peak=0)
-    cfg.save_setting(bc.SETTING_KEY, "brave")
-    asyncio.run(m._do_login_accounts({"type": "login_accounts", "usernames": list(USERS)}))
-    while True:
-        try:
-            m.result_queue.get_nowait()
-        except _queue.Empty:
-            break
     if state["peak"] != 1:
         failures.append(f"parallel login: Brave must stay sequential - its cookie key is "  # noqa: F821
                         f"bound to one shared directory (peak {state['peak']})")
+    if not result or len(result.get("logged_in", [])) != len(USERS):
+        failures.append(f"parallel login: not every account was attempted: {result}")  # noqa: F821
 finally:
     sheet_status.SheetWriter = _real_writer
     cfg.get_profile_path = _real_path
-    if _saved_browser is None:
-        conf = cfg._load_config()
-        conf.pop(bc.SETTING_KEY, None)
-        cfg._save_config(conf)
-    else:
-        cfg.save_setting(bc.SETTING_KEY, _saved_browser)
     conn = db._get_conn()
     conn.execute("DELETE FROM accounts WHERE username LIKE 'verify_p%@example.com'")
     conn.commit()
