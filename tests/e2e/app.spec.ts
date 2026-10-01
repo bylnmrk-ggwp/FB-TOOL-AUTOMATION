@@ -6,6 +6,9 @@ import { expect, test, type Page } from '@playwright/test';
  */
 const uniqueName = (prefix: string): string => `${prefix} ${Date.now().toString(36)}`;
 
+/** The API the end-to-end web server talks to; the port is set in playwright.config.ts. */
+const API_URL = 'http://127.0.0.1:3101';
+
 const createAccount = async (page: Page, name: string): Promise<void> => {
   await page.goto('/accounts');
   await page.getByRole('button', { name: 'Add account' }).first().click();
@@ -163,6 +166,36 @@ test.describe('Compose', () => {
 
     await page.goto('/accounts');
     await deleteAccount(page, name);
+  });
+
+  test('filters the account card by login state', async ({ page }) => {
+    // The filter row only appears once the roster is longer than a glance, so
+    // nine accounts go in through the API rather than nine trips to the dialog.
+    const prefix = uniqueName('E2E Filter');
+    const names = Array.from({ length: 9 }, (_, index) => `${prefix} ${index + 1}`);
+    const ids: string[] = [];
+    for (const name of names) {
+      const response = await page.request.post(`${API_URL}/api/v1/accounts`, { data: { name } });
+      expect(response.ok()).toBeTruthy();
+      ids.push(((await response.json()) as { id: string }).id);
+    }
+
+    await page.goto('/compose');
+    await expect(page.getByRole('checkbox', { name: names[0] })).toBeVisible();
+
+    // Nothing in a test database has ever signed in, so "Logged in" empties the card.
+    await page.getByLabel('Login state').click();
+    await page.getByRole('option', { name: 'Logged in' }).click();
+    await expect(page.getByRole('checkbox', { name: names[0] })).toBeHidden();
+    await expect(page.getByText('No account matches that filter.')).toBeVisible();
+
+    await page.getByLabel('Login state').click();
+    await page.getByRole('option', { name: 'Not checked' }).click();
+    await expect(page.getByRole('checkbox', { name: names[0] })).toBeVisible();
+
+    for (const id of ids) {
+      expect((await page.request.delete(`${API_URL}/api/v1/accounts/${id}`)).ok()).toBeTruthy();
+    }
   });
 });
 

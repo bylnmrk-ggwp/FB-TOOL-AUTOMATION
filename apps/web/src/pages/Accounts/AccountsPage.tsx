@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { StorageStateSchema, type Account, type AccountStatus, type LoginStatus } from '@fb/shared';
-import { ACCOUNT_STATUSES, LOGIN_STATUSES } from '@fb/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -34,13 +33,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { AccountStatusDot, LOGIN_LABELS, LoginStatusDot } from '@/components/common/StatusDot';
+import { AccountStatusDot, LoginStatusDot } from '@/components/common/StatusDot';
 import { EmptyState, ErrorNotice, errorMessage } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { DataTable, type Column } from '@/components/tables/DataTable';
 import { NativeSelect } from '@/components/forms/Field';
 import { AccountFormDialog } from '../../features/accounts/components/AccountFormDialog';
 import { ImportRosterDialog } from '../../features/accounts/components/ImportRosterDialog';
+import { LOGIN_OPTIONS, STATUS_OPTIONS } from '../../features/accounts/options';
 import {
   fetchAllAccounts,
   useAccounts,
@@ -56,16 +56,6 @@ import { useFetchGroups } from '../../features/groups/hooks';
 import { useCreateJobs } from '../../features/queue/hooks';
 import { exportSession } from '../../api/accounts';
 import { relativeTime } from '../../lib/format';
-
-const STATUS_OPTIONS = [
-  { value: '', label: 'Any browser state' },
-  ...ACCOUNT_STATUSES.map((status) => ({ value: status, label: status })),
-];
-
-const LOGIN_OPTIONS = [
-  { value: '', label: 'Any login state' },
-  ...LOGIN_STATUSES.map((status) => ({ value: status, label: LOGIN_LABELS[status] })),
-];
 
 const RUNNING: readonly AccountStatus[] = ['starting', 'online', 'busy'];
 const PAGE_SIZE = 100;

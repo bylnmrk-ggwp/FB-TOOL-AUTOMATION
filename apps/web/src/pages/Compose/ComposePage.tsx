@@ -19,9 +19,16 @@ import { Label } from '@/components/ui/label';
 import { ErrorNotice, InfoNotice } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { AccountStatusDot, LoginStatusDot } from '@/components/common/StatusDot';
-import { CheckboxField, SelectField, TextAreaField, TextField } from '@/components/forms/Field';
+import {
+  CheckboxField,
+  NativeSelect,
+  SelectField,
+  TextAreaField,
+  TextField,
+} from '@/components/forms/Field';
 import { cn } from '@/lib/utils';
 import { useAllAccounts } from '../../features/accounts/hooks';
+import { LOGIN_OPTIONS, STATUS_OPTIONS } from '../../features/accounts/options';
 import { useGroupSummaries } from '../../features/groups/hooks';
 import { useCreateJobs, useJoinGroups, useShareToGroups } from '../../features/queue/hooks';
 import { uploadMedia } from '../../api/system';
@@ -205,6 +212,8 @@ export const ComposePage = (): ReactElement => {
   const [form, setForm] = useState<FormState>(initialForm);
   const [selected, setSelected] = useState<string[]>([]);
   const [accountSearch, setAccountSearch] = useState('');
+  const [accountLogin, setAccountLogin] = useState('');
+  const [accountStatus, setAccountStatus] = useState('');
   const [pickedGroups, setPickedGroups] = useState<Set<string>>(new Set());
   const [groupSearch, setGroupSearch] = useState('');
   const [media, setMedia] = useState<MediaRef[]>([]);
@@ -234,12 +243,16 @@ export const ComposePage = (): ReactElement => {
     const needle = accountSearch.trim().toLowerCase();
     return (accounts.data ?? []).filter(
       (account) =>
-        needle === '' ||
-        account.displayName.toLowerCase().includes(needle) ||
-        (account.facebookName ?? '').toLowerCase().includes(needle) ||
-        (account.username ?? '').toLowerCase().includes(needle),
+        (accountLogin === '' || account.loginStatus === accountLogin) &&
+        (accountStatus === '' || account.status === accountStatus) &&
+        (needle === '' ||
+          account.displayName.toLowerCase().includes(needle) ||
+          (account.facebookName ?? '').toLowerCase().includes(needle) ||
+          (account.username ?? '').toLowerCase().includes(needle)),
     );
-  }, [accounts.data, accountSearch]);
+  }, [accounts.data, accountSearch, accountLogin, accountStatus]);
+  const accountsFiltered =
+    accountSearch.trim() !== '' || accountLogin !== '' || accountStatus !== '';
   const allSelected =
     availableAccounts.length > 0 &&
     availableAccounts.every((account) => selected.includes(account.id));
@@ -728,21 +741,35 @@ export const ComposePage = (): ReactElement => {
             </CardHeader>
             <CardContent className="px-0 py-0">
               {(accounts.data?.length ?? 0) > 8 && (
-                <div className="border-b px-3 py-2">
+                <div className="grid gap-2 border-b px-3 py-2">
                   <Input
                     aria-label="Filter accounts"
                     placeholder="Filter by name or username"
                     value={accountSearch}
                     onChange={(event) => setAccountSearch(event.target.value)}
                   />
+                  <div className="grid grid-cols-2 gap-2">
+                    <NativeSelect
+                      aria-label="Login state"
+                      value={accountLogin}
+                      options={LOGIN_OPTIONS}
+                      onValueChange={setAccountLogin}
+                    />
+                    <NativeSelect
+                      aria-label="Browser state"
+                      value={accountStatus}
+                      options={STATUS_OPTIONS}
+                      onValueChange={setAccountStatus}
+                    />
+                  </div>
                 </div>
               )}
               {availableAccounts.length === 0 ? (
                 <div className="p-4">
                   <InfoNotice>
-                    {accountSearch.trim() === ''
-                      ? 'No enabled accounts. Import the roster or add one on the Accounts page.'
-                      : 'No account matches that filter.'}
+                    {accountsFiltered
+                      ? 'No account matches that filter.'
+                      : 'No enabled accounts. Import the roster or add one on the Accounts page.'}
                   </InfoNotice>
                 </div>
               ) : (
