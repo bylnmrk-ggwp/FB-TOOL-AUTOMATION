@@ -85,8 +85,12 @@ interface SharedBrowser {
 export class BrowserLauncher {
   /** One probe per binary per process: the version string a headless launch must wear. */
   private readonly userAgents = new Map<string, Promise<string>>();
-  /** The one Chromium every headless viewer shares; closed once the last viewer leaves. */
-  private shared: SharedBrowser | null = null;
+  /**
+   * The one Chromium every headless viewer shares; closed once the last
+   * viewer leaves. Held as a promise so ten viewers arriving together wait
+   * for one launch instead of each starting a browser of their own.
+   */
+  private shared: Promise<SharedBrowser> | null = null;
   /** Per binary: whether it decodes H.264, which Facebook video is encoded in. */
   private readonly h264 = new Map<string, Promise<boolean>>();
 
@@ -163,24 +167,32 @@ export class BrowserLauncher {
     timeoutMs: number,
   ): Promise<SharedBrowser> {
     const key = JSON.stringify(binary);
-    if (this.shared !== null && this.shared.key === key && this.shared.browser.isConnected()) {
-      return this.shared;
+    if (this.shared !== null) {
+      const current = await this.shared.catch(() => null);
+      if (current !== null && current.key === key && current.browser.isConnected()) return current;
     }
 
-    const browser = await chromium.launch({
-      headless: true,
-      timeout: timeoutMs,
-      args: [...LAUNCH_ARGS, ...HEADLESS_LEAN_ARGS, ...VIEWER_ARGS],
-      ignoreDefaultArgs: ['--enable-automation'],
-      ...binary,
-      ...('channel' in binary || 'executablePath' in binary ? {} : { channel: 'chromium' }),
+    const launching = (async (): Promise<SharedBrowser> => {
+      const browser = await chromium.launch({
+        headless: true,
+        timeout: timeoutMs,
+        args: [...LAUNCH_ARGS, ...HEADLESS_LEAN_ARGS, ...VIEWER_ARGS],
+        ignoreDefaultArgs: ['--enable-automation'],
+        ...binary,
+        ...('channel' in binary || 'executablePath' in binary ? {} : { channel: 'chromium' }),
+      });
+      const entry: SharedBrowser = { browser, key, contexts: 0 };
+      browser.on('disconnected', () => {
+        if (this.shared === launching) this.shared = null;
+      });
+      return entry;
+    })();
+    // A launch that fails is forgotten, so the next viewer tries again.
+    launching.catch(() => {
+      if (this.shared === launching) this.shared = null;
     });
-    const entry: SharedBrowser = { browser, key, contexts: 0 };
-    browser.on('disconnected', () => {
-      if (this.shared === entry) this.shared = null;
-    });
-    this.shared = entry;
-    return entry;
+    this.shared = launching;
+    return launching;
   }
 
   /**
@@ -228,7 +240,7 @@ export class BrowserLauncher {
   private releaseShared(entry: SharedBrowser): void {
     entry.contexts = Math.max(0, entry.contexts - 1);
     if (entry.contexts > 0) return;
-    if (this.shared === entry) this.shared = null;
+    // The disconnected handler clears the slot once the process is gone.
     void entry.browser.close().catch(() => undefined);
   }
 

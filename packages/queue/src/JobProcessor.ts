@@ -277,6 +277,21 @@ export class JobProcessor {
         error.message,
       );
     }
+    // Any job can find the session gone — a watch, a share, a comment. That
+    // is a fact about the account, not the job, so the roster records it and
+    // the next "logged in" selection leaves this account out.
+    if (
+      isAppError(error) &&
+      error.code === ERROR_CODES.AUTOMATION_NOT_LOGGED_IN &&
+      job.type !== 'login' &&
+      job.type !== 'check_login'
+    ) {
+      await this.deps.accounts.recordLoginVerdict(job.accountId, {
+        loginStatus: 'logged_out',
+        loginReason: error.message,
+      });
+      return;
+    }
     if ((job.type === 'login' || job.type === 'check_login') && isAppError(error)) {
       const gate = (error.details as { gate?: unknown } | undefined)?.gate;
       if (isLoginStatus(gate)) {

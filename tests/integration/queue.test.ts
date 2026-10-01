@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ERROR_CODES, type Job, type JobStatus } from '@fb/shared';
-import { AutomationBlockedError, AutomationTimeoutError, LoginFailedError } from '@fb/shared';
+import {
+  AutomationBlockedError,
+  AutomationTimeoutError,
+  LoginFailedError,
+  NotLoggedInError,
+} from '@fb/shared';
 import { FakeGateway } from '../helpers/fake-gateway';
 import { createTestServer, type TestServer } from '../helpers/server';
 
@@ -251,6 +256,20 @@ describe('Queue', () => {
     expect(account.statusCode).toBe(200);
     expect(account.json().loginStatus).toBe('unknown');
     expect(account.json().lastLoginCheckAt).toBeNull();
+  });
+
+  it('marks the account logged out when any job finds the session gone', async () => {
+    server.gateway.alwaysFail(new NotLoggedInError(accountId));
+
+    const created = await createJob({ accountId, action: POST, maxRetries: 0 });
+    await waitForStatus(server, created.json().id, ['failed']);
+
+    const account = await server.app.inject({
+      method: 'GET',
+      url: `/api/v1/accounts/${accountId}`,
+    });
+    expect(account.statusCode).toBe(200);
+    expect(account.json().loginStatus).toBe('logged_out');
   });
 
   it('records logged out when Facebook itself refused the login', async () => {
