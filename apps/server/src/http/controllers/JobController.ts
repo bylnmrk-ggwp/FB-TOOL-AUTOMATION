@@ -11,7 +11,7 @@ import {
   PRIORITY_RANGE,
   ReactionTypeSchema,
 } from '@fb/shared';
-import type { JobService } from '@fb/application';
+import type { BrowserService, JobService } from '@fb/application';
 import { validateBody, validateParams, validateQuery } from '../middleware/validate.js';
 
 const priority = z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).default(0);
@@ -54,7 +54,10 @@ const JoinGroupsSchema = z.object({
 });
 
 export class JobController {
-  constructor(private readonly jobs: JobService) {}
+  constructor(
+    private readonly jobs: JobService,
+    private readonly browsers: BrowserService,
+  ) {}
 
   list = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const query = validateQuery(ListJobsQuerySchema, request);
@@ -106,8 +109,15 @@ export class JobController {
     await reply.send(await this.jobs.cancel(id));
   };
 
+  /**
+   * "Stop everything" means the browsers too: a cancelled job closes the one
+   * it opened, but a viewer left open on purpose, or a window an operator
+   * started, would otherwise stay up and keep using the machine.
+   */
   cancelAll = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    await reply.send({ cancelled: await this.jobs.cancelAll() });
+    const cancelled = await this.jobs.cancelAll();
+    await this.browsers.stopAll('stopped from the queue');
+    await reply.send({ cancelled });
   };
 
   retry = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {

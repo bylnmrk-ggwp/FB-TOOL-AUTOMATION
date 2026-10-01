@@ -25,7 +25,7 @@ export const registerRoutes = async (app: FastifyInstance, container: Container)
     sessions: container.sessions,
   });
   const browsers = new BrowserSessionController(container.browsers);
-  const jobs = new JobController(container.jobs);
+  const jobs = new JobController(container.jobs, container.browsers);
   const groups = new GroupController(container.groups, container.jobs);
   const operator = new OperatorInputController(container.operator);
   const system = new SystemController({

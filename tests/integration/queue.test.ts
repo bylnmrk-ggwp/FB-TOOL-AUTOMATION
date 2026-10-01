@@ -87,6 +87,18 @@ describe('Queue', () => {
     expect(server.browser.starts.at(-1)?.needsMedia).toBeUndefined();
   });
 
+  it('closes every browser on Stop everything, viewers included', async () => {
+    server.gateway.thenHang();
+    const created = await createJob({ accountId, action: WATCH });
+    await server.gateway.waitForStarts(1);
+    expect(server.browser.isRunning(accountId)).toBe(true);
+
+    const response = await server.app.inject({ method: 'POST', url: '/api/v1/jobs/cancel-all' });
+    expect(response.statusCode).toBe(200);
+    await waitForStatus(server, created.json().id, ['cancelled']);
+    expect(server.browser.isRunning(accountId)).toBe(false);
+  });
+
   it('leaves the browser open after a watch-live job, so the viewer stays', async () => {
     const created = await createJob({ accountId, action: WATCH });
     await waitForStatus(server, created.json().id, ['completed']);
