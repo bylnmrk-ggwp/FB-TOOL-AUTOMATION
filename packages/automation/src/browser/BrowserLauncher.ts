@@ -87,9 +87,12 @@ export class BrowserLauncher {
   private readonly userAgents = new Map<string, Promise<string>>();
   /** The one Chromium every headless viewer shares; closed once the last viewer leaves. */
   private shared: SharedBrowser | null = null;
+  /** Per binary: whether it decodes H.264, which Facebook video is encoded in. */
+  private readonly h264 = new Map<string, Promise<boolean>>();
 
   async launch(options: StartBrowserOptions): Promise<BrowserContext> {
-    const binary = this.browserBinary(options);
+    const binary =
+      options.needsMedia === true ? await this.viewerBinary(options) : this.browserBinary(options);
     try {
       return await chromium.launchPersistentContext(options.userDataDir, {
         headless: options.headless,
@@ -134,7 +137,7 @@ export class BrowserLauncher {
    * rather than a whole browser — roughly 100 MB less apiece.
    */
   async launchViewer(options: StartBrowserOptions, state: StorageState): Promise<BrowserContext> {
-    const binary = this.browserBinary(options);
+    const binary = await this.viewerBinary(options);
     try {
       const shared = await this.sharedBrowser(binary, options.timeoutMs);
       const context = await shared.browser.newContext({
@@ -178,6 +181,47 @@ export class BrowserLauncher {
     });
     this.shared = entry;
     return entry;
+  }
+
+  /**
+   * The binary a viewer runs: the configured one when it decodes H.264, and
+   * Playwright's own Chromium otherwise. A plain Chromium snapshot ships
+   * without H.264, and Facebook then shows "trouble playing this video" in
+   * place of a player — so a viewer never uses one, whatever logins use.
+   */
+  private async viewerBinary(
+    options: StartBrowserOptions,
+  ): Promise<{ executablePath: string } | { channel: string } | Record<string, never>> {
+    const binary = this.browserBinary(options);
+    return (await this.decodesH264(binary)) ? binary : {};
+  }
+
+  /** Asked once per binary per process: a short headless launch and one question. */
+  private decodesH264(binary: Record<string, string>): Promise<boolean> {
+    const key = JSON.stringify(binary);
+    const cached = this.h264.get(key);
+    if (cached !== undefined) return cached;
+
+    const probe = (async (): Promise<boolean> => {
+      const browser = await chromium.launch({
+        headless: true,
+        ...binary,
+        ...('channel' in binary || 'executablePath' in binary ? {} : { channel: 'chromium' }),
+      });
+      try {
+        const page = await browser.newPage();
+        const answer = await page.evaluate(() =>
+          document.createElement('video').canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        );
+        return answer !== '';
+      } finally {
+        await browser.close();
+      }
+    })();
+    // A failed probe is not cached, so the next launch asks again.
+    probe.catch(() => this.h264.delete(key));
+    this.h264.set(key, probe);
+    return probe;
   }
 
   /** The last viewer out closes the shared browser; nothing idles for ever. */
