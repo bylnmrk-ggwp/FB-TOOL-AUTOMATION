@@ -28,68 +28,6 @@ interface Probe {
  */
 const run = (page: Page, script: string): Promise<unknown> => page.evaluate(`(${script})()`);
 
-const VIDEO_ID = [/[?&]v=(\d{6,})/, /\/videos\/(\d{6,})/, /video_id=(\d{6,})/];
-/** How the id appears inside the page's own data, when the address does not carry it. */
-const VIDEO_ID_IN_HTML = [/"videoId":"(\d{6,})"/, /"video_id":"(\d{6,})"/];
-
-/** Headers that make a plain fetch look like the navigation Facebook expects; without them it answers 400. */
-const NAVIGATION_HEADERS = {
-  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'accept-language': 'en-US,en;q=0.9',
-  'sec-fetch-dest': 'document',
-  'sec-fetch-mode': 'navigate',
-  'sec-fetch-site': 'none',
-  'sec-fetch-user': '?1',
-  'upgrade-insecure-requests': '1',
-};
-
-const firstMatch = (text: string, patterns: readonly RegExp[]): string | null => {
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1] !== undefined) return match[1];
-  }
-  return null;
-};
-
-/**
- * The page a viewer watches on. Facebook's bare embed player plays the same
- * stream with the same session for a little over half the memory of the
- * full live page, which also carries the feed, the chat and everything
- * else a viewer never looks at. The video id comes from the link itself,
- * or from the page the link resolves to — fetched as a document, never
- * rendered — where it sits in the address or in the page data. A link that
- * yields no id is watched as given.
- */
-const RESOLVED_TTL_MS = 15 * 60 * 1000;
-/** Links already resolved, and resolutions in flight, so a batch asks Facebook once per link. */
-const resolved = new Map<string, { at: number; target: Promise<string> }>();
-
-const viewerUrl = (context: ActionContext, url: string): Promise<string> => {
-  const known = resolved.get(url);
-  if (known !== undefined && Date.now() - known.at < RESOLVED_TTL_MS) return known.target;
-  const target = resolveViewerUrl(context, url);
-  resolved.set(url, { at: Date.now(), target });
-  target.catch(() => resolved.delete(url));
-  return target;
-};
-
-const resolveViewerUrl = async (context: ActionContext, url: string): Promise<string> => {
-  let id = firstMatch(url, VIDEO_ID);
-  if (id === null) {
-    try {
-      const response = await context.page.request.get(url, {
-        maxRedirects: 10,
-        headers: NAVIGATION_HEADERS,
-      });
-      id = firstMatch(response.url(), VIDEO_ID);
-      if (id === null) id = firstMatch(await response.text(), VIDEO_ID_IN_HTML);
-    } catch {
-      id = null;
-    }
-  }
-  return id === null ? url : `https://www.facebook.com/video/embed?video_id=${id}&autoplay=1`;
-};
-
 const VERIFY_SAMPLE_MS = 4_000;
 const POLL_RANGE_MS: [number, number] = [15_000, 50_000];
 
@@ -115,9 +53,7 @@ export const watchLive = async (
   await context.session.assertUsable(page, automation.accountId);
 
   step(context, 10, 'Opening the live video');
-  const target = await viewerUrl(context, input.url);
-  if (target !== input.url) log(`Watching through the embed player: ${target}`);
-  await navigation.goto(page, target);
+  await navigation.goto(page, input.url);
   await sleep(3_000);
 
   const verdict = await verifyPlaying(context);
@@ -158,7 +94,7 @@ export const watchLive = async (
     } catch {
       // A renderer that cannot be asked anything is not watching; rebuild it.
       log('The page stopped answering; reloading');
-      await navigation.goto(page, target);
+      await navigation.goto(page, input.url);
       reloads += 1;
       continue;
     }
@@ -169,7 +105,7 @@ export const watchLive = async (
         break;
       }
       log('The player is gone; reloading');
-      await navigation.goto(page, target);
+      await navigation.goto(page, input.url);
       await run(page, watchScripts.slim).catch(() => undefined);
       reloads += 1;
       lastTime = 0;
@@ -184,7 +120,7 @@ export const watchLive = async (
       await run(page, watchScripts.kick);
       if (stalls >= 3) {
         log('Still frozen after kicks; reloading');
-        await navigation.goto(page, target);
+        await navigation.goto(page, input.url);
         await run(page, watchScripts.slim).catch(() => undefined);
         reloads += 1;
         stalls = 0;
