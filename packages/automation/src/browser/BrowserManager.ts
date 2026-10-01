@@ -1,6 +1,13 @@
 import { EventEmitter } from 'node:events';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { BrowserContext } from 'playwright';
-import { BrowserAlreadyRunningError, BrowserNotRunningError } from '@fb/shared';
+import {
+  BrowserAlreadyRunningError,
+  BrowserNotRunningError,
+  StorageStateSchema,
+  type StorageState,
+} from '@fb/shared';
 import type {
   BrowserController,
   BrowserSession,
@@ -15,7 +22,14 @@ import {
   VIEWER_BLOCK,
 } from './BrowserContextManager.js';
 import { BrowserLauncher } from './BrowserLauncher.js';
+import { Gate } from './Gate.js';
 import { SessionTransfer } from './SessionTransfer.js';
+
+/** How many viewers may be starting at the same moment; more only pins the CPU. */
+const VIEWER_STARTS_AT_ONCE = 3;
+/** A session read out of a profile is reused for this long, unless the profile's cookies changed since. */
+const VIEWER_STATE_TTL_MS = 6 * 60 * 60 * 1000;
+const VIEWER_STATE_FILE = 'viewer-state.json';
 
 const CLOSED = 'closed';
 
@@ -38,6 +52,7 @@ interface RunningSession {
 export class BrowserManager implements BrowserController {
   private readonly sessions = new Map<string, RunningSession>();
   private readonly emitter = new EventEmitter();
+  private readonly viewerGate = new Gate(VIEWER_STARTS_AT_ONCE);
 
   constructor(
     private readonly logger: Logger,
@@ -66,14 +81,7 @@ export class BrowserManager implements BrowserController {
       });
     }
     const context = sharedViewer
-      ? await this.launcher.launchViewer(
-          options,
-          await this.transfer.exportState(
-            options.userDataDir,
-            options.channel,
-            options.executablePath,
-          ),
-        )
+      ? await this.openViewer(options)
       : await this.launcher.launch(options);
     // A headless browser runs lite: no images, media or fonts. It is invisible
     // and usually only signs in, so it needs none of them, and dropping them
@@ -172,6 +180,51 @@ export class BrowserManager implements BrowserController {
   onClosed(listener: (event: SessionClosedEvent) => void): () => void {
     this.emitter.on(CLOSED, listener);
     return () => this.emitter.off(CLOSED, listener);
+  }
+
+  /**
+   * A viewer start is two launches — the profile, to read its session, and
+   * the shared browser context — so a batch of twenty starting together
+   * pins the CPU and every page times out. A few go at a time, and the
+   * session is read from a cache when the profile has not changed since.
+   */
+  private async openViewer(options: StartBrowserOptions): Promise<BrowserContext> {
+    const release = await this.viewerGate.acquire();
+    try {
+      const state = await this.viewerState(options);
+      return await this.launcher.launchViewer(options, state);
+    } finally {
+      release();
+    }
+  }
+
+  private async viewerState(options: StartBrowserOptions): Promise<StorageState> {
+    const file = join(options.userDataDir, VIEWER_STATE_FILE);
+    const cached = await this.freshViewerState(file, options.userDataDir);
+    if (cached !== null) return cached;
+
+    const state = await this.transfer.exportState(
+      options.userDataDir,
+      options.channel,
+      options.executablePath,
+    );
+    await writeFile(file, JSON.stringify(state)).catch(() => undefined);
+    return state;
+  }
+
+  /** The cached session, when it is younger than the TTL and than the profile's cookie store. */
+  private async freshViewerState(file: string, userDataDir: string): Promise<StorageState | null> {
+    try {
+      const cache = await stat(file);
+      if (Date.now() - cache.mtimeMs > VIEWER_STATE_TTL_MS) return null;
+      const cookies = await stat(join(userDataDir, 'Default', 'Network', 'Cookies')).catch(
+        () => null,
+      );
+      if (cookies !== null && cookies.mtimeMs > cache.mtimeMs) return null;
+      return StorageStateSchema.parse(JSON.parse(await readFile(file, 'utf8')));
+    } catch {
+      return null;
+    }
   }
 
   /** The live context, for the automation gateway. Null when nothing is open. */
