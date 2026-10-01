@@ -43,7 +43,7 @@ export const watchScripts = {
     if (!v) return { video: false, t: 0, paused: true, ended: true };
     let resumed = false;
     if (v.paused || v.ended) { v.muted = true; v.play().catch(() => {}); resumed = true; }
-    return { video: true, t: v.currentTime || 0, paused: v.paused, ended: v.ended, resumed };
+    return { video: true, t: v.currentTime || 0, paused: v.paused, ended: v.ended, resumed, w: v.videoWidth, h: v.videoHeight };
   }`,
 
   /** Facebook's own viewer figure, off the player's aria-label. */

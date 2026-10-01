@@ -8,7 +8,12 @@ import type {
   StartBrowserOptions,
 } from '@fb/domain';
 import type { Logger } from '@fb/application';
-import { BrowserContextManager } from './BrowserContextManager.js';
+import {
+  BrowserContextManager,
+  LITE_BLOCK,
+  NO_BLOCK,
+  VIEWER_BLOCK,
+} from './BrowserContextManager.js';
 import { BrowserLauncher } from './BrowserLauncher.js';
 import { SessionTransfer } from './SessionTransfer.js';
 
@@ -74,8 +79,12 @@ export class BrowserManager implements BrowserController {
     // and usually only signs in, so it needs none of them, and dropping them
     // is what lets more run at once and each finish sooner. A browser that
     // must play a video is the exception: blocked media is a frozen player.
-    const lite = options.headless && options.needsMedia !== true;
-    await this.contexts.prepare(context, options.timeoutMs, lite);
+    const block = !options.headless
+      ? NO_BLOCK
+      : options.needsMedia === true
+        ? VIEWER_BLOCK
+        : LITE_BLOCK;
+    await this.contexts.prepare(context, options.timeoutMs, block);
 
     const session: BrowserSession = {
       sessionId: options.sessionId,

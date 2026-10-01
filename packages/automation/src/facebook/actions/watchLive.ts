@@ -15,6 +15,9 @@ interface Probe {
   paused: boolean;
   ended: boolean;
   resumed?: boolean;
+  /** The rendition being decoded, so the quality the player settled on is visible. */
+  w?: number;
+  h?: number;
 }
 
 /**
@@ -132,11 +135,15 @@ export const watchLive = async (
     const progress =
       total === null ? 50 : Math.min(95, 20 + Math.round((75 * elapsed) / Math.max(1, total)));
     const viewers = await run(page, watchScripts.viewers).catch(() => null);
+    const rendition =
+      probe.w !== undefined && probe.h !== undefined && probe.w > 0
+        ? `, ${probe.w}x${probe.h}`
+        : '';
     automation.onProgress(
       progress,
       viewers === null
-        ? `Watching, ${elapsed} min`
-        : `Watching, ${elapsed} min, ${String(viewers)} viewers`,
+        ? `Watching, ${elapsed} min${rendition}`
+        : `Watching, ${elapsed} min${rendition}, ${String(viewers)} viewers`,
     );
   }
 

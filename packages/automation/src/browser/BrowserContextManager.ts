@@ -12,27 +12,32 @@ export interface PreparedContext {
  * blocking the thread.
  */
 /** Request types a login does not need to see; blocking them is memory and speed. */
-const HEAVY_RESOURCES = new Set(['image', 'media', 'font']);
+export const LITE_BLOCK: ReadonlySet<string> = new Set(['image', 'media', 'font']);
+/** A viewer needs the video and nothing else that is heavy. */
+export const VIEWER_BLOCK: ReadonlySet<string> = new Set(['image', 'font']);
+/** A visible browser keeps everything, so a person watching sees a normal page. */
+export const NO_BLOCK: ReadonlySet<string> = new Set();
 
 export class BrowserContextManager {
   /**
-   * @param lite  Drop images, media and fonts. A headless batch does not look
-   *   at them, so this both frees the memory each browser holds and cuts the
-   *   time a page takes to settle — which is what lets more log in at once and
-   *   each one finish sooner. A visible browser keeps everything, so a person
-   *   watching sees a normal page.
+   * @param block  Request types to drop. A headless login drops images, media
+   *   and fonts: it does not look at them, so this both frees the memory each
+   *   browser holds and cuts the time a page takes to settle — which is what
+   *   lets more run at once and each finish sooner. A viewer drops images and
+   *   fonts but keeps media, or the video never plays. A visible browser
+   *   drops nothing, so a person watching sees a normal page.
    */
   async prepare(
     context: BrowserContext,
     timeoutMs: number,
-    lite = false,
+    block: ReadonlySet<string> = NO_BLOCK,
   ): Promise<PreparedContext> {
     context.setDefaultTimeout(timeoutMs);
     context.setDefaultNavigationTimeout(timeoutMs);
 
-    if (lite) {
+    if (block.size > 0) {
       await context.route('**/*', (route) => {
-        if (HEAVY_RESOURCES.has(route.request().resourceType())) {
+        if (block.has(route.request().resourceType())) {
           void route.abort().catch(() => undefined);
         } else {
           void route.continue().catch(() => undefined);
