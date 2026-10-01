@@ -10,6 +10,7 @@ import type {
 import type { Logger } from '@fb/application';
 import { BrowserContextManager } from './BrowserContextManager.js';
 import { BrowserLauncher } from './BrowserLauncher.js';
+import { SessionTransfer } from './SessionTransfer.js';
 
 const CLOSED = 'closed';
 
@@ -37,6 +38,7 @@ export class BrowserManager implements BrowserController {
     private readonly logger: Logger,
     private readonly launcher = new BrowserLauncher(),
     private readonly contexts = new BrowserContextManager(),
+    private readonly transfer = new SessionTransfer(),
   ) {
     this.emitter.setMaxListeners(50);
   }
@@ -46,7 +48,28 @@ export class BrowserManager implements BrowserController {
       throw new BrowserAlreadyRunningError(options.accountId);
     }
 
-    const context = await this.launcher.launch(options);
+    // A headless viewer does not get a browser of its own: its session is
+    // read out of the profile and loaded into a context of the one shared
+    // Chromium, which is what lets twenty or thirty watch where ten could.
+    // A proxied account keeps its own browser, since the proxy is per launch.
+    const sharedViewer =
+      options.headless && options.needsMedia === true && options.proxy === undefined;
+    if (sharedViewer) {
+      this.logger.info('Viewer opened in the shared browser', {
+        event: 'browser.viewer',
+        accountId: options.accountId,
+      });
+    }
+    const context = sharedViewer
+      ? await this.launcher.launchViewer(
+          options,
+          await this.transfer.exportState(
+            options.userDataDir,
+            options.channel,
+            options.executablePath,
+          ),
+        )
+      : await this.launcher.launch(options);
     // A headless browser runs lite: no images, media or fonts. It is invisible
     // and usually only signs in, so it needs none of them, and dropping them
     // is what lets more run at once and each finish sooner. A browser that

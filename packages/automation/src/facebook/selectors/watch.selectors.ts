@@ -21,6 +21,22 @@ export const watchScripts = {
     return true;
   }`,
 
+  /**
+   * Mute the player and shrink it. A small picture is cheap to decode, and
+   * an adaptive stream follows the size it is drawn at, so this is also how
+   * the lowest quality is asked for without touching the settings menu.
+   */
+  slim: `() => {
+    const v = document.querySelector('video');
+    if (!v) return false;
+    v.muted = true;
+    v.volume = 0;
+    for (const [k, val] of [['width', '160px'], ['height', '90px'], ['maxWidth', '160px'], ['maxHeight', '90px']]) {
+      v.style[k] = val;
+    }
+    return true;
+  }`,
+
   /** One health sample: is there a player, is it paused or ended, where is it. */
   probe: `() => {
     const v = document.querySelector('video');

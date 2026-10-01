@@ -1,3 +1,4 @@
+import type { Page } from 'playwright';
 import { AutomationFailedError, sleep, type AutomationResult } from '@fb/shared';
 import { idle } from '../humanInput.js';
 import { watchScripts } from '../selectors/watch.selectors.js';
@@ -15,6 +16,14 @@ interface Probe {
   ended: boolean;
   resumed?: boolean;
 }
+
+/**
+ * The watch scripts are stored as function source. Handed to evaluate as a
+ * string they are only read, never called — the page returns the function
+ * itself, which does not serialise, so every reading came back undefined
+ * and every player looked frozen. Calling them is what runs them.
+ */
+const run = (page: Page, script: string): Promise<unknown> => page.evaluate(`(${script})()`);
 
 const VERIFY_SAMPLE_MS = 4_000;
 const POLL_RANGE_MS: [number, number] = [15_000, 50_000];
@@ -47,7 +56,8 @@ export const watchLive = async (
   const verdict = await verifyPlaying(context);
   if (verdict !== 'playing')
     throw new AutomationFailedError(`Not watching: ${verdict}`, { url: input.url });
-  await page.evaluate(watchScripts.kick);
+  await run(page, watchScripts.kick);
+  await run(page, watchScripts.slim).catch(() => undefined);
 
   step(
     context,
@@ -77,7 +87,7 @@ export const watchLive = async (
 
     let probe: Probe;
     try {
-      probe = (await page.evaluate(watchScripts.probe)) as Probe;
+      probe = (await run(page, watchScripts.probe)) as Probe;
     } catch {
       // A renderer that cannot be asked anything is not watching; rebuild it.
       log('The page stopped answering; reloading');
@@ -93,6 +103,7 @@ export const watchLive = async (
       }
       log('The player is gone; reloading');
       await navigation.goto(page, input.url);
+      await run(page, watchScripts.slim).catch(() => undefined);
       reloads += 1;
       lastTime = 0;
       continue;
@@ -103,10 +114,11 @@ export const watchLive = async (
     if (probe.t - lastTime < 0.5 && rounds > 1) {
       stalls += 1;
       log(`The player is not advancing (${stalls})`);
-      await page.evaluate(watchScripts.kick);
+      await run(page, watchScripts.kick);
       if (stalls >= 3) {
         log('Still frozen after kicks; reloading');
         await navigation.goto(page, input.url);
+        await run(page, watchScripts.slim).catch(() => undefined);
         reloads += 1;
         stalls = 0;
       }
@@ -119,7 +131,7 @@ export const watchLive = async (
     const total = input.minutes === null ? null : Math.round(input.minutes);
     const progress =
       total === null ? 50 : Math.min(95, 20 + Math.round((75 * elapsed) / Math.max(1, total)));
-    const viewers = await page.evaluate(watchScripts.viewers).catch(() => null);
+    const viewers = await run(page, watchScripts.viewers).catch(() => null);
     automation.onProgress(
       progress,
       viewers === null
@@ -153,16 +165,26 @@ const verifyPlaying = async (context: ActionContext): Promise<string> => {
       : 'no video player on the page';
   }
 
-  const first = (await page.evaluate(watchScripts.currentTime)) as number | null;
+  const first = (await run(page, watchScripts.currentTime)) as number | null;
   await sleep(VERIFY_SAMPLE_MS);
-  const second = (await page.evaluate(watchScripts.currentTime)) as number | null;
+  const second = (await run(page, watchScripts.currentTime)) as number | null;
   if (first === null || second === null) return 'the player disappeared';
   if (second - first >= 0.5) return 'playing';
 
-  await page.evaluate(watchScripts.kick);
+  await run(page, watchScripts.kick);
   await sleep(VERIFY_SAMPLE_MS);
-  const third = ((await page.evaluate(watchScripts.currentTime)) as number | null) ?? second;
-  return third - second >= 0.5 ? 'playing' : 'the video is frozen (loaded but not advancing)';
+  const third = ((await run(page, watchScripts.currentTime)) as number | null) ?? second;
+  if (third - second >= 0.5) return 'playing';
+
+  // A broadcast that ended leaves its player on the page, stopped: say so
+  // rather than calling the machine frozen.
+  if (await broadcastEnded(context)) return 'the broadcast has already ended';
+  const probe = (await run(page, watchScripts.probe).catch(() => null)) as Probe | null;
+  const state =
+    probe === null
+      ? ''
+      : `, paused ${String(probe.paused)}, ended ${String(probe.ended)}, at ${first.toFixed(1)}s then ${third.toFixed(1)}s`;
+  return `the video is frozen (loaded but not advancing${state})`;
 };
 
 const broadcastEnded = async (context: ActionContext): Promise<boolean> => {

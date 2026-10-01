@@ -56,7 +56,9 @@ export class FacebookSession {
 
   async loginOverlayPresent(page: Page): Promise<boolean> {
     try {
-      return Boolean(await page.evaluate(LOGIN_GATE_SCRIPT));
+      // The script is function source: it has to be called, not just evaluated,
+      // or the page hands back the function itself and the gate is never seen.
+      return Boolean(await page.evaluate(`(${LOGIN_GATE_SCRIPT})()`));
     } catch {
       return false;
     }

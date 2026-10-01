@@ -1,5 +1,10 @@
-import { chromium, type BrowserContext } from 'playwright';
-import { BrowserLaunchError } from '@fb/shared';
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+} from 'playwright';
+import { BrowserLaunchError, type StorageState } from '@fb/shared';
 import type { StartBrowserOptions } from '@fb/domain';
 
 /** Playwright channel names. Brave is launched by path, not by channel. */
@@ -57,6 +62,22 @@ const HEADLESS_LEAN_ARGS = [
 ];
 
 /**
+ * What a viewer adds on top of lean: no GPU process at all, and a player that
+ * starts without a click. Audio is already muted by the lean set.
+ */
+const VIEWER_ARGS = ['--disable-gpu', '--autoplay-policy=no-user-gesture-required'];
+
+/** A small window means a small player, and a small player a cheap stream to decode. */
+const VIEWER_VIEWPORT = { width: 480, height: 320 };
+
+interface SharedBrowser {
+  browser: Browser;
+  /** Which binary it runs, so a settings change does not land in the wrong one. */
+  key: string;
+  contexts: number;
+}
+
+/**
  * Turns launch options into a running persistent context. It does one thing,
  * which keeps the interesting part — what a browser session means to the rest
  * of the system — out of Playwright's way.
@@ -64,6 +85,8 @@ const HEADLESS_LEAN_ARGS = [
 export class BrowserLauncher {
   /** One probe per binary per process: the version string a headless launch must wear. */
   private readonly userAgents = new Map<string, Promise<string>>();
+  /** The one Chromium every headless viewer shares; closed once the last viewer leaves. */
+  private shared: SharedBrowser | null = null;
 
   async launch(options: StartBrowserOptions): Promise<BrowserContext> {
     const binary = this.browserBinary(options);
@@ -71,8 +94,12 @@ export class BrowserLauncher {
       return await chromium.launchPersistentContext(options.userDataDir, {
         headless: options.headless,
         timeout: options.timeoutMs,
-        args: [...LAUNCH_ARGS, ...(options.headless ? HEADLESS_LEAN_ARGS : HEADED_ARGS)],
-        viewport: { width: 1366, height: 800 },
+        args: [
+          ...LAUNCH_ARGS,
+          ...(options.headless ? HEADLESS_LEAN_ARGS : HEADED_ARGS),
+          ...(options.headless && options.needsMedia === true ? VIEWER_ARGS : []),
+        ],
+        viewport: options.needsMedia === true ? VIEWER_VIEWPORT : { width: 1366, height: 800 },
         // A locale the timezone and Accept-Language agree with; a missing or
         // mismatched one is itself a signal.
         locale: 'en-US',
@@ -98,6 +125,67 @@ export class BrowserLauncher {
         error,
       );
     }
+  }
+
+  /**
+   * A viewer context inside one shared headless Chromium, built from the
+   * account's exported session rather than its profile directory. One browser
+   * process then serves every viewer, and each account costs a renderer
+   * rather than a whole browser — roughly 100 MB less apiece.
+   */
+  async launchViewer(options: StartBrowserOptions, state: StorageState): Promise<BrowserContext> {
+    const binary = this.browserBinary(options);
+    try {
+      const shared = await this.sharedBrowser(binary, options.timeoutMs);
+      const context = await shared.browser.newContext({
+        storageState: state as BrowserContextOptions['storageState'],
+        viewport: VIEWER_VIEWPORT,
+        locale: 'en-US',
+        userAgent: await this.headlessUserAgent(binary),
+      });
+      shared.contexts += 1;
+      context.on('close', () => this.releaseShared(shared));
+      return context;
+    } catch (error) {
+      throw new BrowserLaunchError(
+        options.accountId,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
+  }
+
+  private async sharedBrowser(
+    binary: Record<string, string>,
+    timeoutMs: number,
+  ): Promise<SharedBrowser> {
+    const key = JSON.stringify(binary);
+    if (this.shared !== null && this.shared.key === key && this.shared.browser.isConnected()) {
+      return this.shared;
+    }
+
+    const browser = await chromium.launch({
+      headless: true,
+      timeout: timeoutMs,
+      args: [...LAUNCH_ARGS, ...HEADLESS_LEAN_ARGS, ...VIEWER_ARGS],
+      ignoreDefaultArgs: ['--enable-automation'],
+      ...binary,
+      ...('channel' in binary || 'executablePath' in binary ? {} : { channel: 'chromium' }),
+    });
+    const entry: SharedBrowser = { browser, key, contexts: 0 };
+    browser.on('disconnected', () => {
+      if (this.shared === entry) this.shared = null;
+    });
+    this.shared = entry;
+    return entry;
+  }
+
+  /** The last viewer out closes the shared browser; nothing idles for ever. */
+  private releaseShared(entry: SharedBrowser): void {
+    entry.contexts = Math.max(0, entry.contexts - 1);
+    if (entry.contexts > 0) return;
+    if (this.shared === entry) this.shared = null;
+    void entry.browser.close().catch(() => undefined);
   }
 
   /**
