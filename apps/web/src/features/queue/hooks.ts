@@ -9,12 +9,14 @@ import type { CreateJobBatchInput, Job, ListJobsQuery, Paginated, QueueStats } f
 import {
   cancelAllJobs,
   cancelJob,
+  commentPost,
   createJobBatch,
   getQueueStats,
   joinGroups,
   listJobs,
   retryJob,
   shareToGroups,
+  type CommentPostInput,
   type JoinGroupsInput,
   type ShareToGroupsInput,
 } from '../../api/jobs';
@@ -65,6 +67,9 @@ export const useCreateJobs = (): UseMutationResult<{ jobs: Job[] }, Error, Creat
 
 export const useShareToGroups = (): UseMutationResult<{ jobs: Job[] }, Error, ShareToGroupsInput> =>
   useJobMutation(shareToGroups);
+
+export const useCommentPost = (): UseMutationResult<{ jobs: Job[] }, Error, CommentPostInput> =>
+  useJobMutation(commentPost);
 
 export const useJoinGroups = (): UseMutationResult<{ jobs: Job[] }, Error, JoinGroupsInput> =>
   useJobMutation(joinGroups);

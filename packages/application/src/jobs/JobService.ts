@@ -8,6 +8,7 @@ import {
   JobNotRetryableError,
   nowIso,
   type AutomationAction,
+  type ActivityKind,
   type AutomationActionInput,
   type CreateJobBatchInput,
   type CreateJobInput,
@@ -39,6 +40,20 @@ export interface ShareToGroupsRequest {
   /** Leave out groups an account has already shared this post to. */
   skipDone: boolean;
   priority?: number;
+}
+
+export interface CommentPostRequest {
+  accountIds: readonly string[];
+  postUrl: string;
+  /** One comment per account, in order; the list repeats when accounts outnumber it. */
+  comments: readonly string[];
+  /** What follows the comment on the same post. */
+  then: 'none' | 'react' | 'timeline' | 'story';
+  reaction: ReactionType | null;
+  /** Leave out what an account has already done to this post. */
+  skipDone: boolean;
+  priority?: number;
+  scheduledFor?: string;
 }
 
 export interface JoinGroupsRequest {
@@ -128,6 +143,61 @@ export class JobService {
     }
 
     return this.createMixed(actions, { priority: request.priority ?? 0 });
+  }
+
+  /**
+   * One post, many accounts, one comment each: account n gets line n, and the
+   * lines repeat when the accounts outnumber them. With skipDone, an account
+   * that already commented, reacted or shared this post does not do it again,
+   * so the same roster can be run twice without doubling up.
+   */
+  async createCommentPost(request: CommentPostRequest): Promise<Job[]> {
+    const accounts = await this.usableAccounts(request.accountIds);
+    const { activities } = this.deps.repositories;
+    const actions: Array<{ accountId: string; action: AutomationActionInput }> = [];
+    const { postUrl } = request;
+
+    for (const [index, account] of accounts.entries()) {
+      const text = request.comments[index % request.comments.length];
+      if (text === undefined) break;
+      const did = async (kind: ActivityKind, target: string): Promise<boolean> =>
+        request.skipDone && (await activities.doneTargets(account.id, kind)).has(target);
+
+      const commented = await did('comment', postUrl);
+      if (request.then === 'timeline' || request.then === 'story') {
+        // A share job comments once the share is up, so one job covers both
+        // unless the share already happened and only the comment is owed.
+        if (!(await did('share', `${postUrl}::${request.then}`))) {
+          actions.push({
+            accountId: account.id,
+            action: {
+              type: 'share_post',
+              postUrl,
+              targets: [request.then],
+              reaction: null,
+              comments: commented ? [] : [text],
+            },
+          });
+        } else if (!commented) {
+          actions.push({ accountId: account.id, action: { type: 'comment', postUrl, text } });
+        }
+        continue;
+      }
+
+      if (!commented)
+        actions.push({ accountId: account.id, action: { type: 'comment', postUrl, text } });
+      if (request.then === 'react' && !(await did('react', postUrl))) {
+        actions.push({
+          accountId: account.id,
+          action: { type: 'react_to_post', postUrl, reaction: request.reaction ?? 'like' },
+        });
+      }
+    }
+
+    return this.createMixed(actions, {
+      priority: request.priority ?? 0,
+      ...(request.scheduledFor === undefined ? {} : { scheduledFor: request.scheduledFor }),
+    });
   }
 
   async get(id: string): Promise<Job> {

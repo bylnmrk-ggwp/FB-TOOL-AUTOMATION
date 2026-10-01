@@ -50,6 +50,20 @@ export interface ShareToGroupsInput {
 export const shareToGroups = (input: ShareToGroupsInput): Promise<{ jobs: Job[] }> =>
   apiRequest('/jobs/share-to-groups', JobsSchema, { method: 'POST', body: input });
 
+export interface CommentPostInput {
+  accountIds: string[];
+  postUrl: string;
+  comments: string[];
+  then: 'none' | 'react' | 'timeline' | 'story';
+  reaction: ReactionType | null;
+  skipDone: boolean;
+  priority?: number;
+  scheduledFor?: string;
+}
+
+export const commentPost = (input: CommentPostInput): Promise<{ jobs: Job[] }> =>
+  apiRequest('/jobs/comment-post', JobsSchema, { method: 'POST', body: input });
+
 export interface JoinGroupsInput {
   accountIds: string[];
   groupUrls: string[];

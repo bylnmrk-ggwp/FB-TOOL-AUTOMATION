@@ -176,7 +176,7 @@ test.describe('Compose', () => {
     await page.getByLabel('Type').click();
     await page.getByRole('option', { name: 'Comment on a post' }).click();
     await page.getByLabel('Post URL').fill('https://www.facebook.com/example/posts/1');
-    await page.getByLabel('Text', { exact: true }).fill('Commented by an end-to-end test');
+    await page.getByLabel('Comments, one per line').fill('Commented by an end-to-end test');
     await page.getByRole('radio', { name: 'Share to the story' }).click();
     await page.getByRole('checkbox', { name }).click();
     await page.getByRole('button', { name: 'Queue work' }).click();
@@ -196,11 +196,11 @@ test.describe('Compose', () => {
     await page.getByLabel('Type').click();
     await page.getByRole('option', { name: 'Comment on a post' }).click();
     await page.getByLabel('Post URL').fill('https://www.facebook.com/example/posts/2');
-    await page.getByLabel('Text', { exact: true }).fill('Commented, then reacted');
+    await page.getByLabel('Comments, one per line').fill('Commented, then reacted');
     await page.getByRole('radio', { name: 'React to the post' }).click();
     await expect(page.getByLabel('Reaction')).toBeVisible();
     await page.getByRole('checkbox', { name }).click();
-    await expect(page.getByText('2 jobs (comment + reaction)')).toBeVisible();
+    await expect(page.getByText('up to 2 jobs')).toBeVisible();
     await page.getByRole('button', { name: 'Queue work' }).click();
 
     await expect(page.getByRole('heading', { name: 'Queue', level: 1 })).toBeVisible();

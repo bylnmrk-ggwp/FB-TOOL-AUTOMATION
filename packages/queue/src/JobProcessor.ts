@@ -5,6 +5,7 @@ import {
   JobCancelledError,
   nowIso,
   ShareRestrictedError,
+  type ActivityKind,
   type BrowserSessionView,
   type Job,
   type JobError,
@@ -208,9 +209,57 @@ export class JobProcessor {
         });
         return;
       }
+      case 'comment': {
+        if (job.payload.type !== 'comment') return;
+        await this.recordDone(job, 'comment', job.payload.postUrl, job.payload.text.slice(0, 300));
+        return;
+      }
+      case 'react_to_post': {
+        if (job.payload.type !== 'react_to_post') return;
+        await this.recordDone(job, 'react', job.payload.postUrl, job.payload.reaction);
+        return;
+      }
+      case 'share_post': {
+        if (job.payload.type !== 'share_post') return;
+        // The share action reports each target it landed on, plus the reaction
+        // and the comment it added, so a later run skips exactly those.
+        for (const target of job.payload.targets) {
+          if (details[target] === 'shared')
+            await this.recordDone(job, 'share', `${job.payload.postUrl}::${target}`, null);
+        }
+        if (typeof details['reaction'] === 'string')
+          await this.recordDone(job, 'react', job.payload.postUrl, details['reaction']);
+        if (typeof details['comment'] === 'string')
+          await this.recordDone(
+            job,
+            'comment',
+            job.payload.postUrl,
+            details['comment'].slice(0, 300),
+          );
+        return;
+      }
       default:
         return;
     }
+  }
+
+  /** One thing this account has now done to one target, so it is not done twice. */
+  private recordDone(
+    job: Job,
+    kind: ActivityKind,
+    targetUrl: string,
+    message: string | null,
+  ): Promise<unknown> {
+    return this.deps.repositories.activities.record({
+      id: createId('act'),
+      accountId: job.accountId,
+      kind,
+      targetUrl,
+      targetName: null,
+      status: 'done',
+      message,
+      jobId: job.id,
+    });
   }
 
   /** What a failure means for the account, before the job itself is judged. */

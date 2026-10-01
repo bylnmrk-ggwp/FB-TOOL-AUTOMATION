@@ -6,6 +6,7 @@ import {
   FacebookUrlSchema,
   IdParamSchema,
   IdSchema,
+  IsoDateTimeSchema,
   ListJobsQuerySchema,
   PRIORITY_RANGE,
   ReactionTypeSchema,
@@ -32,6 +33,17 @@ const ShareToGroupsSchema = z.object({
   shareToTimeline: z.boolean().default(false),
   skipDone: z.boolean().default(true),
   priority,
+});
+
+const CommentPostSchema = z.object({
+  accountIds: z.array(IdSchema).min(1).max(5000),
+  postUrl: FacebookUrlSchema,
+  comments: z.array(z.string().trim().min(1).max(8_000)).min(1).max(5000),
+  then: z.enum(['none', 'react', 'timeline', 'story']).default('none'),
+  reaction: ReactionTypeSchema.nullable().default(null),
+  skipDone: z.boolean().default(true),
+  priority,
+  scheduledFor: IsoDateTimeSchema.optional(),
 });
 
 const JoinGroupsSchema = z.object({
@@ -74,6 +86,12 @@ export class JobController {
   shareToGroups = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const input = validateBody(ShareToGroupsSchema, request);
     const jobs = await this.jobs.createShareToGroups(input);
+    await reply.status(201).send({ jobs });
+  };
+
+  commentPost = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const input = validateBody(CommentPostSchema, request);
+    const jobs = await this.jobs.createCommentPost(input);
     await reply.status(201).send({ jobs });
   };
 

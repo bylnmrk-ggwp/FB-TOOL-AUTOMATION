@@ -77,7 +77,7 @@ export const BROWSER_CHANNELS = ['chromium', 'chrome', 'msedge', 'brave'] as con
 /** What the automation can stop and ask a person for. */
 export const INPUT_KINDS = ['captcha', 'two_factor', 'checkpoint', 'confirm', 'text'] as const;
 
-export const ACTIVITY_KINDS = ['share', 'join'] as const;
+export const ACTIVITY_KINDS = ['share', 'join', 'comment', 'react'] as const;
 
 export const DEFAULTS = {
   jobPriority: 0,
