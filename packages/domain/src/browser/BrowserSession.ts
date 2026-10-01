@@ -24,6 +24,11 @@ export interface StartBrowserOptions {
   executablePath: string | null;
   headless: boolean;
   timeoutMs: number;
+  /**
+   * Keep images, media and fonts even when headless. A headless browser
+   * normally drops them to run lite, but a video cannot play without media.
+   */
+  needsMedia?: boolean;
   /** The account's proxy, already parsed; every request from this browser goes through it. */
   proxy?: { server: string; username?: string; password?: string };
 }

@@ -48,9 +48,11 @@ export class BrowserManager implements BrowserController {
 
     const context = await this.launcher.launch(options);
     // A headless browser runs lite: no images, media or fonts. It is invisible
-    // and only signs in, so it needs none of them, and dropping them is what
-    // lets more run at once and each finish sooner.
-    await this.contexts.prepare(context, options.timeoutMs, options.headless);
+    // and usually only signs in, so it needs none of them, and dropping them
+    // is what lets more run at once and each finish sooner. A browser that
+    // must play a video is the exception: blocked media is a frozen player.
+    const lite = options.headless && options.needsMedia !== true;
+    await this.contexts.prepare(context, options.timeoutMs, lite);
 
     const session: BrowserSession = {
       sessionId: options.sessionId,

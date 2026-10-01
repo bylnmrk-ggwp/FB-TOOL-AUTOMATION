@@ -22,9 +22,12 @@ export class FakeBrowserController implements BrowserController {
 
   /** How many times a browser was launched, so a test can prove one started. */
   startCount = 0;
+  /** Every launch's options, newest last, so a test can see what was asked for. */
+  readonly starts: StartBrowserOptions[] = [];
 
   async start(options: StartBrowserOptions): Promise<BrowserSession> {
     this.startCount += 1;
+    this.starts.push(options);
     if (this.failNextLaunch !== null) {
       const error = this.failNextLaunch;
       this.failNextLaunch = null;

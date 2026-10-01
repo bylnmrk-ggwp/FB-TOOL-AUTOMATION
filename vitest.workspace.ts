@@ -34,6 +34,9 @@ export default defineWorkspace([
       pool: 'forks',
       poolOptions: { forks: { singleFork: true } },
       testTimeout: 30_000,
+      // Each test boots the whole server; on a loaded machine that alone can
+      // pass the default ten seconds.
+      hookTimeout: 60_000,
       ...external,
     },
   },

@@ -84,7 +84,7 @@ export class JobProcessor {
 
       // A job needs a browser. Starting one here — rather than refusing —
       // means a queued job survives an operator having closed the window.
-      const browser = await this.ensureBrowser(started.accountId);
+      const browser = await this.ensureBrowser(started);
       const session = browser.session;
       openedHere = browser.openedHere;
       await this.setAccountStatus(started.accountId, 'busy');
@@ -135,8 +135,14 @@ export class JobProcessor {
       // Close the browser this job opened, so a batch across many accounts
       // does not leave a Chromium per account running until the machine is
       // out of memory. A browser opened by an operator (openedHere false) is
-      // left alone — a person may still be in it.
-      if (openedHere && this.deps.browsers.isRunning(started.accountId)) {
+      // left alone — a person may still be in it. A watch-live browser is
+      // left open too, whatever the job decided: the open page is the
+      // viewer, and the operator closes it from the Accounts page.
+      if (
+        openedHere &&
+        started.type !== 'watch_live' &&
+        this.deps.browsers.isRunning(started.accountId)
+      ) {
         try {
           await this.deps.browsers.stop(started.accountId, 'job finished');
         } catch (error) {
@@ -388,11 +394,17 @@ export class JobProcessor {
    * one, and the machine runs out of memory long before the queue drains.
    */
   private async ensureBrowser(
-    accountId: string,
+    job: Job,
   ): Promise<{ session: BrowserSessionView; openedHere: boolean }> {
-    const existing = this.deps.browsers.get(accountId);
+    const existing = this.deps.browsers.get(job.accountId);
     if (existing !== null) return { session: existing, openedHere: false };
-    return { session: await this.deps.browsers.start(accountId), openedHere: true };
+    // A viewer needs the video to actually play, which a lite headless
+    // browser cannot do: it drops every media request.
+    const needsMedia = job.type === 'watch_live';
+    return {
+      session: await this.deps.browsers.start(job.accountId, undefined, needsMedia),
+      openedHere: true,
+    };
   }
 
   private async reportProgress(job: Job, progress: number, step: string): Promise<void> {

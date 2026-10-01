@@ -65,7 +65,11 @@ export class BrowserService {
     this.detach = null;
   }
 
-  async start(accountId: string, headless?: boolean): Promise<BrowserSessionView> {
+  async start(
+    accountId: string,
+    headless?: boolean,
+    needsMedia = false,
+  ): Promise<BrowserSessionView> {
     const { repositories, controller, locks, profiles, events, logger, workerId } = this.deps;
 
     // Settings are read per launch, so a change on the Settings page applies to
@@ -105,6 +109,7 @@ export class BrowserService {
         executablePath: settings.browserExecutablePath,
         headless: headless ?? settings.headless,
         timeoutMs: settings.defaultTimeoutMs,
+        ...(needsMedia ? { needsMedia: true } : {}),
         ...(proxy === null ? {} : { proxy }),
       });
 

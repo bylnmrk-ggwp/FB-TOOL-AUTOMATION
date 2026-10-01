@@ -83,6 +83,18 @@ describe('Queue', () => {
     // ...and closed the one it opened, so a batch cannot leave a browser per
     // account running until the machine is out of memory.
     expect(server.browser.isRunning(accountId)).toBe(false);
+    // A post needs no video, so the browser was asked for lite.
+    expect(server.browser.starts.at(-1)?.needsMedia).toBeUndefined();
+  });
+
+  it('leaves the browser open after a watch-live job, so the viewer stays', async () => {
+    const created = await createJob({ accountId, action: WATCH });
+    await waitForStatus(server, created.json().id, ['completed']);
+
+    expect(server.browser.startCount).toBeGreaterThan(0);
+    expect(server.browser.isRunning(accountId)).toBe(true);
+    // ...and it was opened with media allowed, or the video could never play.
+    expect(server.browser.starts.at(-1)?.needsMedia).toBe(true);
   });
 
   it('reports progress and the finished state over the event bus', async () => {
