@@ -3,6 +3,7 @@ import { useId } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import {
   Select,
   SelectContent,
@@ -171,6 +172,46 @@ export const SelectField = ({
     )}
   </FieldShell>
 );
+
+export const RadioField = ({
+  label,
+  hint,
+  value,
+  options,
+  onValueChange,
+}: FieldProps & {
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string; hint?: string }>;
+  onValueChange: (value: string) => void;
+}): ReactElement => {
+  const id = useId();
+  const labelId = `${id}-label`;
+
+  return (
+    <div className="grid gap-2">
+      <Label id={labelId}>{label}</Label>
+      <RadioGroup value={value} onValueChange={onValueChange} aria-labelledby={labelId}>
+        {options.map((option) => {
+          const itemId = `${id}-${option.value}`;
+          return (
+            <div key={option.value} className="flex items-start gap-3">
+              <RadioGroupItem id={itemId} value={option.value} className="mt-0.5" />
+              <div className="grid gap-1">
+                <Label htmlFor={itemId} className="font-normal">
+                  {option.label}
+                </Label>
+                {option.hint !== undefined && (
+                  <p className="text-xs text-muted-foreground">{option.hint}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </RadioGroup>
+      {hint !== undefined && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+};
 
 export const CheckboxField = ({
   label,

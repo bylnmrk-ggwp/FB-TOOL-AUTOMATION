@@ -7,6 +7,7 @@ import {
   POST_AUDIENCES,
   REACTION_TYPES,
   type AutomationActionInput,
+  type CreateJobBatchInput,
   type JobType,
   type MediaRef,
   type ReactionType,
@@ -22,6 +23,7 @@ import { AccountStatusDot, LoginStatusDot } from '@/components/common/StatusDot'
 import {
   CheckboxField,
   NativeSelect,
+  RadioField,
   SelectField,
   TextAreaField,
   TextField,
@@ -71,8 +73,19 @@ const REACTION_OPTIONS = [
   ...REACTION_TYPES.map((value) => ({ value, label: humanise(value) })),
 ];
 
+/** What a comment job does once the comment is in. */
+type CommentThen = 'none' | 'react' | 'timeline' | 'story';
+
+const COMMENT_THEN_OPTIONS: ReadonlyArray<{ value: CommentThen; label: string }> = [
+  { value: 'none', label: 'Comment only' },
+  { value: 'react', label: 'React to the post' },
+  { value: 'timeline', label: 'Share to the timeline' },
+  { value: 'story', label: 'Share to the story' },
+];
+
 interface FormState {
   kind: ComposeKind;
+  commentThen: CommentThen;
   text: string;
   comments: string;
   postUrl: string;
@@ -97,6 +110,7 @@ interface FormState {
 
 const initialForm: FormState = {
   kind: 'share_to_groups',
+  commentThen: 'none',
   text: '',
   comments: '',
   postUrl: '',
@@ -128,6 +142,16 @@ const lines = (value: string): string[] =>
 const reactionOf = (value: string): ReactionType | null =>
   value === '' ? null : (value as ReactionType);
 
+/** A second job for the same accounts, when one action is not the whole ask. */
+const buildFollowUp = (form: FormState): AutomationActionInput | null =>
+  form.kind === 'comment' && form.commentThen === 'react'
+    ? {
+        type: 'react_to_post',
+        postUrl: form.postUrl,
+        reaction: (form.reaction || 'like') as ReactionType,
+      }
+    : null;
+
 /**
  * Builds the single-action payload for every kind that maps to one job per
  * account. Share-to-groups and join are fan-outs and go through their own
@@ -150,6 +174,17 @@ const buildAction = (form: FormState, media: MediaRef[]): AutomationActionInput 
         ...(form.caption === '' ? {} : { caption: form.caption }),
       };
     case 'comment':
+      // A share job already comments on the post once the share is up, so
+      // "comment and share" is one job rather than two.
+      if (form.commentThen === 'timeline' || form.commentThen === 'story') {
+        return {
+          type: 'share_post',
+          postUrl: form.postUrl,
+          targets: [form.commentThen],
+          reaction: null,
+          comments: [form.text],
+        };
+      }
       return { type: 'comment', postUrl: form.postUrl, text: form.text };
     case 'react_to_post':
       return {
@@ -354,17 +389,38 @@ export const ComposePage = (): ReactElement => {
       return;
     }
 
-    createJobs.mutate(
-      {
-        accountIds: selected,
-        action: parsed.data,
-        priority,
-        ...(form.scheduledFor === ''
-          ? {}
-          : { scheduledFor: new Date(form.scheduledFor).toISOString() }),
-      },
-      { onError, onSuccess: (result) => done(result.jobs.length) },
-    );
+    const batch = (chosen: AutomationActionInput): CreateJobBatchInput => ({
+      accountIds: selected,
+      action: chosen,
+      priority,
+      ...(form.scheduledFor === ''
+        ? {}
+        : { scheduledFor: new Date(form.scheduledFor).toISOString() }),
+    });
+
+    const followUp = buildFollowUp(form);
+    if (followUp === null) {
+      createJobs.mutate(batch(parsed.data), {
+        onError,
+        onSuccess: (result) => done(result.jobs.length),
+      });
+      return;
+    }
+
+    const parsedFollowUp = AutomationActionSchema.safeParse(followUp);
+    if (!parsedFollowUp.success) {
+      setProblem(parsedFollowUp.error.issues[0]?.message ?? 'Check the action details');
+      return;
+    }
+    void (async () => {
+      try {
+        const first = await createJobs.mutateAsync(batch(parsed.data));
+        const second = await createJobs.mutateAsync(batch(parsedFollowUp.data));
+        done(first.jobs.length + second.jobs.length);
+      } catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
   };
 
   const summary = (() => {
@@ -373,6 +429,8 @@ export const ComposePage = (): ReactElement => {
       return `${selected.length * pickedGroups.size} jobs (accounts × groups)`;
     if (kind === 'join_group')
       return `${selected.length * lines(form.groupUrls).length} jobs (accounts × URLs)`;
+    if (kind === 'comment' && form.commentThen === 'react')
+      return `${selected.length * 2} jobs (comment + reaction)`;
     return `${selected.length} job${selected.length === 1 ? '' : 's'} will be created`;
   })();
 
@@ -575,6 +633,25 @@ export const ComposePage = (): ReactElement => {
                   placeholder="What should this account say?"
                   onChange={(event) => set('text', event.target.value)}
                 />
+              )}
+
+              {kind === 'comment' && (
+                <>
+                  <RadioField
+                    label="After commenting"
+                    value={form.commentThen}
+                    options={COMMENT_THEN_OPTIONS}
+                    onValueChange={(value) => set('commentThen', value as CommentThen)}
+                  />
+                  {form.commentThen === 'react' && (
+                    <SelectField
+                      label="Reaction"
+                      value={form.reaction || 'like'}
+                      options={REACTION_OPTIONS.filter((option) => option.value !== '')}
+                      onValueChange={(value) => set('reaction', value)}
+                    />
+                  )}
+                </>
               )}
 
               {kind === 'watch_live' && (

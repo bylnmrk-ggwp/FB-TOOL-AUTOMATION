@@ -168,6 +168,49 @@ test.describe('Compose', () => {
     await deleteAccount(page, name);
   });
 
+  test('comments and shares to the story as one share job', async ({ page }) => {
+    const name = uniqueName('E2E Comment Story');
+    await createAccount(page, name);
+
+    await page.goto('/compose');
+    await page.getByLabel('Type').click();
+    await page.getByRole('option', { name: 'Comment on a post' }).click();
+    await page.getByLabel('Post URL').fill('https://www.facebook.com/example/posts/1');
+    await page.getByLabel('Text', { exact: true }).fill('Commented by an end-to-end test');
+    await page.getByRole('radio', { name: 'Share to the story' }).click();
+    await page.getByRole('checkbox', { name }).click();
+    await page.getByRole('button', { name: 'Queue work' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Queue', level: 1 })).toBeVisible();
+    await expect(page.getByRole('cell', { name: /Share post/ }).first()).toBeVisible();
+
+    await page.goto('/accounts');
+    await deleteAccount(page, name);
+  });
+
+  test('comments then reacts as two jobs', async ({ page }) => {
+    const name = uniqueName('E2E Comment React');
+    await createAccount(page, name);
+
+    await page.goto('/compose');
+    await page.getByLabel('Type').click();
+    await page.getByRole('option', { name: 'Comment on a post' }).click();
+    await page.getByLabel('Post URL').fill('https://www.facebook.com/example/posts/2');
+    await page.getByLabel('Text', { exact: true }).fill('Commented, then reacted');
+    await page.getByRole('radio', { name: 'React to the post' }).click();
+    await expect(page.getByLabel('Reaction')).toBeVisible();
+    await page.getByRole('checkbox', { name }).click();
+    await expect(page.getByText('2 jobs (comment + reaction)')).toBeVisible();
+    await page.getByRole('button', { name: 'Queue work' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Queue', level: 1 })).toBeVisible();
+    await expect(page.getByRole('cell', { name: /^Comment E2E/ }).first()).toBeVisible();
+    await expect(page.getByRole('cell', { name: /^React to post E2E/ }).first()).toBeVisible();
+
+    await page.goto('/accounts');
+    await deleteAccount(page, name);
+  });
+
   test('filters the account card by login state', async ({ page }) => {
     // The filter row only appears once the roster is longer than a glance, so
     // nine accounts go in through the API rather than nine trips to the dialog.
