@@ -178,6 +178,17 @@ export const SettingsPage = (): ReactElement => {
               }
             />
             <TextField
+              label="Live viewers at once"
+              type="number"
+              min={0}
+              max={1000}
+              value={String(draft.liveViewersAtOnce)}
+              hint="Watch-live jobs run in their own lane, outside the global limit. 0 means every account queued watches at the same time."
+              onChange={(event) =>
+                set('liveViewersAtOnce', number(event.target.value, draft.liveViewersAtOnce))
+              }
+            />
+            <TextField
               label="Default retries"
               type="number"
               min={0}

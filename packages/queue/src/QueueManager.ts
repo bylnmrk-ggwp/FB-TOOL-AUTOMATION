@@ -43,6 +43,7 @@ export class QueueManager implements QueuePort {
   private readonly recovery: JobRecovery;
   private timer: NodeJS.Timeout | null = null;
   private concurrencyLimit = 1;
+  private liveViewersLimit = 0;
   private running = false;
 
   constructor(private readonly deps: QueueManagerDeps) {
@@ -65,6 +66,7 @@ export class QueueManager implements QueuePort {
       events: deps.events,
       logger: deps.logger,
       concurrency: () => this.concurrencyLimit,
+      liveViewers: () => this.liveViewersLimit,
     });
 
     this.recovery = new JobRecovery({ repositories: deps.repositories, logger: deps.logger });
@@ -76,6 +78,7 @@ export class QueueManager implements QueuePort {
 
     const settings = await this.deps.repositories.settings.read();
     this.concurrencyLimit = settings.globalConcurrency;
+    this.liveViewersLimit = settings.liveViewersAtOnce;
 
     await this.recovery.recover();
 
@@ -131,12 +134,19 @@ export class QueueManager implements QueuePort {
     this.notify();
   }
 
+  /** Zero lifts the cap: every queued watch-live job plays at once. */
+  setLiveViewers(limit: number): void {
+    this.liveViewersLimit = Math.max(0, limit);
+    this.notify();
+  }
+
   private async tick(): Promise<void> {
     try {
       // Settings can change while the server runs; re-reading here is cheap
       // and keeps the limit honest without a restart.
       const settings = await this.deps.repositories.settings.read();
       this.concurrencyLimit = settings.globalConcurrency;
+      this.liveViewersLimit = settings.liveViewersAtOnce;
 
       // A processor can die without recording anything; this is the only way
       // such a job is ever noticed while the server stays up.

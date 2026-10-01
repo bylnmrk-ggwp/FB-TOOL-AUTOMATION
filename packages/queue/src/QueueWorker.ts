@@ -1,4 +1,4 @@
-import { nowIso, type Job } from '@fb/shared';
+import { nowIso, type Job, type JobType } from '@fb/shared';
 import type { EventPublisher, Logger, Repositories } from '@fb/application';
 import type { AccountLockManager } from './AccountLockManager.js';
 import type { JobProcessor } from './JobProcessor.js';
@@ -10,6 +10,17 @@ export interface QueueWorkerDeps {
   events: EventPublisher;
   logger: Logger;
   concurrency: () => number;
+  /** Watch-live jobs allowed at once; zero means no cap. */
+  liveViewers: () => number;
+}
+
+/** How many watch-live jobs one pass claims when the lane has no cap. */
+const LIVE_LANE_BATCH = 500;
+
+interface Lane {
+  limit: number;
+  types?: readonly JobType[];
+  excludeTypes?: readonly JobType[];
 }
 
 interface RunningJob {
@@ -53,14 +64,30 @@ export class QueueWorker {
     }
   }
 
+  /**
+   * Two lanes. A live is only watched when many accounts watch it together,
+   * so watch-live jobs are claimed first against their own cap (zero meaning
+   * none) and never count against the global limit, which covers the rest.
+   */
   private async claimAndStart(): Promise<void> {
-    const free = this.deps.concurrency() - this.running.size;
-    if (free <= 0) return;
+    const liveRunning = (): number =>
+      [...this.running.values()].filter((entry) => entry.job.type === 'watch_live').length;
 
+    const liveLimit = this.deps.liveViewers();
+    const freeLive = liveLimit === 0 ? LIVE_LANE_BATCH : liveLimit - liveRunning();
+    if (freeLive > 0) {
+      await this.claim({ limit: Math.min(freeLive, LIVE_LANE_BATCH), types: ['watch_live'] });
+    }
+
+    const freeOther = this.deps.concurrency() - (this.running.size - liveRunning());
+    if (freeOther > 0) await this.claim({ limit: freeOther, excludeTypes: ['watch_live'] });
+  }
+
+  private async claim(lane: Lane): Promise<void> {
     const claimed = await this.deps.repositories.jobs.claimDueJobs({
       busyAccountIds: this.deps.accountLocks.heldAccountIds(),
       now: new Date(),
-      limit: free,
+      ...lane,
     });
 
     for (const job of claimed) {

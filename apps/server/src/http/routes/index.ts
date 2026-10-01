@@ -33,7 +33,10 @@ export const registerRoutes = async (app: FastifyInstance, container: Container)
     dashboard: container.dashboard,
     files: container.files,
     config: container.config,
-    onSettingsChanged: (concurrency) => container.queue.setConcurrency(concurrency),
+    onSettingsChanged: (settings) => {
+      container.queue.setConcurrency(settings.globalConcurrency);
+      container.queue.setLiveViewers(settings.liveViewersAtOnce);
+    },
   });
 
   await app.register(

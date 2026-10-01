@@ -19,6 +19,12 @@ export const SettingsSchema = z.object({
   browserChannel: BrowserChannelSchema,
   headless: z.boolean(),
   globalConcurrency: z.number().int().min(1).max(64),
+  /**
+   * Watch-live jobs run in a lane of their own, outside the global limit: a
+   * live is only watched when many accounts watch it at the same time. Zero
+   * means every one queued plays at once.
+   */
+  liveViewersAtOnce: z.number().int().min(0).max(1000),
   defaultTimeoutMs: z.number().int().min(1_000).max(600_000),
   defaultMaxRetries: z.number().int().min(0).max(10),
   retryBackoffMs: z.number().int().min(1_000).max(3_600_000),
@@ -69,6 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   browserChannel: 'chromium',
   headless: false,
   globalConcurrency: DEFAULTS.globalConcurrency,
+  liveViewersAtOnce: 0,
   defaultTimeoutMs: DEFAULTS.timeoutMs,
   defaultMaxRetries: DEFAULTS.maxRetries,
   retryBackoffMs: DEFAULTS.retryBackoffMs,

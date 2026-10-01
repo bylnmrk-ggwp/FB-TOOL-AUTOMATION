@@ -141,6 +141,10 @@ export class JobRepositoryImpl implements JobRepository {
             inArray(jobs.status, ['pending', 'retrying']),
             or(isNull(jobs.runAfter), lte(jobs.runAfter, now)),
             busy.length === 0 ? undefined : notInArray(jobs.accountId, busy),
+            request.types === undefined ? undefined : inArray(jobs.type, [...request.types]),
+            request.excludeTypes === undefined
+              ? undefined
+              : notInArray(jobs.type, [...request.excludeTypes]),
           ),
         )
         .orderBy(desc(jobs.priority), asc(jobs.createdAt))

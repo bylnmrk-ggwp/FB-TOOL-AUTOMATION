@@ -5,6 +5,7 @@ import {
   UpdateSettingsSchema,
   validateSettings,
   type MediaRef,
+  type Settings,
 } from '@fb/shared';
 import type { FileStore, Repositories } from '@fb/application';
 import type { AppConfig } from '../../config/index.js';
@@ -17,7 +18,7 @@ export interface SystemControllerDeps {
   files: FileStore;
   config: AppConfig;
   /** Applied as soon as the concurrency setting changes. */
-  onSettingsChanged: (concurrency: number) => void;
+  onSettingsChanged: (settings: Settings) => void;
 }
 
 /** Logs, settings, dashboard and uploads: the reads the shell of the UI needs. */
@@ -58,7 +59,7 @@ export class SystemController {
     if (problems.length > 0) throw new SettingsInvalidError(problems);
 
     const updated = await this.deps.repositories.settings.write(patch);
-    this.deps.onSettingsChanged(updated.globalConcurrency);
+    this.deps.onSettingsChanged(updated);
     await reply.send(updated);
   };
 

@@ -5,6 +5,7 @@ import { FakeGateway } from '../helpers/fake-gateway';
 import { createTestServer, type TestServer } from '../helpers/server';
 
 const POST = { type: 'create_post', text: 'hello', media: [], audience: 'friends' } as const;
+const WATCH = { type: 'watch_live', url: 'https://www.facebook.com/live/1', minutes: 1 } as const;
 
 /** Polls the API until the job reaches one of the given states. */
 const waitForStatus = async (
@@ -26,6 +27,14 @@ const waitForStatus = async (
   throw new Error(
     `Job ${jobId} never reached ${statuses.join(' or ')}; it is ${last.json().status}`,
   );
+};
+
+/** Hanging jobs are cancelled before the server goes, or dispose waits on them. */
+const cancelAll = async (server: TestServer, jobs: readonly Job[]): Promise<void> => {
+  for (const job of jobs) {
+    await server.app.inject({ method: 'POST', url: `/api/v1/jobs/${job.id}/cancel` });
+  }
+  for (const job of jobs) await waitForStatus(server, job.id, ['cancelled', 'completed', 'failed']);
 };
 
 describe('Queue', () => {
@@ -346,6 +355,61 @@ describe('Queue concurrency', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(server.container.queue.capacity().limit).toBe(1);
     expect(server.container.queue.capacity().busy).toBeLessThanOrEqual(1);
+  });
+
+  it('starts every watch-live job at once, in a lane outside the global limit', async () => {
+    const gateway = new FakeGateway().thenHang().thenHang().thenHang();
+    server = await createTestServer({ gateway, concurrency: 1 });
+    const viewers = [
+      await createAccount('Alpha'),
+      await createAccount('Beta'),
+      await createAccount('Gamma'),
+    ];
+
+    const watching = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/jobs/batch',
+      payload: { accountIds: viewers, action: WATCH },
+    });
+    await gateway.waitForStarts(3);
+    expect(server.container.queue.capacity().busy).toBe(3);
+
+    // The ordinary lane is untouched: a post still starts beside three viewers.
+    const poster = await createAccount('Delta');
+    await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/jobs/batch',
+      payload: { accountIds: [poster], action: POST },
+    });
+    await gateway.waitForStarts(4);
+
+    await cancelAll(server, (watching.json() as { jobs: Job[] }).jobs);
+  });
+
+  it('caps the live lane when a limit is set', async () => {
+    const gateway = new FakeGateway().thenHang().thenHang().thenHang();
+    server = await createTestServer({ gateway, concurrency: 1 });
+    await server.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/settings',
+      payload: { liveViewersAtOnce: 2 },
+    });
+    const viewers = [
+      await createAccount('Alpha'),
+      await createAccount('Beta'),
+      await createAccount('Gamma'),
+    ];
+
+    const watching = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/jobs/batch',
+      payload: { accountIds: viewers, action: WATCH },
+    });
+    await gateway.waitForStarts(2);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(server.container.queue.runningJobs()).toHaveLength(2);
+
+    await cancelAll(server, (watching.json() as { jobs: Job[] }).jobs);
   });
 });
 

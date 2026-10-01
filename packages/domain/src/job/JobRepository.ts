@@ -13,6 +13,10 @@ export interface ClaimRequest {
   busyAccountIds: readonly string[];
   now: Date;
   limit: number;
+  /** Only these job types; the live lane claims watch_live alone. */
+  types?: readonly JobType[];
+  /** Never these job types; the ordinary lane leaves watch_live out. */
+  excludeTypes?: readonly JobType[];
 }
 
 export interface JobRepository {
