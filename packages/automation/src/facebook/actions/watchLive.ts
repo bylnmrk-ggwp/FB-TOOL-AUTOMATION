@@ -160,9 +160,12 @@ const verifyPlaying = async (context: ActionContext): Promise<string> => {
   try {
     await page.waitForSelector('video', { timeout: 20_000 });
   } catch {
-    return (await broadcastEnded(context))
-      ? 'the broadcast has already ended'
-      : 'no video player on the page';
+    if (await broadcastEnded(context)) return 'the broadcast has already ended';
+    // Facebook shows this instead of a player when the browser cannot decode
+    // the stream — a Chromium build without H.264, typically.
+    if (await pageSays(context, 'trouble playing this video'))
+      return 'Facebook cannot play this video in this browser (a Chromium without H.264?)';
+    return 'no video player on the page';
   }
 
   const first = (await run(page, watchScripts.currentTime)) as number | null;
@@ -185,6 +188,16 @@ const verifyPlaying = async (context: ActionContext): Promise<string> => {
       ? ''
       : `, paused ${String(probe.paused)}, ended ${String(probe.ended)}, at ${first.toFixed(1)}s then ${third.toFixed(1)}s`;
   return `the video is frozen (loaded but not advancing${state})`;
+};
+
+const pageSays = async (context: ActionContext, text: string): Promise<boolean> => {
+  const body = (
+    await context.page
+      .locator('body')
+      .innerText({ timeout: 3_000 })
+      .catch(() => '')
+  ).toLowerCase();
+  return body.includes(text);
 };
 
 const broadcastEnded = async (context: ActionContext): Promise<boolean> => {
