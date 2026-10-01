@@ -46,16 +46,22 @@ export class BrowserSessionController {
   /**
    * A live thumbnail of the account's page. 404 when no browser is running,
    * so the grid can drop a tile the moment its session ends. Not cached: the
-   * point is that it changes.
+   * point is that it changes. The 404 is sent directly rather than thrown:
+   * the grid polls every open tile, so a browser that just closed would
+   * otherwise fill the log with warnings about an expected miss.
    */
   screenshot = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const { id } = validateParams(IdParamSchema, request);
     const image = await this.browsers.screenshot(id);
     if (image === null) {
-      throw new AppError(ERROR_CODES.BROWSER_NOT_RUNNING, `No browser is running for ${id}`, {
-        status: 404,
-        details: { accountId: id },
+      await reply.status(404).send({
+        error: {
+          code: ERROR_CODES.BROWSER_NOT_RUNNING,
+          message: `No browser is running for ${id}`,
+          details: { accountId: id },
+        },
       });
+      return;
     }
     await reply.header('cache-control', 'no-store').type('image/jpeg').send(Buffer.from(image));
   };
