@@ -74,13 +74,34 @@ export class QueueWorker {
       [...this.running.values()].filter((entry) => entry.job.type === 'watch_live').length;
 
     const liveLimit = this.deps.liveViewers();
-    const freeLive = liveLimit === 0 ? LIVE_LANE_BATCH : liveLimit - liveRunning();
-    if (freeLive > 0) {
-      await this.claim({ limit: Math.min(freeLive, LIVE_LANE_BATCH), types: ['watch_live'] });
+    if (liveLimit === 0) {
+      await this.claim({ limit: LIVE_LANE_BATCH, types: ['watch_live'] });
+    } else {
+      // A finished viewer keeps its browser open on the live, and it keeps
+      // its slot too, until another account is waiting for one. Then the
+      // longest-idle viewer closes and the slot moves on.
+      let occupied = liveRunning() + this.deps.processor.idleViewers().length;
+      if (occupied >= liveLimit && (await this.watchJobsWaiting())) {
+        while (occupied >= liveLimit && (await this.deps.processor.releaseIdleViewer())) {
+          occupied -= 1;
+        }
+      }
+      const freeLive = liveLimit - occupied;
+      if (freeLive > 0) await this.claim({ limit: freeLive, types: ['watch_live'] });
     }
 
     const freeOther = this.deps.concurrency() - (this.running.size - liveRunning());
     if (freeOther > 0) await this.claim({ limit: freeOther, excludeTypes: ['watch_live'] });
+  }
+
+  private async watchJobsWaiting(): Promise<boolean> {
+    const page = await this.deps.repositories.jobs.list({
+      status: ['pending', 'retrying'],
+      type: 'watch_live',
+      limit: 1,
+      offset: 0,
+    });
+    return page.items.length > 0;
   }
 
   private async claim(lane: Lane): Promise<void> {

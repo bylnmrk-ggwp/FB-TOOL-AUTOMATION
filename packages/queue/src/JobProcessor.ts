@@ -58,7 +58,39 @@ const SHARE_RESTRICTION_HOURS = 12;
  * many at once, belongs to the worker above it.
  */
 export class JobProcessor {
+  /**
+   * Viewers whose watch job has ended but whose browser was kept open, by
+   * account, with when they went idle. They stay on the live until another
+   * account needs the slot; the worker asks for the oldest to be released.
+   */
+  private readonly idle = new Map<string, number>();
+
   constructor(private readonly deps: JobProcessorDeps) {}
+
+  /** Accounts whose viewer is open and idle, oldest first. */
+  idleViewers(): string[] {
+    for (const accountId of this.idle.keys()) {
+      if (!this.deps.browsers.isRunning(accountId)) this.idle.delete(accountId);
+    }
+    return [...this.idle.entries()].sort((a, b) => a[1] - b[1]).map(([accountId]) => accountId);
+  }
+
+  /** Closes the longest-idle viewer so its slot can go to the next account. */
+  async releaseIdleViewer(): Promise<boolean> {
+    const accountId = this.idleViewers()[0];
+    if (accountId === undefined) return false;
+    this.idle.delete(accountId);
+    try {
+      await this.deps.browsers.stop(accountId, 'viewer slot handed to the next account');
+    } catch (error) {
+      this.deps.logger.warn('Could not close an idle viewer', {
+        event: 'browser.close_failed',
+        accountId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
 
   async run(claimed: Job, signal: AbortSignal): Promise<JobOutcome> {
     const { repositories, events, logger } = this.deps;
@@ -89,6 +121,7 @@ export class JobProcessor {
       // A job needs a browser. Starting one here — rather than refusing —
       // means a queued job survives an operator having closed the window.
       const browser = await this.ensureBrowser(started);
+      this.idle.delete(started.accountId);
       const session = browser.session;
       openedHere = browser.openedHere;
       await this.setAccountStatus(started.accountId, 'busy');
@@ -147,6 +180,13 @@ export class JobProcessor {
       // left open too, since the open page is the viewer — unless the
       // account never got in, in which case it is only a window on a login
       // screen and the lane moves on to the next account.
+      if (
+        started.type === 'watch_live' &&
+        !gatedOut &&
+        this.deps.browsers.isRunning(started.accountId)
+      ) {
+        this.idle.set(started.accountId, Date.now());
+      }
       if (
         openedHere &&
         (started.type !== 'watch_live' || gatedOut) &&

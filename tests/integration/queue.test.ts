@@ -112,6 +112,26 @@ describe('Queue', () => {
     expect(server.browser.isRunning(accountId)).toBe(false);
   });
 
+  it('hands an idle viewer slot to the next account when the lane is full', async () => {
+    await server.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/settings',
+      payload: { liveViewersAtOnce: 1 },
+    });
+    const second = await createAccount('Beta');
+
+    const first = await createJob({ accountId, action: WATCH });
+    await waitForStatus(server, first.json().id, ['completed']);
+    // The first viewer is idle but still open: it keeps the slot for now.
+    expect(server.browser.isRunning(accountId)).toBe(true);
+
+    const next = await createJob({ accountId: second, action: WATCH });
+    await waitForStatus(server, next.json().id, ['completed']);
+    // The second account needed the slot, so the first viewer was closed.
+    expect(server.browser.isRunning(accountId)).toBe(false);
+    expect(server.browser.isRunning(second)).toBe(true);
+  });
+
   it('leaves the browser open after a watch-live job, so the viewer stays', async () => {
     const created = await createJob({ accountId, action: WATCH });
     await waitForStatus(server, created.json().id, ['completed']);
