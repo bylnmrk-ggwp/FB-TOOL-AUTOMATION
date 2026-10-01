@@ -104,6 +104,14 @@ describe('Queue', () => {
     expect(server.browser.isRunning(accountId)).toBe(false);
   });
 
+  it('closes the viewer and moves on when the account cannot get past the login screen', async () => {
+    server.gateway.alwaysFail(new NotLoggedInError(accountId));
+    const created = await createJob({ accountId, action: WATCH, maxRetries: 0 });
+    await waitForStatus(server, created.json().id, ['failed']);
+
+    expect(server.browser.isRunning(accountId)).toBe(false);
+  });
+
   it('leaves the browser open after a watch-live job, so the viewer stays', async () => {
     const created = await createJob({ accountId, action: WATCH });
     await waitForStatus(server, created.json().id, ['completed']);

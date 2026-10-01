@@ -78,6 +78,10 @@ export class JobProcessor {
 
     const startedAtMs = Date.now();
     let openedHere = false;
+    // Set when the account never got past Facebook's login screen or a gate:
+    // there is nothing to keep open for it, and the next account should
+    // have its slot.
+    let gatedOut = false;
 
     try {
       await this.refuseIfShareRestricted(started);
@@ -129,6 +133,10 @@ export class JobProcessor {
 
       return { job: completed, status: 'completed' };
     } catch (error) {
+      gatedOut =
+        isAppError(error) &&
+        (error.code === ERROR_CODES.AUTOMATION_NOT_LOGGED_IN ||
+          error.code === ERROR_CODES.AUTOMATION_GATED);
       await this.applyFailure(started, error);
       return this.handleFailure(started, error, signal);
     } finally {
@@ -136,11 +144,12 @@ export class JobProcessor {
       // does not leave a Chromium per account running until the machine is
       // out of memory. A browser opened by an operator (openedHere false) is
       // left alone — a person may still be in it. A watch-live browser is
-      // left open too, whatever the job decided: the open page is the
-      // viewer, and the operator closes it from the Accounts page.
+      // left open too, since the open page is the viewer — unless the
+      // account never got in, in which case it is only a window on a login
+      // screen and the lane moves on to the next account.
       if (
         openedHere &&
-        started.type !== 'watch_live' &&
+        (started.type !== 'watch_live' || gatedOut) &&
         this.deps.browsers.isRunning(started.accountId)
       ) {
         try {
