@@ -29,8 +29,14 @@ if '"succeeded"' not in src:
 if "{success_count} ok" not in src:
     failures.append("batch progress counts: progress does not report success_count, "  # noqa: F821
                     "the tally the final line uses")
-if "Batch complete: {success_count}/{total} successful" not in src:
+if "{success_count}/{countable} successful" not in src:
     failures.append("batch progress counts: the final tally no longer reports "  # noqa: F821
-                    "success_count")
+                    "success_count out of the countable items")
+# The denominator is the work an account could actually have done: an item
+# skipped because Facebook gated the account was never attempted, so counting
+# it read as a failure of the run.
+if "countable = max(0, total - skipped_count)" not in src:
+    failures.append("batch progress counts: the final tally divides by every "  # noqa: F821
+                    "queued item, so gated accounts count as failures")
 
 print("FAILED" if [f for f in failures if "batch progress counts" in f] else "ok")  # noqa: F821

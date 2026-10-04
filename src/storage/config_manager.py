@@ -38,9 +38,46 @@ def _load_config() -> dict:
 def _save_config(config: dict):
     global _config_cache, _config_cache_time
     _ensure_dir()
-    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    # Write to a sibling temp file and swap it in. os.replace is atomic, so a
+    # reader never sees a half-written config - which used to leave an empty
+    # dict behind and unlink the whole fleet.
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_FILE)
     _config_cache = config
     _config_cache_time = time.monotonic()
+
+
+def _mutate(change) -> dict:
+    """Apply one change to config.json without writing back a stale copy.
+
+    config.json has several writers at once - the FastAPI server, the driver
+    worker, and any script run from a shell. Each used to read the config
+    (from a cache up to _CONFIG_TTL seconds old), edit its own corner and
+    send the WHOLE dictionary back. A long-running server that saved one
+    setting therefore also rewrote every profile it still remembered, undoing
+    deletions another process had already committed. That is how 23 deleted
+    profiles came back with their Brave directories gone.
+
+    So re-read the file first, ignoring the cache, apply `change` to that
+    fresh copy, and write only the result. `change` edits the dict in place.
+
+    This closes the seconds-wide window the cache opened. A true
+    simultaneous read-modify-write by two processes is still possible; the
+    atomic swap in _save_config keeps the file valid if it happens.
+    """
+    config = _reload_config()
+    change(config)
+    _save_config(config)
+    return config
+
+
+def _reload_config() -> dict:
+    """The config as it is on disk right now, cache bypassed."""
+    global _config_cache, _config_cache_time
+    _config_cache = None
+    _config_cache_time = 0
+    return _load_config()
 
 
 def list_profiles() -> list[str]:
@@ -83,10 +120,11 @@ def save_profile(name: str, brave_full_path: str):
     will use the original Brave profile directory directly, preserving
     all existing cookies and sessions.
     """
-    config = _load_config()
-    config.setdefault("profiles", {})
-    config["profiles"][name] = brave_full_path
-    _save_config(config)
+    def change(config):
+        config.setdefault("profiles", {})
+        config["profiles"][name] = brave_full_path
+
+    _mutate(change)
 
 
 def delete_profile(name: str) -> bool:
@@ -94,12 +132,16 @@ def delete_profile(name: str) -> bool:
 
     The original Brave profile is never touched.
     """
-    config = _load_config()
-    if name in config.get("profiles", {}):
-        del config["profiles"][name]
-        _save_config(config)
-        return True
-    return False
+    removed = False
+
+    def change(config):
+        nonlocal removed
+        if name in config.get("profiles", {}):
+            del config["profiles"][name]
+            removed = True
+
+    _mutate(change)
+    return removed
 
 
 # ── Credential persistence ────────────────────────────────
@@ -167,10 +209,11 @@ def get_setting(key: str, default=None):
 
 def save_setting(key: str, value):
     """Save a generic setting to config."""
-    config = _load_config()
-    config.setdefault("settings", {})
-    config["settings"][key] = value
-    _save_config(config)
+    def change(config):
+        config.setdefault("settings", {})
+        config["settings"][key] = value
+
+    _mutate(change)
 
 
 def auto_sync_brave_profiles() -> list[str]:
@@ -184,10 +227,13 @@ def auto_sync_brave_profiles() -> list[str]:
     brave_path_to_bp = {bp["full_path"]: bp for bp in brave_profiles}
     brave_paths = set(brave_path_to_bp.keys())
 
-    config = _load_config()
-    old_profiles = config.get("profiles", {})
+    # Read from disk, not the cache: this rebuilds the whole profiles map, so
+    # starting from a copy seconds out of date would undo another process's
+    # deletions (see _mutate).
+    old_profiles = _reload_config().get("profiles", {})
     new_profiles: dict[str, str] = {}
     added: list[str] = []
+    renamed: list[tuple[str, str]] = []
 
     # 1. Rename/update existing profiles to match Brave's current names
     for old_name, old_path in old_profiles.items():
@@ -234,12 +280,13 @@ def auto_sync_brave_profiles() -> list[str]:
                 counter += 1
             new_profiles[f"{correct_name} ({counter})"] = old_path
 
-        # Update facebook_urls key if renamed
-        if old_name != correct_name and "facebook_urls" in config:
-            fb_urls = config.get("facebook_urls", {})
-            if old_name in fb_urls and correct_name not in fb_urls:
-                fb_urls[correct_name] = fb_urls.pop(old_name)
-                config["facebook_urls"] = fb_urls
+        # A renamed profile has to take its saved Facebook URL with it, but
+        # the config is only reopened inside `change` below - touching a name
+        # called `config` here raised NameError and aborted the whole sync,
+        # which is why Brave's profiles never made it into the map. Collect
+        # the renames and apply them where the config actually exists.
+        if old_name != correct_name:
+            renamed.append((old_name, correct_name))
 
     # 2. Add every Brave profile that isn't saved yet
     existing_paths = set(new_profiles.values())
@@ -271,14 +318,24 @@ def auto_sync_brave_profiles() -> list[str]:
         added.append(name)
 
     # Entries for the other browser live in the same map and are none of this
-    # sync's business: dropping them would unlink every Chromium account.
+    # sync's business: they were written when a second browser kept its
+    # profiles in its own tree, and dropping them would unlink those
+    # accounts outright rather than leave them to be relinked.
     for name, path in old_profiles.items():
         if _under(path, BRAVE_USER_DATA) or path in new_profiles.values():
             continue
         new_profiles.setdefault(name, path)
 
-    config["profiles"] = new_profiles
-    _save_config(config)
+    def change(config):
+        config["profiles"] = new_profiles
+        fb_urls = config.get("facebook_urls")
+        if not fb_urls:
+            return
+        for old_name, correct_name in renamed:
+            if old_name in fb_urls and correct_name not in fb_urls:
+                fb_urls[correct_name] = fb_urls.pop(old_name)
+
+    _mutate(change)
 
     return added
 
@@ -294,83 +351,19 @@ def _under(path: str, root) -> bool:
         return False
 
 
-def list_chromium_profiles() -> list[dict]:
-    """Every Chromium profile directory this PC has, in the shape
-    list_brave_profiles() returns.
-
-    A Chromium profile is a directory and nothing else - there is no Local
-    State info_cache to read, and the directory name is the account it was
-    created for.
-    """
-    from src.core import browser_choice
-    root = browser_choice.CHROMIUM_USER_DATA
-    profiles = []
-    try:
-        entries = sorted(d for d in root.iterdir() if d.is_dir())
-    except Exception:
-        return profiles
-    for d in entries:
-        profiles.append({
-            "dir_name": d.name,
-            "name": d.name,
-            "display": d.name,
-            "email": d.name if "@" in d.name else "",
-            "full_path": str(d),
-        })
-    return profiles
-
-
 def list_browser_profiles() -> list[dict]:
-    """The profiles of the browser the automation is set to drive."""
-    from src.core import browser_choice
-    return (list_chromium_profiles()
-            if browser_choice.current_browser() == browser_choice.CHROMIUM
-            else list_brave_profiles())
-
-
-def auto_sync_chromium_profiles() -> list[str]:
-    """Save an entry for every Chromium profile directory, and drop entries
-    whose directory is gone. Brave entries are left alone.
-
-    The directory name IS the profile name here, so there is none of Brave's
-    renaming: one account, one directory, one entry.
-    """
-    from src.core import browser_choice
-    root = browser_choice.CHROMIUM_USER_DATA
-    config = _load_config()
-    saved = dict(config.get("profiles", {}))
-    on_disk = {p["full_path"]: p["dir_name"] for p in list_chromium_profiles()}
-
-    kept = {name: path for name, path in saved.items()
-            if not _under(path, root) or path in on_disk}
-    known = set(kept.values())
-    added = []
-    for path, dir_name in on_disk.items():
-        if path in known:
-            continue
-        name = dir_name
-        counter = 2
-        while name in kept:
-            name = f"{dir_name} ({counter})"
-            counter += 1
-        kept[name] = path
-        added.append(name)
-
-    if kept != saved:
-        config["profiles"] = kept
-        _save_config(config)
-    return added
+    """The profiles of the browser the automation drives."""
+    return list_brave_profiles()
 
 
 def list_profiles_for_browser() -> list[str]:
-    """Saved profile names this machine drives, for the selected browser.
+    """Saved profile names this machine drives.
 
-    Two filters, both about what this PC can actually open. The saved map
-    holds profiles of both browsers - a Brave profile lives under Brave's
-    User Data, a Chromium one under CHROMIUM_USER_DATA - and neither browser
-    can open the other's. And where a fleet is split across several PCs, this
-    machine owns its share of it; on a single-PC setup that share is all of
-    them, which is the default.
+    Two filters. A saved entry only counts if it sits under Brave's User Data:
+    the map still carries entries written when a second browser kept its
+    profiles in its own tree, and Brave cannot open those. And where a fleet
+    is split across several PCs, this machine owns its share of it; on a
+    single-PC setup that share is all of them, which is the default.
     """
     from src.core import browser_choice
     root = browser_choice.user_data_root()
@@ -385,11 +378,8 @@ def list_profiles_for_browser() -> list[str]:
 
 
 def auto_sync_profiles() -> list[str]:
-    """Sync saved profiles with whichever browser is selected."""
-    from src.core import browser_choice
-    return (auto_sync_chromium_profiles()
-            if browser_choice.current_browser() == browser_choice.CHROMIUM
-            else auto_sync_brave_profiles())
+    """Sync saved profiles with what Brave actually has."""
+    return auto_sync_brave_profiles()
 
 
 # ── Facebook Profile URLs ─────────────────────────────────
@@ -402,10 +392,11 @@ def save_facebook_url(profile_name: str, facebook_url: str):
         profile_name: The Brave profile name (e.g., "Default", "Profile 1")
         facebook_url: The Facebook profile URL (e.g., "https://www.facebook.com/username")
     """
-    config = _load_config()
-    config.setdefault("facebook_urls", {})
-    config["facebook_urls"][profile_name] = facebook_url
-    _save_config(config)
+    def change(config):
+        config.setdefault("facebook_urls", {})
+        config["facebook_urls"][profile_name] = facebook_url
+
+    _mutate(change)
 
 
 # ── Share Delay Settings ──────────────────────────────────
@@ -453,9 +444,10 @@ def save_share_delays(delays: dict):
     Args:
         delays: Dict with delay settings (see get_share_delays for keys)
     """
-    config = _load_config()
-    config["share_delays"] = delays
-    _save_config(config)
+    def change(config):
+        config["share_delays"] = delays
+
+    _mutate(change)
 
 
 # ── Comment Delay Settings ────────────────────────────────
@@ -495,7 +487,8 @@ def save_comment_delays(delays: dict):
     Args:
         delays: Dict with delay settings (see get_comment_delays for keys)
     """
-    config = _load_config()
-    config["comment_delays"] = delays
-    _save_config(config)
+    def change(config):
+        config["comment_delays"] = delays
+
+    _mutate(change)
 

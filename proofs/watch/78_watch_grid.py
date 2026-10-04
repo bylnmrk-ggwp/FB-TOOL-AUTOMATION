@@ -1,10 +1,17 @@
-"""The visible watch lays its windows out ten to a row.
+"""The visible watch lays its windows out five to a row.
 
 The squarest-grid-that-fits changed shape with the number of pages: 9 open
-made 3x3, 46 made 7x7, so the wall never looked the same twice. Ten to a row
-is fixed, with as many rows as the pages need - and a tenth of a screen is
-far below Chromium's minimum window width, so the watch browser has to shrink
-its own unit the way the login grid does or every window comes back clamped.
+made 3x3, 46 made 7x7, so the wall never looked the same twice. A fixed column
+count is what makes it one shape, and five is the one asked for - a wave of 30
+is 5 across and 6 down.
+
+Five columns is wider per tile than ten, so width stops being what runs out;
+height does. Six rows of a 1366x768 desktop computes a 484-unit tile, under
+Chromium's ~515-unit minimum window width, and a window under that comes back
+clamped - the wall piles up instead of tiling. The scale factor is what buys
+units, so it has to follow the row count rather than sit at one constant, and
+the tiler must convert the desktop with the same factor the browser launched
+with or the two disagree by construction.
 """
 import inspect
 import math
@@ -16,9 +23,9 @@ step("watch grid")  # noqa: F821
 
 from src.core.driver_manager import DriverManager  # noqa: E402
 
-if DriverManager.WATCH_GRID_COLS != 10:
+if DriverManager.WATCH_GRID_COLS != 5:
     failures.append(f"watch grid: {DriverManager.WATCH_GRID_COLS} windows to a row, "  # noqa: F821
-                    f"not the ten that was asked for")
+                    f"not the five that was asked for")
 
 tile = inspect.getsource(DriverManager._tile_watch_windows)
 if "math.sqrt" in tile:
@@ -38,18 +45,55 @@ if 'mode == "visible"' not in watch:
     failures.append("watch grid: the scale factor is applied even to hidden runs, "  # noqa: F821
                     "which have no windows to place")
 
-# The cell has to clear Chromium's ~515-unit minimum in the browser's own
-# space. At scale s that space is the screen divided by s.
+# 30 pages is the wave the operator watches: five across, six down.
+rows_for_30 = math.ceil(30 / DriverManager.WATCH_GRID_COLS)
+if (DriverManager.WATCH_GRID_COLS, rows_for_30) != (5, 6):
+    failures.append(f"watch grid: 30 pages lay out "  # noqa: F821
+                    f"{DriverManager.WATCH_GRID_COLS}x{rows_for_30}, not 5x6")
+
 scale = DriverManager.WATCH_GRID_SCALE
 if not (0 < scale < 1):
     failures.append(f"watch grid: WATCH_GRID_SCALE {scale!r} does not shrink the "  # noqa: F821
                     f"browser unit")
-else:
-    space_w = 1920 / scale
-    cell_w = space_w / DriverManager.WATCH_GRID_COLS
-    if cell_w < 520:
-        failures.append(f"watch grid: a cell is {cell_w:.0f} units wide, under "  # noqa: F821
-                        f"Chromium's minimum - the windows would be clamped")
+
+# The launch factor follows the page count, and the tiler reads the one the
+# browser was launched with - not the constant, or a 5x6 grid on a small
+# screen is laid out in units the browser never agreed to.
+if "_grid_scale_for(len(active))" not in watch:
+    failures.append("watch grid: the launch scale ignores how many pages will "  # noqa: F821
+                    "open, so six rows on a small desktop come back clamped")
+if "_watch_scale" not in tile:
+    failures.append("watch grid: the tiler converts the desktop with the class "  # noqa: F821
+                    "constant instead of the factor the browser launched with")
+
+
+def _tile_side(w: int, h: int, count: int, scale: float) -> float:
+    """One tile's side in browser units, the same arithmetic the tiler uses."""
+    cols = DriverManager.WATCH_GRID_COLS
+    rows = max(1, math.ceil(count / cols))
+    gap = DriverManager.WATCH_GRID_GAP
+    return min((w / scale - gap * (cols + 1)) // cols,
+               (h / scale - gap * (rows + 1)) // rows)
+
+
+# Every desktop the fleet runs on must produce a tile Chromium will honour, at
+# the wave sizes it actually opens. 1366x768 is the case that fails at a fixed
+# scale, which is why the scale is computed.
+_real_desktop = DriverManager._desktop_size
+_probe = DriverManager()
+try:
+    for w, h in ((1920, 1080), (1536, 864), (1366, 768), (1280, 720)):
+        DriverManager._desktop_size = staticmethod(lambda w=w, h=h: (w, h))
+        for count in (8, 30, 50):
+            chosen = _probe._grid_scale_for(count)
+            side = _tile_side(w, h, count, chosen)
+            if side < DriverManager.WATCH_GRID_MIN_TILE:
+                failures.append(  # noqa: F821
+                    f"watch grid: {count} pages on a {w}x{h} desktop tile at "
+                    f"{side:.0f} units (scale {chosen}), under Chromium's "
+                    f"minimum - the windows would be clamped into a pile")
+finally:
+    DriverManager._desktop_size = _real_desktop
 
 # Square tiles with a gutter, centred - the layout in the icon, not a screen
 # chopped into whatever rectangles fit.
@@ -72,16 +116,6 @@ if not (0 < DriverManager.WATCH_GRID_GAP <= 200):
     failures.append(f"watch grid: the gutter is {DriverManager.WATCH_GRID_GAP}, "  # noqa: F821
                     f"which is not a usable gap")
 
-# The arithmetic has to leave a real tile at fleet size.
-space_w, space_h = 1920 / DriverManager.WATCH_GRID_SCALE, 1080 / DriverManager.WATCH_GRID_SCALE
-cols = DriverManager.WATCH_GRID_COLS
-rows = 5
-gap = DriverManager.WATCH_GRID_GAP
-side = min((space_w - gap * (cols + 1)) // cols, (space_h - gap * (rows + 1)) // rows)
-if side < 520:
-    failures.append(f"watch grid: a tile is {side:.0f} units, under Chromium's "  # noqa: F821
-                    f"minimum window width - the windows would be clamped")
-
 # The grid is measured from the desktop, not from what the page claims its
 # screen is: a watch context reported 1280x800 while devicePixelRatio was
 # 0.25, which squeezed the whole grid into a corner of the real screen.
@@ -91,13 +125,5 @@ if "_desktop_size" not in tile:
 size = DriverManager._desktop_size()
 if size is None or not (size[0] > 200 and size[1] > 200):
     failures.append(f"watch grid: the desktop size came back as {size!r}")  # noqa: F821
-else:
-    space_w = size[0] / DriverManager.WATCH_GRID_SCALE
-    gap = DriverManager.WATCH_GRID_GAP
-    cols = DriverManager.WATCH_GRID_COLS
-    side = (space_w - gap * (cols + 1)) // cols
-    if side < 520:
-        failures.append(f"watch grid: on this desktop a tile is {side:.0f} units, "  # noqa: F821
-                        f"under Chromium's minimum window width")
 
 print("FAILED" if [f for f in failures if "watch grid" in f] else "ok")  # noqa: F821

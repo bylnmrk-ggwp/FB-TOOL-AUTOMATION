@@ -104,9 +104,16 @@ def pending_usernames() -> list[str]:
             if a.get("linked_profile")]
 
 
-def summary_line(ok: int, failed: int, when: datetime | None = None) -> str:
+def summary_line(ok: int, failed: int, when: datetime | None = None,
+                 skipped: int = 0) -> str:
     """The one-line outcome of a batch, as the dashboard's Run card shows
     it: "3 ok · 1 failed · 20:11". The separator is U+00B7 on purpose - it
-    reads as a divider in a sans face where a hyphen reads as a minus."""
+    reads as a divider in a sans face where a hyphen reads as a minus.
+
+    Skipped items are named rather than folded into either number: an account
+    Facebook gated never acted, so calling it a failure of the run reads as
+    something the run did wrong, and hiding it entirely loses the reason a
+    wave of 84 only reached 70."""
     when = when or datetime.now()
-    return f"{ok} ok · {failed} failed · {when:%H:%M}"
+    tail = f" · {skipped} skipped" if skipped else ""
+    return f"{ok} ok · {failed} failed{tail} · {when:%H:%M}"

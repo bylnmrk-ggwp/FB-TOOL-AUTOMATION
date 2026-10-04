@@ -1,30 +1,46 @@
 /* Palette, spacing, type and motion tokens.
-   Every hex value and duration is copied verbatim from src/ui/theme.py
-   (THEMES["light"] / THEMES["dark"], SPACE, TYPE, MOTION) so the mockup
-   matches the Tkinter app. Type sizes are theme.py points at 96 DPI. */
+
+   Spacing, type and motion still come from src/ui/theme.py (SPACE, TYPE,
+   MOTION); type sizes are theme.py points at 96 DPI. The colours no longer
+   do - theme.py's accent is indigo and this app's is the MCARS PH red, so
+   the two palettes are deliberately separate.
+
+   The reds are the marks's own, read off the logo files rather than picked
+   by eye: shop.mcars.ph/assets/logo/nav.png is #BD0402 on black, and the
+   footer variant white.png is #CE2029 on white. Every other red here sits
+   on the hue those two share, 358.8 deg. The neutrals carry no tint,
+   because the logo pairs its red with true black and true white.
+
+   Red has two jobs and they need different lightness on a dark ground: a
+   red light enough to READ as text is too light to carry white text as a
+   fill. So --accent fills, --accent-text and --brand are read. Keep it
+   that way when adding tokens. */
 
 :root {
   color-scheme: light;
 
   /* Surfaces */
-  --bg: #fafafa;
-  --card: #ffffff;
-  --surface: #f4f4f5;
-  --border: #e7e7ea;
-  --status-bg: #f4f4f5;
+  --bg: #FAFAFA;
+  --card: #FFFFFF;
+  --surface: #F4F4F4;
+  --border: #E7E7E7;
+  --status-bg: #F4F4F4;
 
   /* Text */
-  --fg: #18181b;
-  --heading: #09090b;
-  --muted: #71717a;
-  --status: #52525b;
-  --placeholder: #a1a1aa;
+  --fg: #191919;
+  --heading: #0A0A0A;
+  --muted: #717171;
+  --status: #525252;
+  --placeholder: #A1A1A1;
 
-  /* The single accent. Nothing else in the UI is this colour. */
-  --accent: #b80000;
-  --accent-hover: #d01414;
-  --accent-pressed: #8f0000;
-  --accent-disabled: #eab3b3;
+  /* The single accent. Nothing else in the UI is this colour.
+     --accent is filled; --accent-text is read. On this light ground they
+     are the same red - only the dark theme has to separate them. */
+  --accent: #BD0402;          /* the logo's own red */
+  --accent-text: #BD0402;     /* 6.32:1 on --bg */
+  --accent-hover: #DD0308;
+  --accent-pressed: #970205;
+  --accent-disabled: #FECDCE;
 
   /* Semantic */
   --success: #15803d;
@@ -32,48 +48,48 @@
   --warning: #a16207;
 
   /* Header */
-  --header-bg: #fafafa;
-  --header-hover: #f4f4f5;
-  --header-pressed: #e7e7ea;
+  --header-bg: #FAFAFA;
+  --header-hover: #F4F4F4;
+  --header-pressed: #E7E7E7;
 
   /* Inputs */
-  --input-bg: #ffffff;
-  --input-fg: #18181b;
+  --input-bg: #FFFFFF;
+  --input-fg: #191919;
 
   /* Secondary buttons */
-  --secondary: #fafafa;
-  --secondary-fg: #3f3f46;
-  --secondary-active: #f4f4f5;
-  --secondary-border: #d4d4d8;
-  --btn-hover: #f0f0f1;
-  --btn-pressed: #e4e4e7;
-  --disabled-bg: #fafafa;
-  --disabled-fg: #a1a1aa;
+  --secondary: #FAFAFA;
+  --secondary-fg: #3F3F3F;
+  --secondary-active: #F4F4F4;
+  --secondary-border: #D4D4D4;
+  --btn-hover: #F0F0F0;
+  --btn-pressed: #E4E4E4;
+  --disabled-bg: #FAFAFA;
+  --disabled-fg: #A1A1A1;
 
   /* Lists */
-  --list-bg: #ffffff;
-  --list-fg: #18181b;
-  --list-select-bg: #fdecec;
-  --list-select-fg: #7a0000;
-  --list-hover-bg: #f4f4f5;
-  --list-hover-fg: #18181b;
+  --list-bg: #FFFFFF;
+  --list-fg: #191919;
+  --list-select-bg: #FFE6E6;
+  --list-select-fg: #830205;
+  --list-hover-bg: #F4F4F4;
+  --list-hover-fg: #191919;
 
-  --track: #e7e7ea;
-  --dot-unknown: #d4d4d8;
-  --scroll-thumb: #d4d4d8;
-  --scroll-thumb-hover: #a1a1aa;
+  --track: #E7E7E7;
+  --dot-unknown: #D4D4D4;
+  --scroll-thumb: #D4D4D4;
+  --scroll-thumb-hover: #A1A1A1;
 
   /* Sidebar (web-admin shell) and brand */
-  --sidebar-bg: #ffffff;
-  --sidebar-fg: #3f3f46;
-  --sidebar-muted: #71717a;
-  --sidebar-active-bg: #f4f4f5;
-  --sidebar-active-fg: #09090b;
-  --sidebar-hover-bg: #f4f4f5;
-  --sidebar-border: #e7e7ea;
-  --brand: #b80000;
-  --chip-bg: #fdecec;
-  --chip-fg: #7a0000;
+  --sidebar-bg: #FFFFFF;
+  --sidebar-fg: #3F3F3F;
+  --sidebar-muted: #717171;
+  --sidebar-active-bg: #F4F4F4;
+  --sidebar-active-fg: #0A0A0A;
+  --sidebar-hover-bg: #F4F4F4;
+  --sidebar-border: #E7E7E7;
+  --brand: #BD0402;
+  --chip-bg: #FFE6E6;
+  --chip-fg: #830205;
 
   /* SPACE */
   --s-xs: 4px;
@@ -112,63 +128,67 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0f0f11;
-  --card: #17171a;
-  --surface: #1c1c20;
-  --border: #27272a;
-  --status-bg: #17171a;
+  --bg: #0F0F0F;
+  --card: #171717;
+  --surface: #1C1C1C;
+  --border: #272727;
+  --status-bg: #171717;
 
-  --fg: #e4e4e7;
-  --heading: #fafafa;
-  --muted: #8b8b93;
-  --status: #a1a1aa;
-  --placeholder: #71717a;
+  --fg: #E4E4E4;
+  --heading: #FAFAFA;
+  --muted: #8B8B8B;
+  --status: #A1A1A1;
+  --placeholder: #717171;
 
-  --accent: #e01414;
-  --accent-hover: #f22d2d;
-  --accent-pressed: #b80000;
-  --accent-disabled: #4a1414;
+  /* Here the two jobs part company. --accent is the logo's dark-ground red
+     and carries white text at 5.44:1. Read as text on --bg it would only
+     reach 3.52:1, so --accent-text lifts the same hue to 6.04:1. */
+  --accent: #CE2029;          /* fills only */
+  --accent-text: #E9676A;     /* text and icons only */
+  --accent-hover: #DF2024;
+  --accent-pressed: #A81A21;
+  --accent-disabled: #52161A;
 
   --success: #3fb873;
   --error: #ff7a6b;
   --warning: #d4a13a;
 
-  --header-bg: #0f0f11;
-  --header-hover: #1c1c20;
-  --header-pressed: #27272a;
+  --header-bg: #0F0F0F;
+  --header-hover: #1C1C1C;
+  --header-pressed: #272727;
 
-  --input-bg: #17171a;
-  --input-fg: #e4e4e7;
+  --input-bg: #171717;
+  --input-fg: #E4E4E4;
 
-  --secondary: #0f0f11;
-  --secondary-fg: #d4d4d8;
-  --secondary-active: #1c1c20;
-  --secondary-border: #3f3f46;
-  --btn-hover: #1f1f24;
-  --btn-pressed: #27272a;
-  --disabled-bg: #0f0f11;
-  --disabled-fg: #52525b;
+  --secondary: #0F0F0F;
+  --secondary-fg: #D4D4D4;
+  --secondary-active: #1C1C1C;
+  --secondary-border: #3F3F3F;
+  --btn-hover: #1F1F1F;
+  --btn-pressed: #272727;
+  --disabled-bg: #0F0F0F;
+  --disabled-fg: #525252;
 
-  --list-bg: #17171a;
-  --list-fg: #e4e4e7;
-  --list-select-bg: #3a1113;
-  --list-select-fg: #ffe0e0;
-  --list-hover-bg: #1f1f24;
-  --list-hover-fg: #e4e4e7;
+  --list-bg: #171717;
+  --list-fg: #E4E4E4;
+  --list-select-bg: #420F11;
+  --list-select-fg: #FFD9DA;
+  --list-hover-bg: #1F1F1F;
+  --list-hover-fg: #E4E4E4;
 
-  --track: #27272a;
-  --dot-unknown: #3f3f46;
-  --scroll-thumb: #3f3f46;
-  --scroll-thumb-hover: #52525b;
+  --track: #272727;
+  --dot-unknown: #3F3F3F;
+  --scroll-thumb: #3F3F3F;
+  --scroll-thumb-hover: #525252;
 
-  --sidebar-bg: #131316;
-  --sidebar-fg: #a1a1aa;
-  --sidebar-muted: #71717a;
-  --sidebar-active-bg: #1f1f24;
-  --sidebar-active-fg: #fafafa;
-  --sidebar-hover-bg: #1a1a1e;
-  --sidebar-border: #27272a;
-  --brand: #e01414;
-  --chip-bg: #3a1113;
-  --chip-fg: #ffe0e0;
+  --sidebar-bg: #131313;
+  --sidebar-fg: #A1A1A1;
+  --sidebar-muted: #717171;
+  --sidebar-active-bg: #1F1F1F;
+  --sidebar-active-fg: #FAFAFA;
+  --sidebar-hover-bg: #1A1A1A;
+  --sidebar-border: #272727;
+  --brand: #E9676A;
+  --chip-bg: #420F11;
+  --chip-fg: #FFD9DA;
 }

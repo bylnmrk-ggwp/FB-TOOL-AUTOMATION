@@ -25,6 +25,7 @@ CLI on top of them.
 from pathlib import Path
 
 from src.storage import database as db
+from src.storage import roster_import
 from src.storage import sheets_api as api
 
 # Cell backgrounds. Red and green are the pill fills; white text reads on both.
@@ -67,6 +68,33 @@ def resolve_columns(tok: str, sheet_id: str, tab: str) -> dict[str, int]:
         c = col_letter(cols["STATUS"])
         api.update_values(tok, sheet_id, f"{tab}!{c}1:{c}1", [["STATUS"]])
     return {"username": cols["USERNAME"], "status": cols["STATUS"]}
+
+
+def match_key(username: str) -> str:
+    """The key a sheet cell and a database row are matched on.
+
+    The roster is edited by hand and 127 USERNAME cells carry an invisible
+    U+200E pasted in from elsewhere. The database holds the cleaned form,
+    so matching the raw cell missed those rows and reported them as not in
+    the database - which a whole-sheet write would then blank. Both sides
+    go through the same cleaner the import uses.
+    """
+    return roster_import.clean_username(username or "").strip().lower()
+
+
+def has_local_verdict(account: dict | None) -> bool:
+    """Whether THIS machine has actually decided anything about an account.
+
+    A fleet is split across several PCs, so most roster rows are worked by
+    a machine that is not this one. A blank local status means "never
+    attempted here", not "not logged in", and a caller that rewrites the
+    whole STATUS column must leave those cells exactly as it found them -
+    otherwise one PC erases every verdict the others recorded.
+    """
+    if not account:
+        return False
+    return bool((account.get("status") or "").strip()
+                or (account.get("status_reason") or "").strip())
 
 
 def status_for(account: dict | None) -> str:
@@ -124,9 +152,9 @@ def build_row_index(tok: str, sheet_id: str, tab: str,
     rows = api.get_values(tok, sheet_id, rng)
     out = {}
     for i, row in enumerate(rows):
-        u = (row[0].strip() if row else "")
+        u = match_key(row[0] if row else "")
         if u:
-            out[u.lower()] = i + 2      # data starts at row 2
+            out[u] = i + 2      # data starts at row 2
     return out
 
 
@@ -148,24 +176,22 @@ def write_status(tok: str, sheet_id: str, gid: int, tab: str,
         "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}])
 
 
-# The Google Sheet is off. The roster, the credentials and every verdict live
-# in the local database, and the accounts themselves live in the browser
-# profiles on this PC - neither needs a network round trip to Google, and a
-# PC without DNS was spending one per account to be told it has no network.
-# Nothing here is deleted: flip this to True (or set the "sheet_sync"
-# setting) and the mirror works exactly as before.
-SHEET_SYNC = False
+# The roster sheet is on: the operator edits the roster there, so the app
+# reads it on a poll and mirrors each verdict back into its STATUS column.
+# Set the "sheet_sync" setting to False to turn the mirror off on a PC that
+# has no business reaching Google - the roster, the credentials and every
+# verdict are already in the local database, and the accounts themselves are
+# the browser profiles on this PC, so nothing stops working without it.
+SHEET_SYNC = True
 
 
 def sheet_enabled() -> bool:
     """Whether the roster sheet is mirrored at all."""
-    if SHEET_SYNC:
-        return True
     try:
         from src.storage import config_manager as cfg
-        return bool(cfg.get_setting("sheet_sync", False))
+        return bool(cfg.get_setting("sheet_sync", SHEET_SYNC))
     except Exception:
-        return False
+        return SHEET_SYNC
 
 
 def push_account_status(username: str,
@@ -187,8 +213,8 @@ def push_account_status(username: str,
     if not username or not sheet_enabled():
         return ""
     account = next((a for a in db.list_accounts()
-                    if (a.get("username") or "").strip().lower()
-                    == username.strip().lower()), None)
+                    if match_key(a.get("username") or "")
+                    == match_key(username)), None)
     if account is None:
         return ""
     text = status_for(account)
@@ -203,7 +229,7 @@ def push_account_status(username: str,
         return ""
     cols = resolve_columns(tok, sheet_id, tab)
     row = build_row_index(tok, sheet_id, tab,
-                          cols["username"]).get(username.strip().lower())
+                          cols["username"]).get(match_key(username))
     if row is None:
         return ""
     write_status(tok, sheet_id, gid, tab, row, text, cols["status"])
@@ -251,7 +277,7 @@ class SheetWriter:
             self.error = f"{type(e).__name__}: {e}"[:200]
 
     def write(self, username: str, text: str) -> bool:
-        row = self._rows.get((username or "").strip().lower()) if self.on else None
+        row = self._rows.get(match_key(username)) if self.on else None
         if not row:
             return False
         for attempt in range(2):

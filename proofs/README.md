@@ -16,9 +16,10 @@ what it proves:
 | `sheet/` | the Google Sheet roster: mirroring, writing, and behaving offline |
 | `web/` | the FastAPI server, its routes, and the React frontend's store |
 | `login/` | signing accounts in: batches, 2FA, checkpoints, captchas, verdicts |
-| `profiles/` | browser choice and the profile directories behind each account |
+| `profiles/` | browser choice, how a browser is launched, and the profile directories |
 | `actions/` | what the fleet does on Facebook: join, share, comment, like, queue |
 | `watch/` | keeping profiles on a live broadcast until it ends |
+| `mobile/` | driving a real Android screen over adb for Facebook Lite |
 
 ## Naming
 

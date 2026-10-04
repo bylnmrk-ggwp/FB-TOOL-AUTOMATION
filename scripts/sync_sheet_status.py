@@ -52,6 +52,7 @@ DEFAULT_KEY = api.DEFAULT_KEY
 from src.storage.sheet_status import (          # noqa: E402
     col_letter, resolve_columns, status_for, fill as _fill,
     resolve_gid, build_row_index, write_status, push_account_status,
+    match_key, has_local_verdict,
     RED, GREEN, AMBER, WHITE_TEXT, NO_FILL, DARK_TEXT,
     DISABLED, NOT_LOGGED_IN, LOGGED_IN, IN_PROGRESS,
 )
@@ -99,13 +100,28 @@ def main(argv) -> int:
         print("No usernames in the sheet; nothing to do.")
         return 0
 
-    accounts = {a["username"].strip().lower(): a for a in db.list_accounts()}
-    statuses = [status_for(accounts.get(u.lower()) if u else None)
-                for u in usernames]
+    # The cells as they stand. A row this machine has no verdict for keeps
+    # exactly what it already says - see has_local_verdict().
+    srng = urllib.parse.quote(f"{args.tab}!{sc}2:{sc}")
+    sgot = api.call(token, args.sheet_id, f"/values/{srng}").get("values", [])
+    existing = [(row[0].strip() if row else "") for row in sgot]
+    existing += [""] * (n - len(existing))
+
+    accounts = {match_key(a["username"]): a for a in db.list_accounts()}
+    statuses, kept = [], 0
+    for u, was in zip(usernames, existing):
+        acct = accounts.get(match_key(u)) if u else None
+        if has_local_verdict(acct):
+            statuses.append(status_for(acct))
+        else:
+            statuses.append(was)
+            kept += 1
 
     from collections import Counter
     tally = Counter(s or "(blank)" for s in statuses)
     print(f"Sheet rows: {n}   " + "   ".join(f"{k}: {v}" for k, v in tally.items()))
+    print(f"Rows this machine has a verdict for: {n - kept}; "
+          f"{kept} left exactly as the sheet has them.")
 
     if args.dry_run:
         print("--dry-run: nothing written.")

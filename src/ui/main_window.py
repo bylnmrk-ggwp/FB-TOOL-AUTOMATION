@@ -895,6 +895,11 @@ class MainWindow(tk.Tk):
                 self.log_tab.write(f"{icon} {pname}: {msg}")
                 self.profiles_tab.mark_rate_limited(pname)
                 self.queue_tab.mark_profile_rate_limited(pname)
+            elif result.get("skipped", False):
+                # Already proven gated by an earlier item of the same
+                # profile: reported so the row ends, not marked twice and
+                # not counted against the run.
+                self.log_tab.write(f"⊘ {pname}: {msg}")
             elif needs_login:
                 # Detected logged-out mid-batch (e.g. 'See more on Facebook' overlay)
                 self.log_tab.write(f"\u2717 {pname}: {msg}")
@@ -1048,12 +1053,15 @@ class MainWindow(tk.Tk):
 
         elif rtype == "batch_result":
             total = result.get("total", 0)
+            skipped = result.get("skipped", 0)
             self.queue_tab.set_running(False)
             self.queue_tab.update_progress(total, total)
             self._set_progress(total, total)
-            self.queue_tab.set_status(f"Done — {total} item(s) processed")
+            tail = (f", {skipped} skipped - no account could act"
+                    if skipped else "")
+            self.queue_tab.set_status(f"Done — {total} item(s) processed{tail}")
             self.queue_tab.clear_all()
-            self.log_tab.write(f"Batch complete: {total} item(s) processed")
+            self.log_tab.write(f"Batch complete: {total} item(s) processed{tail}")
             self._set_activity("Ready")
 
         elif rtype == "fetch_groups_result":

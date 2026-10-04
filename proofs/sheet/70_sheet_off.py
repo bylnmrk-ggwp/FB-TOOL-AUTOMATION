@@ -1,12 +1,15 @@
-"""With the sheet off, nothing reaches for Google.
+"""The sheet is on by default, and the off switch still means off.
 
-The roster, the credentials and every verdict live in the local database;
-the accounts themselves live in the browser profiles on this PC. Neither
-needs a round trip to Google, and a PC without DNS was spending one per
-account to be told it has no network.
+The roster is edited in the Google Sheet, so the mirror is on: the app polls
+the sheet and pushes each verdict back into its STATUS column. A PC with no
+business reaching Google turns that off with one setting, and off has to mean
+off at the source - no token, no credentials, no socket - not a call that
+fails politely. A PC without DNS was once spending a round trip per account
+to be told it has no network.
 
-Off means off at the source - no token, no credentials, no socket - not a
-call that fails politely.
+Nothing under test here touches the network on either path: with the mirror
+on but no service-account key, construction short-circuits before the first
+HTTP call; with the mirror off, it short-circuits earlier still.
 """
 import socket
 import sys
@@ -19,12 +22,13 @@ step("sheet off")  # noqa: F821
 from src.storage import sheet_status as ss  # noqa: E402
 from src.storage.roster_sheet import SheetWatcher  # noqa: E402
 
-if ss.SHEET_SYNC:
-    failures.append("sheet off: the sheet mirror is still on by default")  # noqa: F821
-if ss.sheet_enabled():
-    failures.append("sheet off: sheet_enabled() is true with the mirror off")  # noqa: F821
+# On by default: the operator's roster lives in the sheet.
+if not ss.SHEET_SYNC:
+    failures.append("sheet off: the sheet mirror is off by default")  # noqa: F821
+if not ss.sheet_enabled():
+    failures.append("sheet off: sheet_enabled() is false with the mirror on")  # noqa: F821
 
-# No socket may be opened while the sheet is off.
+# Now switch it off and prove that nothing reaches for Google.
 opened = []
 _real_connection = socket.create_connection
 _real_socket = socket.socket
@@ -41,9 +45,13 @@ def _no_connection(address, *a, **kw):
     raise AssertionError(f"the sheet is off but something dialled {address}")
 
 
+_saved_sync = ss.SHEET_SYNC
+ss.SHEET_SYNC = False
 socket.create_connection = _no_connection
 socket.socket = _NoSocket
 try:
+    if ss.sheet_enabled():
+        failures.append("sheet off: sheet_enabled() is true with the mirror off")  # noqa: F821
     started = time.monotonic()
     if ss.push_account_status("someone@example.com") != "":
         failures.append("sheet off: a status push wrote something")  # noqa: F821
@@ -64,17 +72,13 @@ try:
 finally:
     socket.create_connection = _real_connection
     socket.socket = _real_socket
+    ss.SHEET_SYNC = _saved_sync
 
 if opened:
     failures.append(f"sheet off: {len(opened)} network connection(s) attempted: "  # noqa: F821
                     f"{opened[:2]}")
 
-# Turning it back on is one flag - nothing here is deleted.
-ss.SHEET_SYNC = True
-try:
-    if not ss.sheet_enabled():
-        failures.append("sheet off: the mirror cannot be switched back on")  # noqa: F821
-finally:
-    ss.SHEET_SYNC = False
+if not ss.sheet_enabled():
+    failures.append("sheet off: the mirror cannot be switched back on")  # noqa: F821
 
 print("FAILED" if [f for f in failures if "sheet off" in f] else "ok")  # noqa: F821

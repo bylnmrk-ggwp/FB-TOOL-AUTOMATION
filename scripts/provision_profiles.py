@@ -16,7 +16,10 @@ the Profiles tab syncs.
 
 The created profiles are LOGGED OUT. Every app action resolves a Brave profile
 path and then relies on an existing Facebook session, so a profile is only
-usable once its account has been logged in.
+usable once its account has been logged in. --login runs that second half
+immediately, against exactly the accounts this run provisioned: the two steps
+are always done together in practice, and naming the accounts explicitly means
+a login never wanders into rows some earlier run left unlinked.
 
 Brave must be closed: it rewrites Local State on exit and would discard
 whatever this script added.
@@ -24,6 +27,9 @@ whatever this script added.
 Usage:
     python scripts/provision_profiles.py --dry-run          # plan only, writes nothing
     python scripts/provision_profiles.py --count 3          # provision the first 3
+    python scripts/provision_profiles.py --from-no 26       # start at roster row 26
+    python scripts/provision_profiles.py --from-no 26 --count 10 --login --unattended
+                                                            # provision, then log those in
     python scripts/provision_profiles.py                    # provision all remaining
     python scripts/provision_profiles.py --restore-backup <path>
 """
@@ -364,6 +370,20 @@ def restore_backup(path: str) -> int:
 
 def main(argv) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--only", nargs="*", metavar="USERNAME", default=None,
+                    help="provision only these roster usernames")
+    ap.add_argument("--login", action="store_true",
+                    help="after provisioning, log these accounts in")
+    ap.add_argument("--unattended", action="store_true",
+                    help="with --login: never prompt, skip any checkpoint")
+    ap.add_argument("--batch", type=int, default=0, metavar="N",
+                    help="with --login: pause after every N accounts")
+    ap.add_argument("--pause", type=float, default=15.0, metavar="MIN",
+                    help="with --login: minutes between batches (default 15)")
+    ap.add_argument("--from-no", type=int, default=None, metavar="N",
+                    help="only accounts whose roster number is N or higher "
+                         "(the sheet's own row number); combine with --count "
+                         "to take a slice")
     ap.add_argument("--count", type=int, default=None,
                     help="provision at most this many accounts")
     ap.add_argument("--dry-run", action="store_true",
@@ -402,12 +422,47 @@ def main(argv) -> int:
     from src.storage import config_manager as cfg
     from src.storage import database as db
 
+    # "Linked" is a claim in the roster row; what makes a profile usable is a
+    # directory Brave knows about and a path in the config. Those can disagree:
+    # an interrupted run, or a Brave that rewrote Local State on exit, leaves a
+    # row pointing at a profile that exists nowhere. Trusting the claim alone
+    # made those rows unprovisionable forever - provisioning skipped them as
+    # already linked, and every login failed with "has no Brave path". So an
+    # account counts as linked only when its profile actually resolves.
+    def _needs_profile(acct) -> bool:
+        name = (acct.get("linked_profile") or "").strip()
+        if not name:
+            return True
+        path = cfg.get_profile_path(name)
+        return not path or not os.path.isdir(path)
+
     accounts = [a for a in db.list_accounts(include_disabled=False)
-                if not a.get("linked_profile")]
+                if _needs_profile(a)]
+    # list_accounts() is ordered by sheet_no, so a floor on that number is
+    # "start at this roster row and keep going" - the same row the operator
+    # reads off the sheet. Rows with no number sort last and are excluded,
+    # since there is no row to start from.
+    if args.from_no is not None:
+        accounts = [a for a in accounts
+                    if a.get("sheet_no") is not None
+                    and a["sheet_no"] >= args.from_no]
+    if args.only:
+        # Named accounts only. A username that matches nothing is reported
+        # rather than silently dropped: the caller asked for it by name.
+        wanted = {u.strip().lower() for u in args.only if u.strip()}
+        accounts = [a for a in accounts
+                    if (a.get("username") or "").strip().lower() in wanted]
+        missing = wanted - {(a.get("username") or "").strip().lower()
+                            for a in accounts}
+        if missing:
+            print(f"Not in the roster, or already has a usable profile: "
+                  f"{len(missing)}")
+            for u in sorted(missing):
+                print(f"   {u}")
     if args.count is not None:
         accounts = accounts[:args.count]
     if not accounts:
-        print("No unlinked accounts to provision.")
+        print("No accounts need a profile.")
         return 0
 
     state = load_local_state()
@@ -495,11 +550,31 @@ def main(argv) -> int:
     print(f"\nCreated {created} profile(s).")
     print(f"App profiles now : {len(cfg.list_profiles())}")
     print(f"Roster           : {total} account(s), {linked} linked")
-    print("\nThese profiles are LOGGED OUT. Open Brave to confirm they appear,")
-    print("then log each account in before the app can drive it.")
     print(f"To undo the Local State change: python {SELF} "
           f"--restore-backup \"{backup}\"")
-    return 0
+
+    if not args.login:
+        print("\nThese profiles are LOGGED OUT. Open Brave to confirm they appear,")
+        print("then log each account in before the app can drive it.")
+        return 0
+
+    # Exactly the accounts this run linked, named one by one, so the login
+    # cannot wander into rows an earlier run left unlinked. A profile with no
+    # session is useless to every other command, so when the caller asks for
+    # both halves they run in one invocation.
+    provisioned = [name for _n, name, _a in plan]
+    if not provisioned:
+        return 0
+    print("\n" + "=" * 70)
+    print(f"Logging in {len(provisioned)} freshly provisioned account(s)...")
+    print("=" * 70 + "\n")
+    import login_accounts
+    argv = ["--only", *provisioned]
+    if args.unattended:
+        argv += ["--unattended", "--keep-going"]
+    if args.batch:
+        argv += ["--batch", str(args.batch), "--pause", str(args.pause)]
+    return login_accounts.main(argv)
 
 
 if __name__ == "__main__":

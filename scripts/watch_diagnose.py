@@ -27,7 +27,7 @@ try:
 except Exception:
     pass
 
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 from src.storage import config_manager as cfg
 from src.storage import database as db
@@ -117,11 +117,11 @@ async def main(url: str, profile: str | None, visible: bool) -> int:
     mode = "visible" if visible else cfg.get_setting("browser_mode", "headless_new")
     args = [f"--window-size={SMALL_VIEWPORT['width']},{SMALL_VIEWPORT['height']}",
             *MEMORY_FLAGS, "--autoplay-policy=no-user-gesture-required"]
-    launch_headless = False
-    if mode == "headless_new":
-        args.append("--headless=new")
-    elif mode == "headless":
-        launch_headless = True
+    # Mirror _browser_launch_mode exactly. "headless_new" no longer adds a
+    # --headless flag: the window is real and minimised, because both headless
+    # engines report HeadlessChrome in the User-Agent. A diagnostic that
+    # launched differently from the app would be diagnosing something else.
+    launch_headless = (mode == "headless")
     print(f"browser mode: {mode} (playwright headless={launch_headless})")
     print("-" * 72)
 
@@ -131,6 +131,16 @@ async def main(url: str, profile: str | None, visible: bool) -> int:
     context = await browser.new_context(storage_state=state,
                                         viewport=SMALL_VIEWPORT, no_viewport=False)
     page = await context.new_page()
+    # Mirror the app the whole way: it minimises every window it opens, so a
+    # diagnostic that left one on screen would be watching a page in a
+    # different state from the one the fleet actually runs.
+    try:
+        cdp = await context.new_cdp_session(page)
+        wid = (await cdp.send("Browser.getWindowForTarget"))["windowId"]
+        await cdp.send("Browser.setWindowBounds",
+                       {"windowId": wid, "bounds": {"windowState": "minimized"}})
+    except Exception as e:  # noqa: BLE001 - cosmetic only
+        print(f"could not minimise the window: {type(e).__name__}: {e}")
 
     console: list[str] = []
 

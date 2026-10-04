@@ -94,11 +94,6 @@ class ProfilesTab(ttk.Frame):
                                       style="Accent.TButton")
         self.relogin_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
 
-        self.make_profiles_btn = ttk.Button(
-            inner, text="Create Chromium Profiles (for Parallel Login)",
-            command=self._on_create_chromium_profiles)
-        self.make_profiles_btn.pack(fill="x", padx=pad["padx"], pady=(0, 2))
-
         # ── This PC's share of the fleet ──────────────────
         # One machine holds about 37 watching pages. A larger fleet is split
         # across PCs, and each one only ever sees and drives its own share.
@@ -484,13 +479,13 @@ class ProfilesTab(ttk.Frame):
             self._roster_status_var.set("Unlinked")
 
     def _visible_profiles(self) -> list[str]:
-        """Profile names to list: every profile of the selected browser.
+        """Profile names to list: this machine's Brave profiles.
 
-        Both browsers' profiles live in one saved map, and a Brave profile
-        cannot be opened by a Chromium run or the other way round, so listing
-        them together only offers profiles that will not work. Login state is
-        not consulted - the list answers "what profiles are there", and a
-        login check answers the other question.
+        The saved map still carries entries written when a second browser kept
+        its profiles in its own tree, and Brave cannot open those, so they are
+        filtered out rather than offered and then failing. Login state is not
+        consulted - the list answers "what profiles are there", and a login
+        check answers the other question.
         """
         return cfg.list_profiles_for_browser()
 
@@ -725,57 +720,6 @@ class ProfilesTab(ttk.Frame):
         if cb:
             cb([a["username"] for a in targets])
 
-    def _on_create_chromium_profiles(self, confirm: bool = True):
-        """Give every roster account its own Chromium profile directory.
-
-        This is what makes a parallel login possible: Brave keeps all profiles
-        in one User Data tree and binds the cookie key to it, so only one can
-        be driven at a time. A Chromium profile is a directory of its own, so
-        a wave of them opens together.
-
-        No browser is touched - it only creates directories and links them -
-        but a 260-row roster is enough filesystem work to freeze the window,
-        so it runs on a thread.
-        """
-        from src.core import browser_choice
-        if browser_choice.current_browser() != browser_choice.CHROMIUM:
-            messagebox.showinfo(
-                "Chromium is not the selected browser",
-                "Profiles here are Brave profiles, which live in one shared "
-                "User Data tree.\n\nSwitch the browser to Chromium first, then "
-                "create the per-account profiles that allow parallel logins.",
-                parent=self)
-            return
-        if confirm and not messagebox.askyesno(
-                "Create Chromium profiles",
-                "Create a Chromium profile for every roster account that has "
-                "none?\n\nExisting profiles keep their sessions - this only "
-                "adds what is missing.",
-                parent=self):
-            return
-
-        self.make_profiles_btn.config(state="disabled")
-        self.set_auto_setup_status("Creating Chromium profiles...")
-
-        def work():
-            from src.core import chromium_profiles
-            try:
-                counts = chromium_profiles.provision_all(log=self._write_log)
-                done = (f"Chromium profiles: {counts['created']} created, "
-                        f"{counts['already']} already there, "
-                        f"{counts['skipped']} skipped")
-            except Exception as e:  # noqa: BLE001 - reported in the UI, never raised
-                done = f"Creating profiles failed: {type(e).__name__}: {e}"
-            self.after(0, finish, done)
-
-        def finish(message: str):
-            self.make_profiles_btn.config(state="normal")
-            self.set_auto_setup_status(message)
-            self.refresh_profiles()
-            self.refresh_accounts()
-
-        threading.Thread(target=work, name="chromium-profiles", daemon=True).start()
-
     def _write_log(self, message: str):
         """Send one line to the Log tab when the window has wired one up."""
         callback = getattr(self, "_log_callback", None)
@@ -885,8 +829,7 @@ class ProfilesTab(ttk.Frame):
             pass
 
     def _browser_name(self) -> str:
-        """Whichever browser the automation drives, for button and dialog text:
-        the tab used to say Brave everywhere and now adds Chromium profiles."""
+        """The browser the automation drives, for button and dialog text."""
         from src.core import browser_choice
         return browser_choice.current_browser().title()
 
@@ -898,37 +841,7 @@ class ProfilesTab(ttk.Frame):
         except Exception:
             pass
 
-    def _on_add_chromium(self):
-        """Create one Chromium profile directory for an account.
-
-        Nothing to pick from: a Chromium profile does not exist until it is
-        created, and it is named for the account that will use it.
-        """
-        from tkinter import simpledialog
-        from src.core import chromium_profiles
-        username = simpledialog.askstring(
-            "Add Chromium profile",
-            "Account this profile logs in as (the roster username):",
-            parent=self)
-        username = (username or "").strip()
-        if not username:
-            return
-        path = chromium_profiles.ensure_profile(username)
-        cfg.save_profile(username, str(path))
-        try:
-            from src.storage import database as db
-            db.link_account(username, username)
-        except Exception:
-            pass    # an account not on the roster yet still gets its profile
-        self.refresh_profiles()
-        self.refresh_accounts()
-        self.set_status(f"Chromium profile ready for {username}")
-
     def _on_add(self):
-        from src.core import browser_choice
-        if browser_choice.current_browser() == browser_choice.CHROMIUM:
-            self._on_add_chromium()
-            return
         # Show Brave profile picker directly
         brave_profiles = cfg.list_brave_profiles()
         if not brave_profiles:

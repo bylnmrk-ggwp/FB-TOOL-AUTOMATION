@@ -10,7 +10,7 @@ from queue import Empty, Queue
 from typing import Callable
 
 from groq import Groq
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 from src.storage import config_manager as cfg
 from src.storage import database as db
@@ -881,7 +881,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -1120,7 +1123,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -1349,7 +1355,10 @@ class DriverManager:
             batch_pw = await async_playwright().start()
             shared_browser = await batch_pw.chromium.launch(
                 executable_path=browser_choice.executable_path(),
-                headless=True,
+                # Hidden, not headless: each context minimises its own window
+                # (see FacebookAutomation.hide_window). Headless would put
+                # "HeadlessChrome" in the User-Agent of every request.
+                headless=False,
                 args=[
                     f"--window-size={TINY_VIEWPORT['width']},{TINY_VIEWPORT['height']}",
                     *MEMORY_FLAGS,
@@ -2141,15 +2150,18 @@ class DriverManager:
         jobs = list(enumerate(usernames, 1))
         try:
             if browser_choice.supports_parallel_login():
-                # Chromium: a directory per account, so nothing is shared and a
-                # wave can run together. Waves, not a rolling pool, because each
+                # Only for a browser that keeps a directory per account, so
+                # nothing is shared and a wave can run together. Brave is not
+                # one, so this arm is the seam a future one would use rather
+                # than a path today's runs take.
+                # Waves, not a rolling pool, because each
                 # account must reach a definitive verdict - logged in, disabled,
                 # needs an authenticator - before the next wave starts.
                 # Never run more at once than one batch: batch_size is what
                 # spaces the run, so a wave that outran it would skip the pause.
                 width = max(1, min(int(self.LOGIN_PARALLEL), total,
                                    batch_size or int(self.LOGIN_PARALLEL)))
-                self.log(f"  Chromium: logging in {width} at a time")
+                self.log(f"  Logging in {width} at a time")
                 for start in range(0, len(jobs), width):
                     wave = jobs[start:start + width]
                     await asyncio.gather(*(_login_one(i, u) for i, u in wave))
@@ -2409,13 +2421,25 @@ class DriverManager:
         else:
             self.log(f"\n⏭️  No profile pictures needed - skipping Pinterest download")
         
-        # ── CONCURRENT PROFILE PROCESSING ──────────────────────────────
-        # All profiles run simultaneously with tiny viewports
-        MAX_CONCURRENT = 2  # Run up to 2 profiles at a time to avoid browser crashes
+        # ── PROFILE PROCESSING ─────────────────────────────
+        # Each profile here gets its OWN launch_persistent_context, and Brave
+        # keeps every profile inside one shared User Data tree. The first
+        # launch takes that tree's ProcessSingleton lock, so a second
+        # overlapping launch is handed to the running instance instead and
+        # fails with "Opening in existing browser session" - which is every
+        # profile but the first. One at a time is the only setting that works
+        # on Brave; the semaphore stays so a browser able to overlap only has
+        # to say so through supports_parallel_login().
+        MAX_CONCURRENT = 2 if browser_choice.supports_parallel_login() else 1
         _sem = asyncio.Semaphore(MAX_CONCURRENT)
         success_count = 0  # Initialize success counter
-        
-        self.log(f"\n🚀 Launching all {total} profiles CONCURRENTLY (max {MAX_CONCURRENT} at a time, micro viewport)")
+
+        if MAX_CONCURRENT == 1:
+            self.log(f"\n🚀 Setting up {total} profiles one at a time "
+                     f"(Brave locks its shared User Data tree)")
+        else:
+            self.log(f"\n🚀 Launching all {total} profiles CONCURRENTLY "
+                     f"(max {MAX_CONCURRENT} at a time, micro viewport)")
         
         async def _setup_one(idx: int, profile_name: str) -> dict:
             """Set up a single profile — runs concurrently with others."""
@@ -3426,20 +3450,26 @@ class DriverManager:
         return (account.get("sheet_status") or "").strip().upper() == "LOGGED IN"
 
     async def _do_batch(self, items: list[dict]):
-        """Process queue items with all profile pages opened up front.
+        """Process queue items in each account's own logged-in Brave profile.
 
-        How it works:
-          1. Load storage states from the disk cache; extract only cache
-             misses (sequential — Chromium's process singleton forbids two
-             persistent contexts on the shared User Data dir — but on the
-             fast no-navigation path, ~4-6s each instead of ~10-20s)
-          2. Launch ONE shared Chromium browser
-          3. Open contexts/pages for ALL active profiles concurrently
-             (they share the one browser, so no singleton constraint);
-             very large fleets fall back to chunks to cap RAM
-          4. Process items ONE AT A TIME with the configured anti-spam
-             delay between actions (deliberate — protects the accounts)
-          5. Teardown contexts, report, cleanup
+        The run no longer copies a session out of the profile. It opens the
+        profile itself, where the account is already signed in, so nothing
+        has to read or replay cookies and no cached state can go stale.
+
+        Brave keeps every profile inside one shared User Data tree and the
+        first launch takes that tree's ProcessSingleton lock, so exactly one
+        profile can be open at a time. The run is therefore sequential:
+
+          1. Resolve each profile's Brave path
+          2. For each profile in turn: open a persistent context on that
+             profile, run every item queued for it, close it
+          3. Keep the configured anti-spam delay between actions across the
+             whole run, not per profile (deliberate — protects the accounts)
+          4. Report, cleanup
+
+        A running Brave holds that same lock, so the launch closes it first
+        (see FacebookAutomation.start_browser). The operator's own browser
+        cannot stay open through a run.
         """
         self._batch_running = True
         self._stop_batch.clear()
@@ -3488,99 +3518,42 @@ class DriverManager:
             self.log(f"  {len(stale)} profile(s) were not logged in at their last "
                      f"check - attempting them anyway")
 
-        # ── Phase 1: Load cached states, extract only the misses ──
-        states: dict[str, dict | None] = {}
-        to_extract: list[str] = []
-        for profile_name in unique_profiles:
-            cached = state_cache.load_state(profile_name)
-            if cached is not None:
-                states[profile_name] = cached
-            else:
-                to_extract.append(profile_name)
-        if len(states):
-            self.log(f"  ⚡ {len(states)} profile(s) loaded from login-state cache")
-
-        if to_extract:
-            self.log(f"Extracting login state for {len(to_extract)} profile(s)...")
-        for p_idx, profile_name in enumerate(to_extract):
-            brave_path = cfg.get_profile_path(profile_name)
+        # ── Phase 1: Resolve each profile's Brave directory ──
+        # The session is read nowhere: the profile IS the session. All this
+        # needs is the path, and a profile without one cannot be opened.
+        paths: dict[str, str | None] = {
+            p: cfg.get_profile_path(p) for p in unique_profiles}
+        for profile_name, brave_path in paths.items():
             if not brave_path:
-                self.log(f"  ❌ Profile '{profile_name}' not found — skipping")
-                states[profile_name] = None
-                continue
-            self.log(f"  Extracting '{profile_name}'...")
-            temp_auto = self._create_temp_automation()
-            try:
-                # Fast path: no facebook.com navigation — zero FB traffic,
-                # so no anti-throttle pause is needed between profiles.
-                # Login validity is verified live before every action.
-                state = await temp_auto.extract_storage_state(
-                    brave_path, skip_navigation=True)
-                if state is None:
-                    self.log(f"  ⚠️  Could not extract state for '{profile_name}'")
-                else:
-                    state_cache.save_state(profile_name, state)
-                states[profile_name] = state
-            except Exception as e:
-                self.log(f"  ❌ Failed to extract '{profile_name}': {e}")
-                states[profile_name] = None
-            # Brief pause so the previous browser fully releases the
-            # User Data singleton lock before the next launch.
-            if p_idx < len(to_extract) - 1:
-                await asyncio.sleep(0.5)
+                self.log(f"  ❌ Profile '{profile_name}' has no Brave path — skipping")
 
-        # ── Phase 2: Launch single shared browser ──────────
-        from src.core.facebook_automation import FacebookAutomation
+        # ── Phase 2: One profile open at a time ────────────
+        # A persistent context on a Brave profile holds the ProcessSingleton
+        # lock on the whole shared User Data tree, so two of them cannot
+        # overlap: the second launch is handed to the first instance and
+        # fails with "Opening in existing browser session". Each profile
+        # therefore gets the browser to itself, in turn.
+        #
+        # The window is hidden unless the operator asked for visible ones.
+        # Legacy "headless" is not offered here - Chromium's own headless
+        # modes announce HeadlessChrome and Facebook then serves a stripped
+        # page with no comment composer, so a run opens a real window and
+        # minimises it (see FacebookAutomation.hide_window).
+        from src.core.facebook_automation import FacebookAutomation, MEMORY_FLAGS
 
-        self._batch_pw = await async_playwright().start()
         self._batch_automations.clear()
-
-        # Facebook switches to a compact/touch-oriented reaction control at the
-        # 640px viewport.  That control keeps the reaction tray open only during
-        # a long press, so the normal desktop hover/click flow cannot select
-        # Love/Care/etc.  Give batches containing a non-Like reaction a desktop
-        # viewport; keep the smaller viewport for all other (cheaper) work.
-        needs_desktop_post_ui = any(
-            item.get("action_type") == "comment" or (
-                item.get("action_type") == "react"
-                and (item.get("reaction") or "like").strip().lower() != "like"
-            )
-            for item in items
-        )
-        batch_viewport = SMALL_VIEWPORT if needs_desktop_post_ui else TINY_VIEWPORT
-
-        # Browser render mode. Facebook serves a STRIPPED page to the old
-        # headless engine — the post body renders but the interactive footer
-        # (Like/Comment/Share bar + comment composer) never does, which is why
-        # comments fail with "textbox not found". The new headless engine
-        # renders like real Chrome while staying hidden; "visible" shows real
-        # windows as a guaranteed fallback.
-        #   headless_new (default) → hidden, real rendering  [fixes comments]
-        #   visible               → real on-screen windows   [fallback]
-        #   headless              → legacy headless          [lowest RAM, breaks comments]
-        browser_mode, launch_headless, launch_args = \
-            self._browser_launch_mode(batch_viewport)
-        self.log(f"Launching shared browser [{browser_mode}]...")
-        shared_browser = await self._launch_browser(
-            self._batch_pw, launch_headless, launch_args)
-
-        # ── Phase 3: Open ALL profile pages at once ────────
-        # Contexts on the shared browser are plain incognito contexts —
-        # no user-data dir, no singleton lock — so they can open
-        # concurrently. Pages idle cheaply (resource blocking on, no FB
-        # DOM loaded) until their items run. Only very large fleets fall
-        # back to chunked batches to cap RAM.
-        MAX_ALL_AT_ONCE = 24
-        active_profiles = [p for p in unique_profiles if states.get(p) is not None]
-        if len(active_profiles) <= MAX_ALL_AT_ONCE:
-            batches = [active_profiles] if active_profiles else []
-        else:
-            batches = [active_profiles[i:i + self.batch_size]
-                       for i in range(0, len(active_profiles), self.batch_size)]
+        browser_mode = cfg.get_setting("browser_mode", "headless_new")
+        show_windows = browser_mode == "visible"
+        if browser_mode == "headless":
+            self.log("  Browser mode 'Legacy (lowest RAM)' cannot run a queue "
+                     "- it announces HeadlessChrome and Facebook drops the "
+                     "comment composer. Running hidden instead.")
+        active_profiles = [p for p in unique_profiles if paths.get(p)]
+        batches = [[p] for p in active_profiles]
 
         self.result_queue.put({
             "type": "batch_progress", "current": 0, "total": total,
-            "message": f"Opening {len(active_profiles)} profile(s), "
+            "message": f"{len(active_profiles)} profile(s) to open in turn, "
                        f"{total} item(s) queued...",
         })
 
@@ -3589,43 +3562,46 @@ class DriverManager:
         # 53 accounts having acted, when it only ever meant 53 items tried.
         success_count = 0
         handled: set[str] = set()  # profiles that actually produced a result
+        # Profiles Facebook has shut the door on for this run: a checkpoint it
+        # wants a human to clear, or a session it no longer accepts. The first
+        # item proves it; every later item for that profile is a launch, a
+        # navigation and a wait that can only reach the same verdict, so they
+        # are skipped. They are also not failures of the run - the account was
+        # never able to act - so they come out of the denominator instead of
+        # being counted against it.
+        gated: dict[str, str] = {}
+        skipped_count = 0
+        acted = False  # has any item of this RUN been attempted yet
 
         for batch_idx, batch_profiles in enumerate(batches):
             if self._stop_batch.is_set():
-                self.log(f"⏹ Stopped: {batch_idx} of {len(batches)} batch(es) run")
+                self.log(f"⏹ Stopped: {batch_idx} of {len(batches)} profile(s) run")
                 break
-            self.log(f"── Batch {batch_idx + 1}/{len(batches)}: "
+            self.log(f"── Profile {batch_idx + 1}/{len(batches)}: "
                      f"{', '.join(batch_profiles)} ──")
 
-            # Open every profile's context/page concurrently (they share
-            # the one browser process, so this is cheap and lock-free).
+            # Open this profile's own Brave directory. Nothing is extracted
+            # and nothing is replayed - the account is already signed in
+            # inside it. One at a time, because of the singleton lock.
             self._batch_automations.clear()
-            init_sem = asyncio.Semaphore(5)  # smooth the launch burst
-
-            async def _open_one(profile_name: str):
-                async with init_sem:
+            for p in batch_profiles:
+                try:
                     auto = FacebookAutomation(log_callback=self.log,
                                               debug=self._debug)
-                    await auto.init_from_storage(
-                        shared_browser, states.get(profile_name),
-                        viewport=batch_viewport)
-                    self._batch_automations[profile_name] = auto
+                    await auto.start_browser(paths[p],
+                                             headless=not show_windows,
+                                             flags=MEMORY_FLAGS)
+                    self._batch_automations[p] = auto
+                except Exception as e:
+                    self.log(f"  ⚠️  Could not open profile '{p}': {e}")
 
-            open_results = await asyncio.gather(
-                *(_open_one(p) for p in batch_profiles),
-                return_exceptions=True)
-            for p, res in zip(batch_profiles, open_results):
-                if isinstance(res, Exception):
-                    self.log(f"  ⚠️  Could not open page for '{p}': {res}")
-            self.log(f"  ⚡ {len(self._batch_automations)} profile page(s) open")
-
-            # Gather items belonging to this batch (only profiles whose
-            # page actually opened are in _batch_automations)
+            # Gather this profile's items (it is in _batch_automations only
+            # if its browser actually opened)
             batch_items = [(i, item) for i, item in enumerate(items)
                            if item["profile_name"] in self._batch_automations]
             handled.update(item["profile_name"] for _, item in batch_items)
 
-            # Process batch items concurrently (within the batch only)
+            # Run one item of this profile
             async def _process_one(index: int, item: dict) -> dict:
                 profile_name = item["profile_name"]
                 auto = self._batch_automations.get(profile_name)
@@ -3829,7 +3805,8 @@ class DriverManager:
             relogin_queue = getattr(self, "_relogin_queue", None)
             if relogin_queue is None:
                 relogin_queue = self._relogin_queue = set()
-            self.log(f"\n🔄 Processing {len(batch_items)} item(s) with anti-spam delays...")
+            self.log(f"\n🔄 {len(batch_items)} item(s) for this profile, "
+                     f"with anti-spam delays...")
 
             batch_results = []
             comment_delays = cfg.get_comment_delays()
@@ -3838,8 +3815,21 @@ class DriverManager:
                 if self._stop_batch.is_set():
                     self.log("  ⏹ Stop requested - no further items in this batch")
                     break
-                # Delay between actions (except before the first one)
-                if i > 0:
+                # Before the delay, not after: a skipped item costs nothing and
+                # must not also spend the anti-spam pause meant for real work.
+                gate = gated.get(item.get("profile_name", ""))
+                if gate:
+                    batch_results.append({
+                        "profile_name": item.get("profile_name", ""),
+                        "ok": False, "skipped": True,
+                        "message": f"Skipped - {gate}",
+                    })
+                    continue
+                # Delay between actions, except before the very first one
+                # of the RUN. One profile per browser now, so a per-batch
+                # index would reset at every profile and a queue of one item
+                # each would send the whole fleet with no pacing at all.
+                if acted:
                     delay = random.uniform(
                         comment_delays["between_comments_min"],
                         comment_delays["between_comments_max"]
@@ -3848,19 +3838,22 @@ class DriverManager:
                     self.log(f"   ⏳ Waiting {delay:.1f}s before next {action}...")
                     await asyncio.sleep(delay)
 
+                acted = True
                 result = await _process_one(idx, item)
                 batch_results.append(result)
+                reason = self._gate_reason(result)
+                if reason:
+                    gated[result.get("profile_name", "")] = reason
             
-            # Clean up contexts after all are done
-            for idx, item in batch_items:
-                profile_name = item.get("profile_name", "Unknown")
-                auto = self._batch_automations.get(profile_name)
-                if auto:
-                    try:
-                        self.log(f"   🔒 Closing context for {profile_name}...")
-                        await auto.cleanup()
-                    except Exception as e:
-                        self.log(f"   ⚠️  Cleanup warning for {profile_name}: {e}")
+            # Close this profile's browser before the next one opens: it
+            # holds Brave's singleton lock on the shared User Data tree and
+            # nothing else can launch until it lets go.
+            for profile_name, auto in list(self._batch_automations.items()):
+                try:
+                    self.log(f"   🔒 Closing {profile_name}...")
+                    await auto.cleanup()
+                except Exception as e:
+                    self.log(f"   ⚠️  Cleanup warning for {profile_name}: {e}")
 
             # Report batch results
             for i, result in enumerate(batch_results):
@@ -3871,6 +3864,26 @@ class DriverManager:
                 # return_exceptions=True), so a raise propagates out of the
                 # loop instead of arriving as a result.
                 if isinstance(result, dict):
+                    if result.get("skipped"):
+                        # Already proven unable to act by an earlier item of
+                        # the same profile. Reported so the queue row gets a
+                        # terminal status, counted apart from the failures.
+                        skipped_count += 1
+                        self.result_queue.put({
+                            "type": "batch_item_result", "ok": False,
+                            "skipped": True,
+                            "profile_name": result.get("profile_name", "?"),
+                            "message": result.get("message", "Skipped"),
+                        })
+                        self.result_queue.put({
+                            "type": "batch_progress",
+                            "current": processed, "total": total,
+                            "succeeded": success_count,
+                            "skipped": skipped_count,
+                            "message": f"{processed}/{total} attempted, "
+                                       f"{success_count} ok, {skipped_count} skipped",
+                        })
+                        continue
                     if result.get("ok"):
                         success_count += 1
                     msg = result.get("message", "")
@@ -3914,31 +3927,27 @@ class DriverManager:
                     "message": f"{processed}/{total} attempted, {success_count} ok",
                 })
 
-            # Close this batch's contexts → frees RAM immediately
-            for auto in self._batch_automations.values():
-                try:
-                    await auto.close_context()
-                except Exception:
-                    pass
+            # The browser is already closed above - this only drops the
+            # last reference to it so the RAM goes back now.
             self._batch_automations.clear()
             import gc
             gc.collect()
-            self.log(f"  Batch {batch_idx + 1} complete — contexts closed, memory freed")
+            self.log(f"  Profile {batch_idx + 1} complete — browser closed, memory freed")
 
         # ── Report items whose profile never got processed ──
-        # A profile is skipped when extraction returned None (bad path /
-        # unreadable session) or its page failed to open. Without this,
-        # those queue rows would receive no terminal status and the
-        # progress count would never reach total.
+        # A profile is skipped when the roster holds no Brave path for it,
+        # or when its profile would not open. Without this, those queue rows
+        # would receive no terminal status and the progress count would never
+        # reach total.
         for item in items:
             pname = item.get("profile_name", "?")
             if pname in handled:
                 continue
             processed += 1
-            reason = ("login-state extraction failed — open the profile in "
-                      "the app and re-login" if states.get(pname) is None
-                      else "profile page could not be opened")
-            state_cache.invalidate(pname)  # force fresh extraction next run
+            reason = ("no Brave profile path on the roster row"
+                      if not paths.get(pname)
+                      else "the Brave profile could not be opened")
+            state_cache.invalidate(pname)  # the watch must not trust it either
             self.result_queue.put({
                 "type": "batch_item_result", "ok": False,
                 "profile_name": pname,
@@ -3959,6 +3968,7 @@ class DriverManager:
         self.state = DriverState.STOPPED
         self.result_queue.put({
             "type": "batch_result", "ok": True, "total": total,
+            "skipped": skipped_count,
         })
         # Now that the shared browser is closed, nothing holds Brave's
         # singleton lock, so expired sessions can be restored in place.
@@ -3973,7 +3983,24 @@ class DriverManager:
                 if await self._relogin_profile(name):
                     restored += 1
             self.log(f"↻ Auto re-login: {restored}/{len(names)} restored")
-        self.log(f"Batch complete: {success_count}/{total} successful")
+        countable = max(0, total - skipped_count)
+        if skipped_count:
+            gated_now = sorted(gated.items())
+            checkpoints = sum(1 for _, why in gated_now
+                              if why == self._GATE_CHECKPOINT)
+            expired = len(gated_now) - checkpoints
+            parts = []
+            if checkpoints:
+                parts.append(f"{checkpoints} at a checkpoint")
+            if expired:
+                parts.append(f"{expired} with an expired session")
+            self.log(f"Batch complete: {success_count}/{countable} successful "
+                     f"({skipped_count} item(s) skipped - "
+                     f"{', '.join(parts)}; not counted against the run)")
+            for name, why in gated_now:
+                self.log(f"  ⊘ '{name}' took no part: {why}")
+        else:
+            self.log(f"Batch complete: {success_count}/{countable} successful")
 
         if watch_items and self._stop_batch.is_set():
             self.log("⏹ Stopped before the watch - nothing is left on the post")
@@ -4081,12 +4108,18 @@ class DriverManager:
             # autoplay; a queue run does not and must not stream video.
             args.append("--autoplay-policy=no-user-gesture-required")
         if mode == "headless_new":
-            # Playwright must not add its own --headless: our flag selects the
-            # new engine, which is what actually hides the window.
-            args.append("--headless=new")
+            # No --headless flag of any kind. Both --headless and
+            # --headless=new report "HeadlessChrome/<version>" in the
+            # User-Agent of every request the fleet sends, and with the GPU
+            # switches on top the page had no WebGL context at all. The
+            # windows are real and each one is minimised as its context opens
+            # - see FacebookAutomation.hide_window.
             return mode, False, args
         if mode == "visible":
             return mode, False, args
+        # Legacy "headless" is still honoured for a PC that needs the last
+        # megabyte, and it is the one mode that still advertises
+        # HeadlessChrome to Facebook.
         return mode, True, args
 
     async def _launch_browser(self, pw, headless: bool, args: list,
@@ -4272,6 +4305,36 @@ class DriverManager:
         except Exception:
             return None
 
+    def _grid_scale_for(self, count: int) -> float:
+        """The device scale factor that lets `count` pages tile un-clamped.
+
+        Chromium refuses a window narrower than about 515 of its own units, and
+        a scale factor is what buys those units: at scale s the desktop is
+        1/s times as wide in the browser's space. WATCH_GRID_SCALE is enough
+        for a 1920x1080 desktop, where 30 pages tile at 692 units - but the
+        same 5x6 grid on a 1366x768 screen computes a 484-unit tile, and every
+        window comes back clamped to the minimum, piling up instead of tiling.
+
+        So start from the configured scale and shrink until a tile clears the
+        minimum. Returning the scale rather than applying it matters: the
+        factor is fixed when the browser launches, and _tile_watch_windows has
+        to convert the desktop with the very same number or the two disagree.
+        """
+        native = self._desktop_size()
+        if not native:
+            return self.WATCH_GRID_SCALE
+        cols = max(1, self.WATCH_GRID_COLS)
+        rows = max(1, math.ceil(max(1, int(count)) / cols))
+        gap = self.WATCH_GRID_GAP
+        scale = self.WATCH_GRID_SCALE
+        while scale > 0.05:
+            side = min((native[0] / scale - gap * (cols + 1)) // cols,
+                       (native[1] / scale - gap * (rows + 1)) // rows)
+            if side >= self.WATCH_GRID_MIN_TILE:
+                return scale
+            scale = round(scale * 0.8, 4)
+        return scale
+
     async def _tile_watch_windows(self):
         """Lay the visible watch windows out as a grid filling the screen.
 
@@ -4280,9 +4343,10 @@ class DriverManager:
         Browser.setWindowBounds. Headless modes have no windows to place, so
         the caller only runs this for the visible mode.
 
-        The grid is the squarest one that holds every page - 11 pages become
-        4 columns by 3 rows - and the screen size comes from the browser
-        itself, so nothing here needs the UI toolkit or a guess about DPI.
+        The grid is WATCH_GRID_COLS wide and as many rows as the pages need -
+        30 pages become 5 columns by 6 rows - and the screen size comes from
+        the browser itself, so nothing here needs the UI toolkit or a guess
+        about DPI.
         """
         autos = list(self._watch_autos.items())
         if not autos:
@@ -4297,10 +4361,10 @@ class DriverManager:
                      f"where they are: {str(e)[:80]}")
             return
 
-        # Ten to a row, square tiles, a gap between them - the layout in the
+        # Five to a row, square tiles, a gap between them - the layout in the
         # icon the operator drew, not a screen chopped into whatever
         # rectangles happened to fit. Square means one side governs: take the
-        # smaller of "a tenth of the width" and "one row's share of the
+        # smaller of "a fifth of the width" and "one row's share of the
         # height", and the leftover becomes the margin the grid is centred in.
         # What the page reports as its screen cannot be trusted here: a
         # context opened with a storage state came back saying 1280x800 while
@@ -4310,9 +4374,10 @@ class DriverManager:
         # factor the browser was launched with - the two numbers then agree
         # by construction rather than by hope.
         native = self._desktop_size()
+        scale = getattr(self, "_watch_scale", None) or self.WATCH_GRID_SCALE
         if native:
-            sw = int(native[0] / self.WATCH_GRID_SCALE)
-            sh = int(native[1] / self.WATCH_GRID_SCALE)
+            sw = int(native[0] / scale)
+            sh = int(native[1] / scale)
             sx = sy = 0
 
         count = len(autos)
@@ -4382,7 +4447,8 @@ class DriverManager:
         try:
             await auto.init_from_storage(browser, state, viewport=SMALL_VIEWPORT,
                                          block_resources=False,
-                                         no_viewport=(mode == "visible"))
+                                         no_viewport=(mode == "visible"),
+                                         hidden=(mode != "visible"))
             await auto.page.goto(url, wait_until="domcontentloaded", timeout=45000)
         except Exception:
             return False
@@ -4656,11 +4722,15 @@ class DriverManager:
             self._browser_launch_mode(SMALL_VIEWPORT, autoplay=True,
                                       flags=WATCH_FLAGS)
         if mode == "visible":
-            # Shrink the browser's own unit so a 10x10 cell clears Chromium's
-            # minimum window width; without this every window comes back
-            # clamped and the grid is a pile.
+            # Shrink the browser's own unit so one cell of the grid clears
+            # Chromium's minimum window width; without this every window comes
+            # back clamped and the grid is a pile. How far it has to shrink
+            # depends on the row count and the desktop, so the count decides -
+            # 30 pages at five to a row is six rows, and six rows of a small
+            # screen is what runs out of height first.
+            self._watch_scale = self._grid_scale_for(len(active))
             launch_args = [*launch_args,
-                           f"--force-device-scale-factor={self.WATCH_GRID_SCALE:g}"]
+                           f"--force-device-scale-factor={self._watch_scale:g}"]
         await self._close_watch_pages(active)
 
         if not getattr(self, "_watch_browser", None):
@@ -4688,7 +4758,8 @@ class DriverManager:
                                              states[profile_name],
                                              viewport=SMALL_VIEWPORT,
                                              block_resources=False,
-                                             no_viewport=(mode == "visible"))
+                                             no_viewport=(mode == "visible"),
+                                             hidden=(mode != "visible"))
                 self._watch_autos[profile_name] = auto
                 self._watch_urls[profile_name] = url
                 self._watch_states[profile_name] = states[profile_name]
@@ -4757,13 +4828,20 @@ class DriverManager:
     # app itself.
     WATCH_RESERVE_MB = 2048
 
-    # The visible watch lays its windows out ten to a row, as many rows as it
-    # takes. Chromium refuses a window under about 515 of its own units wide
-    # and a tenth of a screen is far below that, so the watch browser is
-    # launched with a scale factor that makes its unit smaller than a screen
-    # pixel - the same trick the login grid uses.
-    WATCH_GRID_COLS = 10
+    # The visible watch lays its windows out five to a row, as many rows as it
+    # takes: a wave of 30 is 5 across and 6 down, which is the shape the
+    # operator watches. Chromium refuses a window under about 515 of its own
+    # units wide, so the watch browser is launched with a scale factor that
+    # makes its unit smaller than a screen pixel - the same trick the login
+    # grid uses. Five columns and six rows of a 1536x864 desktop at
+    # WATCH_GRID_SCALE gives a ~575-unit tile, which clears that minimum;
+    # height is what governs at this shape, so more rows is what shrinks a
+    # tile, not more columns.
+    WATCH_GRID_COLS = 5
     WATCH_GRID_SCALE = 0.25
+    # Chromium's own floor on window width, in its own units. A cell under
+    # this comes back clamped, which turns the grid into a pile.
+    WATCH_GRID_MIN_TILE = 520
     # The gutter between tiles, in the browser's own units. Without it the
     # windows touch and read as one sheet instead of a grid.
     WATCH_GRID_GAP = 24
@@ -4792,6 +4870,38 @@ class DriverManager:
     RECHECK_GATED_HOURS = 6
     GATED_REASONS = ("checkpoint or verification required",
                      "email confirmation required")
+
+    # What Facebook says when it will not let an account act at all, as
+    # opposed to an action that merely did not land. A checkpoint wants a human
+    # (an ID photo, a code, "confirm it's you") and has no password form, so
+    # nothing this program does clears it. An expired session needs a re-login,
+    # which cannot happen mid-batch - this browser holds Brave's singleton lock
+    # on the shared User Data tree. Either way the remaining items for that
+    # profile can only reach the same verdict.
+    _GATE_CHECKPOINT = "checkpoint or verification required"
+    _GATE_EXPIRED = "session expired"
+    _EXPIRED_PHRASES = ("logged out or session expired", "session expired",
+                        "logged out", "not logged in", "not logged-in",
+                        "login overlay")
+
+    @classmethod
+    def _gate_reason(cls, result) -> str | None:
+        """Why this profile cannot act at all, or None if it still can.
+
+        Read from the message as well as the flag: each action phrases it
+        differently - the comment path says "logged out or session expired",
+        share and timeline say "not logged in", a non-Like reaction says
+        "login overlay" - and a run that only understood one of them kept
+        launching the other two.
+        """
+        if not isinstance(result, dict) or result.get("ok"):
+            return None
+        low = (result.get("message") or "").lower()
+        if cls._GATE_CHECKPOINT in low or "email confirmation required" in low:
+            return cls._GATE_CHECKPOINT
+        if result.get("needs_login") or any(p in low for p in cls._EXPIRED_PHRASES):
+            return cls._GATE_EXPIRED
+        return None
 
     def _report_task_death(self, what: str):
         """A done-callback that says when a background task ended on an error.
@@ -4888,9 +4998,10 @@ class DriverManager:
             pw = await async_playwright().start()
             browser = None
             try:
+                # No --headless=new here either: the keepalive opens real
+                # Facebook pages, and they must not announce HeadlessChrome.
                 browser = await self._launch_browser(
-                    pw, False, ["--window-size=1024,768", *WATCH_FLAGS,
-                                "--headless=new"])
+                    pw, False, ["--window-size=1024,768", *WATCH_FLAGS])
                 for name in active:
                     result = await self._keepalive_profile(
                         browser, name, state_cache)

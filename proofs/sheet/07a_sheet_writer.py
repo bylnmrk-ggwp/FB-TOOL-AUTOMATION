@@ -14,18 +14,19 @@ for _name in ("write", "mark_in_progress"):
     if not callable(getattr(getattr(_ss, "SheetWriter", None), _name, None)):
         failures.append(f"SheetWriter.{_name} missing")
 
-# The sheet is off by default now, and an off writer reports that instead of
-# looking for a key it will never read. Turn it on for this check: what is
-# under test is the no-key path, which still has to name the file.
+# The mirror is on, so what is under test is the no-key path: it has to name
+# the file it could not read rather than raise.
 _missing = ROOT / "does-not-exist.json"
+_w = _ss.SheetWriter(key_path=_missing)
+
+# Switching the mirror off is a second, earlier short-circuit: the writer
+# reports being off instead of looking for a key it will never read.
 _saved_sync = _ss.SHEET_SYNC
-_ss.SHEET_SYNC = True
+_ss.SHEET_SYNC = False
 try:
-    _w = _ss.SheetWriter(key_path=_missing)
+    _off = _ss.SheetWriter()
 finally:
     _ss.SHEET_SYNC = _saved_sync
-# An off writer is off, and says so without touching the network.
-_off = _ss.SheetWriter()
 if _off.on is not False or "off" not in _off.error.lower():
     failures.append(f"SheetWriter with the sheet off: on={_off.on!r} "  # noqa: F821
                     f"error={_off.error!r}")

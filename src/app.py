@@ -24,6 +24,7 @@ def run():
 
         # Keep the roster current with the Google Sheet (polls every 20 s)
         app.start_sheet_sync()
+
         
         # Test log message to verify connection
         app.log_tab.write("✓ FB Tool Automation started successfully")

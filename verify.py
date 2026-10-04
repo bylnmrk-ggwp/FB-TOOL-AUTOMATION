@@ -8,6 +8,7 @@ import importlib
 import os
 import pathlib
 import sys
+import gc
 import traceback
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -67,6 +68,13 @@ try:
     app.update_idletasks()
     app.update()
     app.destroy()
+    # Drop every Tk object on THIS thread before the proofs start threads of
+    # their own. A widget still alive when a worker thread triggers a
+    # collection is freed from that thread instead, and Tcl aborts the whole
+    # process with "Tcl_AsyncDelete: async handler deleted by the wrong
+    # thread" - no traceback, no result line, exit 3.
+    del app, manager
+    gc.collect()
     print("MainWindow built, wiring asserted, destroyed")
 except Exception:
     traceback.print_exc()
@@ -81,6 +89,13 @@ import runpy
 # file would run before every proofs/watch/ file.
 _PROOFS = sorted((ROOT / "proofs").rglob("*.py"), key=lambda p: p.name)
 for _proof in _PROOFS:
+    # Collect on THIS thread before every proof. Several proofs build and
+    # destroy a Tk root of their own; a widget left unreachable but not yet
+    # freed is collected by whichever thread next trips the GC, and a proof
+    # that starts threads makes that a worker. Tcl answers a free from the
+    # wrong thread by aborting the process - "Tcl_AsyncDelete: async handler
+    # deleted by the wrong thread", no traceback, no result line, exit 3.
+    gc.collect()
     try:
         runpy.run_path(str(_proof), init_globals={"failures": failures,
                                                  "step": step, "ROOT": ROOT})

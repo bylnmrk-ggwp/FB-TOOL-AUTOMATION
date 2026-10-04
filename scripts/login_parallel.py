@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/ importable
 
-from playwright.async_api import async_playwright
+from patchright.async_api import async_playwright
 
 from src.core.facebook_automation import (FacebookAutomation, CHROME_PATH,
                                            LOGIN_FLAGS)
@@ -138,12 +138,21 @@ async def _attempt(pw, wid: int, account: dict, password: str,
 
     ctx = None
     try:
+        # A real window, minimised - not Chromium's headless mode. Headless
+        # reports "HeadlessChrome/<version>" in the User-Agent, which is what
+        # Facebook answers with a captcha on the login form. See
+        # FacebookAutomation.start_browser for the measurements.
         ctx = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(iso), executable_path=CHROME_PATH, headless=True,
-            args=[f"--profile-directory={profile}", *LOGIN_FLAGS])
+            user_data_dir=str(iso), executable_path=CHROME_PATH, headless=False,
+            args=[f"--profile-directory={profile}", "--window-position=50,50",
+                  *LOGIN_FLAGS])
         auto = FacebookAutomation(log_callback=log)
         auto.context = ctx
         auto.page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        # _hidden, not just minimised: it is what tells _back_to_tile to put
+        # the window down again after a challenge raises it.
+        auto._hidden = True
+        await auto.hide_window()
         await auto.go_to_facebook()
 
         if await la.has_session(auto):
