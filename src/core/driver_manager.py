@@ -3450,20 +3450,26 @@ class DriverManager:
         return (account.get("sheet_status") or "").strip().upper() == "LOGGED IN"
 
     async def _do_batch(self, items: list[dict]):
-        """Process queue items with all profile pages opened up front.
+        """Process queue items in each account's own logged-in Brave profile.
 
-        How it works:
-          1. Load storage states from the disk cache; extract only cache
-             misses (sequential — Chromium's process singleton forbids two
-             persistent contexts on the shared User Data dir — but on the
-             fast no-navigation path, ~4-6s each instead of ~10-20s)
-          2. Launch ONE shared Chromium browser
-          3. Open contexts/pages for ALL active profiles concurrently
-             (they share the one browser, so no singleton constraint);
-             very large fleets fall back to chunks to cap RAM
-          4. Process items ONE AT A TIME with the configured anti-spam
-             delay between actions (deliberate — protects the accounts)
-          5. Teardown contexts, report, cleanup
+        The run no longer copies a session out of the profile. It opens the
+        profile itself, where the account is already signed in, so nothing
+        has to read or replay cookies and no cached state can go stale.
+
+        Brave keeps every profile inside one shared User Data tree and the
+        first launch takes that tree's ProcessSingleton lock, so exactly one
+        profile can be open at a time. The run is therefore sequential:
+
+          1. Resolve each profile's Brave path
+          2. For each profile in turn: open a persistent context on that
+             profile, run every item queued for it, close it
+          3. Keep the configured anti-spam delay between actions across the
+             whole run, not per profile (deliberate — protects the accounts)
+          4. Report, cleanup
+
+        A running Brave holds that same lock, so the launch closes it first
+        (see FacebookAutomation.start_browser). The operator's own browser
+        cannot stay open through a run.
         """
         self._batch_running = True
         self._stop_batch.clear()
@@ -3512,99 +3518,42 @@ class DriverManager:
             self.log(f"  {len(stale)} profile(s) were not logged in at their last "
                      f"check - attempting them anyway")
 
-        # ── Phase 1: Load cached states, extract only the misses ──
-        states: dict[str, dict | None] = {}
-        to_extract: list[str] = []
-        for profile_name in unique_profiles:
-            cached = state_cache.load_state(profile_name)
-            if cached is not None:
-                states[profile_name] = cached
-            else:
-                to_extract.append(profile_name)
-        if len(states):
-            self.log(f"  ⚡ {len(states)} profile(s) loaded from login-state cache")
-
-        if to_extract:
-            self.log(f"Extracting login state for {len(to_extract)} profile(s)...")
-        for p_idx, profile_name in enumerate(to_extract):
-            brave_path = cfg.get_profile_path(profile_name)
+        # ── Phase 1: Resolve each profile's Brave directory ──
+        # The session is read nowhere: the profile IS the session. All this
+        # needs is the path, and a profile without one cannot be opened.
+        paths: dict[str, str | None] = {
+            p: cfg.get_profile_path(p) for p in unique_profiles}
+        for profile_name, brave_path in paths.items():
             if not brave_path:
-                self.log(f"  ❌ Profile '{profile_name}' not found — skipping")
-                states[profile_name] = None
-                continue
-            self.log(f"  Extracting '{profile_name}'...")
-            temp_auto = self._create_temp_automation()
-            try:
-                # Fast path: no facebook.com navigation — zero FB traffic,
-                # so no anti-throttle pause is needed between profiles.
-                # Login validity is verified live before every action.
-                state = await temp_auto.extract_storage_state(
-                    brave_path, skip_navigation=True)
-                if state is None:
-                    self.log(f"  ⚠️  Could not extract state for '{profile_name}'")
-                else:
-                    state_cache.save_state(profile_name, state)
-                states[profile_name] = state
-            except Exception as e:
-                self.log(f"  ❌ Failed to extract '{profile_name}': {e}")
-                states[profile_name] = None
-            # Brief pause so the previous browser fully releases the
-            # User Data singleton lock before the next launch.
-            if p_idx < len(to_extract) - 1:
-                await asyncio.sleep(0.5)
+                self.log(f"  ❌ Profile '{profile_name}' has no Brave path — skipping")
 
-        # ── Phase 2: Launch single shared browser ──────────
-        from src.core.facebook_automation import FacebookAutomation
+        # ── Phase 2: One profile open at a time ────────────
+        # A persistent context on a Brave profile holds the ProcessSingleton
+        # lock on the whole shared User Data tree, so two of them cannot
+        # overlap: the second launch is handed to the first instance and
+        # fails with "Opening in existing browser session". Each profile
+        # therefore gets the browser to itself, in turn.
+        #
+        # The window is hidden unless the operator asked for visible ones.
+        # Legacy "headless" is not offered here - Chromium's own headless
+        # modes announce HeadlessChrome and Facebook then serves a stripped
+        # page with no comment composer, so a run opens a real window and
+        # minimises it (see FacebookAutomation.hide_window).
+        from src.core.facebook_automation import FacebookAutomation, MEMORY_FLAGS
 
-        self._batch_pw = await async_playwright().start()
         self._batch_automations.clear()
-
-        # Facebook switches to a compact/touch-oriented reaction control at the
-        # 640px viewport.  That control keeps the reaction tray open only during
-        # a long press, so the normal desktop hover/click flow cannot select
-        # Love/Care/etc.  Give batches containing a non-Like reaction a desktop
-        # viewport; keep the smaller viewport for all other (cheaper) work.
-        needs_desktop_post_ui = any(
-            item.get("action_type") == "comment" or (
-                item.get("action_type") == "react"
-                and (item.get("reaction") or "like").strip().lower() != "like"
-            )
-            for item in items
-        )
-        batch_viewport = SMALL_VIEWPORT if needs_desktop_post_ui else TINY_VIEWPORT
-
-        # Browser render mode. Facebook serves a STRIPPED page to the old
-        # headless engine — the post body renders but the interactive footer
-        # (Like/Comment/Share bar + comment composer) never does, which is why
-        # comments fail with "textbox not found". The new headless engine
-        # renders like real Chrome while staying hidden; "visible" shows real
-        # windows as a guaranteed fallback.
-        #   headless_new (default) → hidden, real rendering  [fixes comments]
-        #   visible               → real on-screen windows   [fallback]
-        #   headless              → legacy headless          [lowest RAM, breaks comments]
-        browser_mode, launch_headless, launch_args = \
-            self._browser_launch_mode(batch_viewport)
-        self.log(f"Launching shared browser [{browser_mode}]...")
-        shared_browser = await self._launch_browser(
-            self._batch_pw, launch_headless, launch_args)
-
-        # ── Phase 3: Open ALL profile pages at once ────────
-        # Contexts on the shared browser are plain incognito contexts —
-        # no user-data dir, no singleton lock — so they can open
-        # concurrently. Pages idle cheaply (resource blocking on, no FB
-        # DOM loaded) until their items run. Only very large fleets fall
-        # back to chunked batches to cap RAM.
-        MAX_ALL_AT_ONCE = 24
-        active_profiles = [p for p in unique_profiles if states.get(p) is not None]
-        if len(active_profiles) <= MAX_ALL_AT_ONCE:
-            batches = [active_profiles] if active_profiles else []
-        else:
-            batches = [active_profiles[i:i + self.batch_size]
-                       for i in range(0, len(active_profiles), self.batch_size)]
+        browser_mode = cfg.get_setting("browser_mode", "headless_new")
+        show_windows = browser_mode == "visible"
+        if browser_mode == "headless":
+            self.log("  Browser mode 'Legacy (lowest RAM)' cannot run a queue "
+                     "- it announces HeadlessChrome and Facebook drops the "
+                     "comment composer. Running hidden instead.")
+        active_profiles = [p for p in unique_profiles if paths.get(p)]
+        batches = [[p] for p in active_profiles]
 
         self.result_queue.put({
             "type": "batch_progress", "current": 0, "total": total,
-            "message": f"Opening {len(active_profiles)} profile(s), "
+            "message": f"{len(active_profiles)} profile(s) to open in turn, "
                        f"{total} item(s) queued...",
         })
 
@@ -3622,43 +3571,37 @@ class DriverManager:
         # being counted against it.
         gated: dict[str, str] = {}
         skipped_count = 0
+        acted = False  # has any item of this RUN been attempted yet
 
         for batch_idx, batch_profiles in enumerate(batches):
             if self._stop_batch.is_set():
-                self.log(f"⏹ Stopped: {batch_idx} of {len(batches)} batch(es) run")
+                self.log(f"⏹ Stopped: {batch_idx} of {len(batches)} profile(s) run")
                 break
-            self.log(f"── Batch {batch_idx + 1}/{len(batches)}: "
+            self.log(f"── Profile {batch_idx + 1}/{len(batches)}: "
                      f"{', '.join(batch_profiles)} ──")
 
-            # Open every profile's context/page concurrently (they share
-            # the one browser process, so this is cheap and lock-free).
+            # Open this profile's own Brave directory. Nothing is extracted
+            # and nothing is replayed - the account is already signed in
+            # inside it. One at a time, because of the singleton lock.
             self._batch_automations.clear()
-            init_sem = asyncio.Semaphore(5)  # smooth the launch burst
-
-            async def _open_one(profile_name: str):
-                async with init_sem:
+            for p in batch_profiles:
+                try:
                     auto = FacebookAutomation(log_callback=self.log,
                                               debug=self._debug)
-                    await auto.init_from_storage(
-                        shared_browser, states.get(profile_name),
-                        viewport=batch_viewport)
-                    self._batch_automations[profile_name] = auto
+                    await auto.start_browser(paths[p],
+                                             headless=not show_windows,
+                                             flags=MEMORY_FLAGS)
+                    self._batch_automations[p] = auto
+                except Exception as e:
+                    self.log(f"  ⚠️  Could not open profile '{p}': {e}")
 
-            open_results = await asyncio.gather(
-                *(_open_one(p) for p in batch_profiles),
-                return_exceptions=True)
-            for p, res in zip(batch_profiles, open_results):
-                if isinstance(res, Exception):
-                    self.log(f"  ⚠️  Could not open page for '{p}': {res}")
-            self.log(f"  ⚡ {len(self._batch_automations)} profile page(s) open")
-
-            # Gather items belonging to this batch (only profiles whose
-            # page actually opened are in _batch_automations)
+            # Gather this profile's items (it is in _batch_automations only
+            # if its browser actually opened)
             batch_items = [(i, item) for i, item in enumerate(items)
                            if item["profile_name"] in self._batch_automations]
             handled.update(item["profile_name"] for _, item in batch_items)
 
-            # Process batch items concurrently (within the batch only)
+            # Run one item of this profile
             async def _process_one(index: int, item: dict) -> dict:
                 profile_name = item["profile_name"]
                 auto = self._batch_automations.get(profile_name)
@@ -3862,7 +3805,8 @@ class DriverManager:
             relogin_queue = getattr(self, "_relogin_queue", None)
             if relogin_queue is None:
                 relogin_queue = self._relogin_queue = set()
-            self.log(f"\n🔄 Processing {len(batch_items)} item(s) with anti-spam delays...")
+            self.log(f"\n🔄 {len(batch_items)} item(s) for this profile, "
+                     f"with anti-spam delays...")
 
             batch_results = []
             comment_delays = cfg.get_comment_delays()
@@ -3881,8 +3825,11 @@ class DriverManager:
                         "message": f"Skipped - {gate}",
                     })
                     continue
-                # Delay between actions (except before the first one)
-                if i > 0:
+                # Delay between actions, except before the very first one
+                # of the RUN. One profile per browser now, so a per-batch
+                # index would reset at every profile and a queue of one item
+                # each would send the whole fleet with no pacing at all.
+                if acted:
                     delay = random.uniform(
                         comment_delays["between_comments_min"],
                         comment_delays["between_comments_max"]
@@ -3891,22 +3838,22 @@ class DriverManager:
                     self.log(f"   ⏳ Waiting {delay:.1f}s before next {action}...")
                     await asyncio.sleep(delay)
 
+                acted = True
                 result = await _process_one(idx, item)
                 batch_results.append(result)
                 reason = self._gate_reason(result)
                 if reason:
                     gated[result.get("profile_name", "")] = reason
             
-            # Clean up contexts after all are done
-            for idx, item in batch_items:
-                profile_name = item.get("profile_name", "Unknown")
-                auto = self._batch_automations.get(profile_name)
-                if auto:
-                    try:
-                        self.log(f"   🔒 Closing context for {profile_name}...")
-                        await auto.cleanup()
-                    except Exception as e:
-                        self.log(f"   ⚠️  Cleanup warning for {profile_name}: {e}")
+            # Close this profile's browser before the next one opens: it
+            # holds Brave's singleton lock on the shared User Data tree and
+            # nothing else can launch until it lets go.
+            for profile_name, auto in list(self._batch_automations.items()):
+                try:
+                    self.log(f"   🔒 Closing {profile_name}...")
+                    await auto.cleanup()
+                except Exception as e:
+                    self.log(f"   ⚠️  Cleanup warning for {profile_name}: {e}")
 
             # Report batch results
             for i, result in enumerate(batch_results):
@@ -3980,31 +3927,27 @@ class DriverManager:
                     "message": f"{processed}/{total} attempted, {success_count} ok",
                 })
 
-            # Close this batch's contexts → frees RAM immediately
-            for auto in self._batch_automations.values():
-                try:
-                    await auto.close_context()
-                except Exception:
-                    pass
+            # The browser is already closed above - this only drops the
+            # last reference to it so the RAM goes back now.
             self._batch_automations.clear()
             import gc
             gc.collect()
-            self.log(f"  Batch {batch_idx + 1} complete — contexts closed, memory freed")
+            self.log(f"  Profile {batch_idx + 1} complete — browser closed, memory freed")
 
         # ── Report items whose profile never got processed ──
-        # A profile is skipped when extraction returned None (bad path /
-        # unreadable session) or its page failed to open. Without this,
-        # those queue rows would receive no terminal status and the
-        # progress count would never reach total.
+        # A profile is skipped when the roster holds no Brave path for it,
+        # or when its profile would not open. Without this, those queue rows
+        # would receive no terminal status and the progress count would never
+        # reach total.
         for item in items:
             pname = item.get("profile_name", "?")
             if pname in handled:
                 continue
             processed += 1
-            reason = ("login-state extraction failed — open the profile in "
-                      "the app and re-login" if states.get(pname) is None
-                      else "profile page could not be opened")
-            state_cache.invalidate(pname)  # force fresh extraction next run
+            reason = ("no Brave profile path on the roster row"
+                      if not paths.get(pname)
+                      else "the Brave profile could not be opened")
+            state_cache.invalidate(pname)  # the watch must not trust it either
             self.result_queue.put({
                 "type": "batch_item_result", "ok": False,
                 "profile_name": pname,
