@@ -319,6 +319,12 @@ LOGIN_GATE_JS = """() => {
 # --disable-gpu-sandbox and --disable-software-rasterizer stay. Neither turns
 # the GPU off; the second one matters BECAUSE it keeps Chromium from falling
 # back to SwiftShader, which is its own bot signature.
+# Far outside every monitor. A hidden run is minimised through
+# hide_window, but that only happens once the window exists, so a launch
+# without this flashes a real Brave window onto the desktop first. Chromium
+# keeps the window at this position and there is nothing to see.
+OFFSCREEN_POSITION = "--window-position=-32000,-32000"
+
 MEMORY_FLAGS = [
     "--disable-gpu-sandbox",
     "--disable-software-rasterizer",
@@ -804,7 +810,8 @@ class FacebookAutomation:
                 # Shrinking the browser's own unit is what makes a tile
                 # possible at all; see _tile_window.
                 *([f"--force-device-scale-factor={browser_choice.GRID_SCALE:g}"]
-                  if tile else ["--window-position=50,50"]),
+                  if tile else
+                  [OFFSCREEN_POSITION if hidden else "--window-position=50,50"]),
                 *(MEMORY_FLAGS if flags is None else flags),
             ],
             **launch,

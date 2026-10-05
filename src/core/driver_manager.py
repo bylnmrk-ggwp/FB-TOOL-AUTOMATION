@@ -18,6 +18,7 @@ from src.core.facebook_automation import (
     CHROME_PATH,
     MEMORY_FLAGS,
     MICRO_VIEWPORT,
+    OFFSCREEN_POSITION,
     SMALL_VIEWPORT,
     TINY_VIEWPORT,
 )
@@ -4114,7 +4115,12 @@ class DriverManager:
             # switches on top the page had no WebGL context at all. The
             # windows are real and each one is minimised as its context opens
             # - see FacebookAutomation.hide_window.
-            return mode, False, args
+            #
+            # Minimising happens after the window exists, so every launch
+            # flashed a real Brave window onto the desktop first. Launching
+            # it off-screen means there is nothing to flash: the window opens
+            # outside every monitor, and hide_window minimises it from there.
+            return mode, False, [*args, OFFSCREEN_POSITION]
         if mode == "visible":
             return mode, False, args
         # Legacy "headless" is still honoured for a PC that needs the last
@@ -4229,21 +4235,68 @@ class DriverManager:
     # aggregate it recomputes on its own interval, so it never equals the
     # number of pages open - reading it here is the only way to see both
     # numbers at once instead of guessing which one is wrong.
-    _WATCH_VIEWERS_JS = """() => {
+    #
+    # Facebook writes that figure several ways and has changed it more than
+    # once: an aria-label on the player ("1.2K people are currently watching
+    # this live video"), and plain text in the header pill ("328 viewers",
+    # "1.2K watching now"). The first version of this read ONLY aria-labels
+    # and demanded both "currently watching" AND the word "people", so every
+    # other phrasing returned null and the heartbeat reported "Facebook shows
+    # no viewer count" while the number was on the screen.
+    #
+    # Ordered most specific first, and every pattern keeps a watching or
+    # viewer word next to the number. A count beside a bare "people" is not
+    # enough: "1.2K people reacted to this" is on the same page and would
+    # otherwise be read as the viewer figure.
+    # A digit has to come first. "[\d.,]+" alone also matches a bare ".",
+    # and the last pattern then read "watching this video." as a count of ".".
+    _WATCH_COUNT = r"(\d[\d.,]*\s*[KMB]?)"
+    _WATCH_COUNT_PATTERNS = [
+        _WATCH_COUNT + r"\s+(?:people|persons?|viewers?)\s+"
+                       r"(?:are\s+|is\s+)?(?:currently\s+)?watching",
+        _WATCH_COUNT + r"\s+viewers?\b",
+        _WATCH_COUNT + r"\s+(?:currently\s+)?watching(?:\s+now)?\b",
+        r"watching(?:\s+now)?[^0-9]{0,12}" + _WATCH_COUNT,
+    ]
+
+    _WATCH_VIEWERS_JS = """(patterns) => {
+        const res = patterns.map(p => new RegExp(p, 'i'));
+        const pick = (texts) => {
+            // Pattern order is the priority, not document order: the most
+            // explicit wording anywhere on the page beats a loose match.
+            for (const re of res) {
+                for (const t of texts) {
+                    const m = t.match(re);
+                    if (m) return m[1].trim();
+                }
+            }
+            return null;
+        };
+        const labels = [];
         for (const el of document.querySelectorAll('[aria-label]')) {
             const a = el.getAttribute('aria-label') || '';
-            if (!/currently watching/i.test(a)) continue;
-            const m = a.match(/([\\d.,]+\\s*[KMB]?)\\s+(?:people|person)/i);
-            if (m) return m[1].trim();
+            if (/watching|viewer/i.test(a)) labels.push(a);
         }
-        return null;
+        const fromLabels = pick(labels);
+        if (fromLabels) return fromLabels;
+        // No aria-label carried it, so read the pill's visible text. Leaf
+        // elements with a short string only - anything else matches a
+        // number from somewhere else on the page entirely.
+        const texts = [];
+        for (const el of document.querySelectorAll('span, div, strong')) {
+            if (el.children.length) continue;
+            const t = (el.textContent || '').trim();
+            if (t && t.length <= 48 && /watching|viewer/i.test(t)) texts.push(t);
+        }
+        return pick(texts);
     }"""
 
     async def _facebook_viewer_count(self) -> str | None:
         """What Facebook publicly says is watching, or None if it shows no count."""
         for auto in list(self._watch_autos.values()):
             try:
-                got = await auto.page.evaluate(self._WATCH_VIEWERS_JS)
+                got = await auto.page.evaluate(
+                    self._WATCH_VIEWERS_JS, self._WATCH_COUNT_PATTERNS)
             except Exception:
                 continue
             if got:
@@ -4450,7 +4503,14 @@ class DriverManager:
                                          no_viewport=(mode == "visible"),
                                          hidden=(mode != "visible"))
             await auto.page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        except Exception:
+        except Exception as e:
+            # The page was popped above and the rebuild did not produce one,
+            # so this profile has just left the watch. Saying so is the whole
+            # point of reviving: a watch that was meant to last until the
+            # live ended used to shrink here without a word, and when the
+            # last page went the keeper stopped with nothing in the log.
+            self.log(f"  ⚠️  '{name}' left the watch - its page could not "
+                     f"be rebuilt ({type(e).__name__}: {e})")
             return False
         self._watch_autos[name] = auto
         return True
@@ -4516,6 +4576,10 @@ class DriverManager:
                                        self.WATCH_POLL_MAX_SECONDS)
                 await asyncio.sleep(slept)
                 if not self._watch_autos:
+                    # Every page has gone: closed by a stop, or dropped one
+                    # at a time by a rebuild that could not be done. Either
+                    # way the watch is over and the log has to show it.
+                    self.log("👁 Watch: no pages left - stopping.")
                     return
                 if deadline is not None and loop.time() >= deadline:
                     self.log("👁 Watch: time limit reached - stopping.")
@@ -4789,6 +4853,33 @@ class DriverManager:
         if aligned:
             self.log(f"  ⇥ {aligned} page(s) moved to the live edge")
 
+        # The kick above returns true only for a page that HAS a <video>, so
+        # a page rejected a moment earlier for having none has just been
+        # proved otherwise. Pages opening together starve each other's
+        # decoder for far longer than WATCH_VERIFY_TIMEOUT_MS: one real live
+        # credited 8 of 30 while the kick found players on 26, and the
+        # operator was told twenty-two healthy accounts were not watching.
+        # Re-judge exactly those, concurrently and with a short wait, since
+        # the player is already known to be there.
+        late = [n for n, v in verdicts.items()
+                if v == "no video player on the page"
+                and n in self._watch_autos]
+        if late:
+            recheck = asyncio.Semaphore(self.WATCH_OPEN_AT_ONCE)
+
+            async def _again(name: str):
+                async with recheck:
+                    verdicts[name] = await self._verify_watching(
+                        self._watch_autos[name], name,
+                        settle_ms=self.WATCH_RECHECK_SETTLE_MS)
+
+            await asyncio.gather(*(_again(n) for n in late),
+                                 return_exceptions=True)
+            won = [n for n in late if verdicts.get(n) == "playing"]
+            if won:
+                self.log(f"  ↻ {len(won)} page(s) were judged too early and "
+                         f"are watching after all")
+
         watching = [n for n, v in verdicts.items() if v == "playing"]
         broken = {n: v for n, v in verdicts.items() if v != "playing"}
         where = ("hidden - no Brave window on screen" if mode != "visible"
@@ -4850,6 +4941,10 @@ class DriverManager:
     # currentTime is sampled to prove the player is really running.
     WATCH_VERIFY_TIMEOUT_MS = 25000
     WATCH_VERIFY_SAMPLE_SECONDS = 3
+    # The re-judge after the live-edge kick does not have to wait for a
+    # player to appear - the kick already found one - so it only gives the
+    # selector long enough to be read back.
+    WATCH_RECHECK_SETTLE_MS = 3000
 
     # ── Session upkeep ───────────────────────────────────────────────────
     #
@@ -5187,7 +5282,8 @@ class DriverManager:
         if text:
             self.log(f"  ✓ sheet updated: {username} → {text}")
 
-    async def _verify_watching(self, auto, profile_name: str) -> str:
+    async def _verify_watching(self, auto, profile_name: str,
+                               settle_ms: int | None = None) -> str:
         """'playing', or the reason this page is not a viewer.
 
         page.goto() returning proves a document loaded and nothing more: a
@@ -5219,7 +5315,7 @@ class DriverManager:
                     + (" - dropped from active" if recorded else ""))
         try:
             await auto.page.wait_for_selector(
-                "video", timeout=self.WATCH_VERIFY_TIMEOUT_MS)
+                "video", timeout=settle_ms or self.WATCH_VERIFY_TIMEOUT_MS)
         except Exception:
             return "no video player on the page"
         sample = "() => { const v = document.querySelector('video'); " \
