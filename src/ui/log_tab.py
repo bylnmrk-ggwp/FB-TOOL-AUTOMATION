@@ -1,3 +1,4 @@
+import queue
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -9,6 +10,8 @@ from src.ui import theme
 
 class LogTab(ttk.Frame):
     MAX_LINES = 2000
+    # How often the main thread flushes queued log lines into the widget.
+    RENDER_MS = 50
 
     # The widget keeps MAX_LINES and dies with the app, so anything worth
     # reading after the fact - which page stalled, what the watch heartbeat
@@ -22,7 +25,13 @@ class LogTab(ttk.Frame):
         self._file = None
         self._file_day = None
         self._file_lock = threading.Lock()
+        # The manager logs from its worker thread, and Tk is not thread-safe,
+        # so write() hands each line to this queue and the main thread renders
+        # it in _drain_log. Nothing off the main thread ever touches the Text.
+        self._render_queue: queue.Queue = queue.Queue()
+        self._drain_after = None
         self._build_ui()
+        self._drain_after = self.after(self.RENDER_MS, self._drain_log)
 
     @property
     def log_path(self) -> Path:
@@ -104,33 +113,73 @@ class LogTab(ttk.Frame):
             self.text.tag_config("info", foreground="#374151")
 
     def write(self, message: str):
+        """Record one log line. Safe from any thread.
+
+        Called from the manager's worker thread as well as the main one, so it
+        must not touch Tk: it writes the file (its own lock) and queues the
+        line. _drain_log renders it on the main thread. Doing the Tk work here
+        was a cross-thread call that crashed at shutdown - "main thread is not
+        in main loop" - when the worker logged after mainloop() had returned.
+        """
         now = datetime.now()
         timestamp = now.strftime("%H:%M:%S")
-        tag = "info"
         stripped = message.strip()
 
         # To disk first: the widget trims itself and the file is the record
         # that survives the session.
         self._write_to_file(now.strftime("%Y-%m-%d %H:%M:%S"), stripped)
 
+        tag = "info"
         if stripped.startswith("\u2713"):
             tag = "ok"
         elif stripped.startswith("\u2717") or "error" in stripped.lower() or "fail" in stripped.lower():
             tag = "error"
 
-        self.text.config(state="normal")
-        self.text.insert("end", f"[{timestamp}] ", "time")
-        self.text.insert("end", f"{stripped}\n", tag)
-        self.text.see("end")
-        self.text.config(state="disabled")
+        self._render_queue.put((timestamp, stripped, tag))
 
-        self._line_count += 1
-        if self._line_count > self.MAX_LINES:
-            excess = self._line_count - self.MAX_LINES
-            self.text.config(state="normal")
-            self.text.delete("1.0", f"{excess + 1}.0")
-            self.text.config(state="disabled")
-            self._line_count = self.MAX_LINES
+    def _drain_log(self):
+        """Flush queued log lines into the Text. Main thread only.
+
+        The one place the Text is touched after construction, so every render
+        happens on the thread that owns the Tcl interpreter. Stops rescheduling
+        once the widget is gone (app shutting down); the file still has the
+        record.
+        """
+        pending = []
+        while True:
+            try:
+                pending.append(self._render_queue.get_nowait())
+            except queue.Empty:
+                break
+        try:
+            if pending:
+                self.text.config(state="normal")
+                for timestamp, stripped, tag in pending:
+                    self.text.insert("end", f"[{timestamp}] ", "time")
+                    self.text.insert("end", f"{stripped}\n", tag)
+                    self._line_count += 1
+                if self._line_count > self.MAX_LINES:
+                    excess = self._line_count - self.MAX_LINES
+                    self.text.delete("1.0", f"{excess + 1}.0")
+                    self._line_count = self.MAX_LINES
+                self.text.see("end")
+                self.text.config(state="disabled")
+        except tk.TclError:
+            self._drain_after = None
+            return
+        self._drain_after = self.after(self.RENDER_MS, self._drain_log)
+
+    def destroy(self):
+        """Cancel the drain loop before teardown so no callback fires into a
+        dead widget."""
+        after = getattr(self, "_drain_after", None)
+        if after is not None:
+            try:
+                self.after_cancel(after)
+            except Exception:
+                pass
+            self._drain_after = None
+        super().destroy()
 
     def _clear(self):
         self.text.config(state="normal")
