@@ -343,12 +343,37 @@ def auto_sync_brave_profiles() -> list[str]:
 # ── Profiles of whichever browser is selected ─────────────────
 
 
+# A resolved path does not change between calls, and this map is counted on
+# the UI's 100 ms tick. Resolving all 3000+ profile paths through the
+# filesystem every tick pinned the Tk thread for ~2.3 s each time, so it
+# never went idle and the window never mapped. Each distinct path is resolved
+# once and remembered; a repeat call is a dict lookup, and only a path not
+# seen before is resolved. The root resolves once the same way.
+_MISS = object()
+_resolve_cache: dict[str, str | None] = {}
+
+
+def _resolved(p: str) -> str | None:
+    """The lowercased, fully resolved form of a path, memoized. None when the
+    path cannot be resolved (the old _under returned False for that case)."""
+    cached = _resolve_cache.get(p, _MISS)
+    if cached is not _MISS:
+        return cached
+    try:
+        value: str | None = str(Path(p).resolve()).lower()
+    except Exception:
+        value = None
+    _resolve_cache[p] = value
+    return value
+
+
 def _under(path: str, root) -> bool:
     """Whether a saved path sits inside one browser's profile root."""
-    try:
-        return str(Path(path).resolve()).lower().startswith(str(Path(root).resolve()).lower())
-    except Exception:
+    root_r = _resolved(str(root))
+    path_r = _resolved(str(path))
+    if root_r is None or path_r is None:
         return False
+    return path_r.startswith(root_r)
 
 
 def list_browser_profiles() -> list[dict]:
