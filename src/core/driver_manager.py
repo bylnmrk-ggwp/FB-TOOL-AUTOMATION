@@ -3284,9 +3284,14 @@ class DriverManager:
         auto = FacebookAutomation(log_callback=lambda m: None)
         try:
             # Visible and tiled when the operator asked to watch the wave;
-            # headless otherwise, which is what an unattended run wants.
-            show = browser_choice.show_login_windows()
-            tile = (slot, wave) if (show and slot is not None) else None
+            # headless otherwise, which is what an unattended run wants. The
+            # watch-the-wave grid only applies to a wave that has a slot -
+            # the Login-requested run. A slotless re-login (the one that
+            # fires mid comment/react/share when a session expires, and the
+            # background sweep) stays hidden whatever the grid says, so it
+            # never throws a Brave window onto the desktop mid-run.
+            show = browser_choice.show_login_windows() and slot is not None
+            tile = (slot, wave) if show else None
             await auto.start_browser(brave_path, headless=not show,
                                      flags=LOGIN_FLAGS, tile=tile)
             await auto.go_to_facebook()
