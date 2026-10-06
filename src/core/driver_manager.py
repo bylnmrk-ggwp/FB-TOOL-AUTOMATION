@@ -4699,6 +4699,84 @@ class DriverManager:
         except asyncio.CancelledError:
             raise
 
+    async def _watch_one_own_profile(self, url: str, profile: str,
+                                     minutes: float | None):
+        """Watch one live from the account's OWN Brave profile - no copy.
+
+        Opens the profile's own User Data directory directly, the same way a
+        queue run does, so the real app-bound cookies are used and the account
+        is logged in for sure. The page joins the same keeper as the fleet
+        watch (resume / kick / reload until the deadline or Stop); it carries
+        no stored state, so _revive_watcher cannot rebuild it from a copy and
+        drops it cleanly if the page dies, which is the right end for a single
+        held account.
+        """
+        from src.core.facebook_automation import FacebookAutomation, WATCH_FLAGS
+
+        brave_path = cfg.get_profile_path(profile)
+        if not brave_path:
+            self.log(f"Watch: '{profile}' has no Brave profile path.")
+            return
+
+        mode = cfg.get_setting("browser_mode", "headless_new")
+        visible = mode == "visible"
+        how_long = (f"for {minutes:.0f} min" if minutes
+                    else "until the live ends (or you press Stop)")
+        where = "on screen" if visible else "hidden - no Brave window on screen"
+        self.log(f"👁 Watch: opening '{profile}' on its own profile at {url} "
+                 f"[{mode}, {where}], {how_long}")
+
+        # This profile has one session, so take back any page it already holds
+        # on another live before opening its own window here.
+        await self._close_watch_pages([profile])
+
+        auto = FacebookAutomation(log_callback=self.log, debug=self._debug)
+        # Autoplay on, like the fleet watch: Chromium leaves a video PAUSED
+        # without a user gesture, and a paused page is never a viewer.
+        flags = [*WATCH_FLAGS, "--autoplay-policy=no-user-gesture-required"]
+        try:
+            await auto.start_browser(brave_path, headless=not visible, flags=flags)
+        except Exception as e:
+            self.log(f"👁 Watch: could not open '{profile}': {e}")
+            try:
+                await auto.quit()
+            except Exception:
+                pass
+            return
+
+        self._watch_autos = getattr(self, "_watch_autos", {}) or {}
+        self._watch_urls = getattr(self, "_watch_urls", {}) or {}
+        self._watch_autos[profile] = auto
+        self._watch_urls[profile] = url
+
+        try:
+            await auto.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            self.log(f"👁 Watch: '{profile}' navigation failed: {e}")
+            await self._close_watch_pages([profile])
+            return
+
+        try:
+            await auto.page.evaluate(self._WATCH_KICK_JS)   # to the live edge
+        except Exception:
+            pass
+        verdict = await self._verify_watching(auto, profile)
+        if verdict != "playing":
+            # One account that is not watching is not a watch: say why and
+            # close it rather than hold a dead page the keeper cannot fix.
+            self.log(f"👁 Watch: '{profile}' opened but is NOT watching: {verdict}")
+            await self._close_watch_pages([profile])
+            return
+
+        self.log(f"👁 Watch started: '{profile}' playing [{mode}, {where}], "
+                 f"{how_long}. Live count follows every 1.5-3 min.")
+        deadline = None
+        if minutes:
+            deadline = asyncio.get_running_loop().time() + minutes * 60
+        self._watch_keeper = asyncio.create_task(
+            self._keep_watching(url, deadline))
+        self._watch_keeper.add_done_callback(self._report_task_death("Watch keeper"))
+
     async def _do_watch(self, url: str, minutes: float | None = None,
                         profile_names: list[str] | None = None):
         """Open one window per active profile on `url` and keep them playing.
@@ -4738,15 +4816,28 @@ class DriverManager:
         # from an earlier run, not the state of the session now - the same
         # rule the queue follows - so a profile the roster calls signed out is
         # still opened and judged by whether its page actually plays.
-        ok = db.logged_in_profiles()
         profiles = list(profile_names or cfg.list_profiles_for_browser())
+        if not profiles:
+            self.log("Watch: no profiles to open.")
+            return
+
+        # One account gets its own Brave profile directly - reliable, nothing
+        # copied. The fleet path below copies each session into one shared
+        # browser to fit many pages past the singleton lock, but a copied
+        # session cannot carry Brave 154's app-bound-encrypted cookies, so a
+        # healthy account can inject as logged out. For a single account there
+        # is no concurrency to buy, so open the real profile the way a queue
+        # run does. The lock makes that one at a time, which is exactly this
+        # case; many profiles still share one browser.
+        if len(profiles) == 1:
+            await self._watch_one_own_profile(url, profiles[0], minutes)
+            return
+
+        ok = db.logged_in_profiles()
         unproven = [p for p in profiles if p not in ok]
         if unproven:
             self.log(f"Watch: {len(unproven)} profile(s) were not logged in at "
                      f"their last check - opening them anyway")
-        if not profiles:
-            self.log("Watch: no profiles to open.")
-            return
 
         room = self._pages_that_fit()
         if room is not None and len(profiles) > room:
