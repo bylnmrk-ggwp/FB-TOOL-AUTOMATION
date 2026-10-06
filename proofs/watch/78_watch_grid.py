@@ -1,17 +1,17 @@
-"""The visible watch lays its windows out five to a row.
+"""The visible watch lays its windows out ten to a row.
 
 The squarest-grid-that-fits changed shape with the number of pages: 9 open
 made 3x3, 46 made 7x7, so the wall never looked the same twice. A fixed column
-count is what makes it one shape, and five is the one asked for - a wave of 30
-is 5 across and 6 down.
+count is what makes it one shape, and ten is the one asked for - a wave of 30
+is 10 across and 3 down.
 
-Five columns is wider per tile than ten, so width stops being what runs out;
-height does. Six rows of a 1366x768 desktop computes a 484-unit tile, under
-Chromium's ~515-unit minimum window width, and a window under that comes back
-clamped - the wall piles up instead of tiling. The scale factor is what buys
-units, so it has to follow the row count rather than sit at one constant, and
-the tiler must convert the desktop with the same factor the browser launched
-with or the two disagree by construction.
+Ten columns is narrower per tile than five, so width is what runs out first.
+Ten cells plus their gutters must fit the desktop and still clear Chromium's
+~515-unit minimum window width, or every window comes back clamped and the
+wall piles up instead of tiling. The scale factor is what buys units, so it
+has to follow the page count rather than sit at one constant, and the tiler
+must convert the desktop with the same factor the browser launched with or the
+two disagree by construction.
 """
 import inspect
 import math
@@ -23,9 +23,9 @@ step("watch grid")  # noqa: F821
 
 from src.core.driver_manager import DriverManager  # noqa: E402
 
-if DriverManager.WATCH_GRID_COLS != 5:
+if DriverManager.WATCH_GRID_COLS != 10:
     failures.append(f"watch grid: {DriverManager.WATCH_GRID_COLS} windows to a row, "  # noqa: F821
-                    f"not the five that was asked for")
+                    f"not the ten that was asked for")
 
 tile = inspect.getsource(DriverManager._tile_watch_windows)
 if "math.sqrt" in tile:
@@ -45,11 +45,11 @@ if 'mode == "visible"' not in watch:
     failures.append("watch grid: the scale factor is applied even to hidden runs, "  # noqa: F821
                     "which have no windows to place")
 
-# 30 pages is the wave the operator watches: five across, six down.
+# 30 pages is the wave the operator watches: ten across, three down.
 rows_for_30 = math.ceil(30 / DriverManager.WATCH_GRID_COLS)
-if (DriverManager.WATCH_GRID_COLS, rows_for_30) != (5, 6):
+if (DriverManager.WATCH_GRID_COLS, rows_for_30) != (10, 3):
     failures.append(f"watch grid: 30 pages lay out "  # noqa: F821
-                    f"{DriverManager.WATCH_GRID_COLS}x{rows_for_30}, not 5x6")
+                    f"{DriverManager.WATCH_GRID_COLS}x{rows_for_30}, not 10x3")
 
 scale = DriverManager.WATCH_GRID_SCALE
 if not (0 < scale < 1):

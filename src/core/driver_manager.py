@@ -5020,11 +5020,11 @@ class DriverManager:
     # operator watches. Chromium refuses a window under about 515 of its own
     # units wide, so the watch browser is launched with a scale factor that
     # makes its unit smaller than a screen pixel - the same trick the login
-    # grid uses. Five columns and six rows of a 1536x864 desktop at
-    # WATCH_GRID_SCALE gives a ~575-unit tile, which clears that minimum;
-    # height is what governs at this shape, so more rows is what shrinks a
-    # tile, not more columns.
-    WATCH_GRID_COLS = 5
+    # grid uses. Ten columns is what was asked for - a wave of 30 is 10 across
+    # and 3 down. Ten narrow cells make width the binding dimension now, not
+    # height, so _grid_scale_for shrinks the scale until ten cells plus their
+    # gutters fit the desktop and still clear the minimum.
+    WATCH_GRID_COLS = 10
     WATCH_GRID_SCALE = 0.25
     # Chromium's own floor on window width, in its own units. A cell under
     # this comes back clamped, which turns the grid into a pile.
