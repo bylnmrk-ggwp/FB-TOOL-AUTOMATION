@@ -68,7 +68,11 @@ if ($existing) {
 }
 
 Write-Host "Registering $ServiceName..."
-& $nssmPath install $ServiceName $node "`"$entry`""
+# Windows PowerShell strips the quotes around an argument before a native
+# program sees it, so nssm would store the entry path bare and node would be
+# started with 'C:\...\FB' and 'AUTOMATION\...' as two arguments. Three quotes
+# on each side survive as one pair, and nssm keeps them in AppParameters.
+& $nssmPath install $ServiceName $node "`"`"`"$entry`"`"`""
 & $nssmPath set $ServiceName DisplayName $DisplayName
 & $nssmPath set $ServiceName Description 'Facebook automation queue and control panel for MCARSPH.'
 & $nssmPath set $ServiceName AppDirectory $root
