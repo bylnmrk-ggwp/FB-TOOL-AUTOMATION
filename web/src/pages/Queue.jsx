@@ -30,7 +30,9 @@ export default function Queue() {
   const [reaction, setReaction] = useState('Like')
   const [text, setText] = useState('')
   const [watchUrl, setWatchUrl] = useState('')
-  const [minutes, setMinutes] = useState(10)
+  // Empty by default: a live watch stays until the live ends or Stop is
+  // pressed. A number here caps it at that many minutes instead.
+  const [minutes, setMinutes] = useState('')
   const [busy, setBusy] = useState(false)
 
   // Ticked rows that actually have a Brave profile. With nothing ticked the
@@ -203,7 +205,7 @@ export default function Queue() {
           <label className="inline"><span className="muted">Watch URL</span>
             <input className="input" style={{ width: 320 }} value={watchUrl} onChange={e => setWatchUrl(e.target.value)} placeholder="https://www.facebook.com/..." /></label>
           <label className="inline"><span className="muted">for</span>
-            <input className="input" type="number" min={1} style={{ width: 64 }} value={minutes} onChange={e => setMinutes(e.target.value)} />
+            <input className="input" type="number" min={1} style={{ width: 80 }} value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="stay" />
             <span className="muted">min</span></label>
           <button type="button" className="btn" disabled={busy || !watchUrl.trim().startsWith('http')} onClick={watch}>
             Watch{scopeNames.length ? ` (${scopeNames.length})` : ' (active profiles)'}
