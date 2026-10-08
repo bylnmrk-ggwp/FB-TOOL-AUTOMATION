@@ -198,7 +198,7 @@ publishes it at `https://<pc>.<tailnet>.ts.net`, and a password protects it.
 2. On the PC, once:
 
    ```
-   winget install --id tailscale.tailscale -e
+   winget install --id Tailscale.Tailscale -e
    tailscale up
    tailscale funnel --bg 3001
    ```
