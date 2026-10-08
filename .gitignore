@@ -28,3 +28,7 @@ Thumbs.db
 
 .playwright-mcp/
 .secrets/
+
+# Local worktrees and plan-execution scratch
+.worktrees/
+.superpowers/
