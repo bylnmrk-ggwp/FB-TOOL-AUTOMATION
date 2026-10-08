@@ -188,13 +188,43 @@ exports it as a Playwright storage-state file and imports one back; either
 direction is refused while that account's browser is running, and an imported
 session counts as unknown until a login check has looked at it.
 
+## Remote access
+
+The API stays on `127.0.0.1`. To reach it from a phone, Tailscale Funnel
+publishes it at `https://<pc>.<tailnet>.ts.net`, and a password protects it.
+
+1. Set `AUTH_PASSWORD` and `AUTH_SECRET` in `.env` (see `.env.example`), and
+   add the panel's origin to `CORS_ORIGIN`. Restart the server.
+2. On the PC, once:
+
+   ```
+   winget install --id tailscale.tailscale -e
+   tailscale up
+   tailscale funnel --bg 3001
+   ```
+
+   `tailscale up` opens a browser login. The first `tailscale funnel` prints a
+   link to enable Funnel for the tailnet; follow it, then run the command
+   again. `tailscale funnel status` shows the public URL. The Funnel survives
+   reboots.
+
+3. Open the URL from step 2 on any device: the API serves the built panel at
+   `/`, and the login page asks for `AUTH_PASSWORD`.
+
+To serve the panel from Vercel as well, the project builds this repository's
+`main` with `vercel.json`. In the Vercel project settings, leave Root
+Directory empty and set the Production environment variable
+`VITE_PUBLIC_API_URL` to the Funnel URL from step 2. The Vercel page then
+talks to the API on the PC directly; the PC must be on and the server running.
+
+Tokens last thirty days. Changing `AUTH_SECRET` signs every device out.
+Five wrong passwords lock the login for fifteen minutes.
+
 ## Not ported from the old system
 
 A few things the previous system did were left behind on purpose, and none of
 them are hiding somewhere waiting to be switched on:
 
-- Web password authentication for remote access. The API binds to
-  `127.0.0.1` by default and has no login of its own.
 - The memory tracker.
 - The Groq-based gender and friendship summary.
 - Pinterest scraping for profile pictures. A profile picture is now a file
