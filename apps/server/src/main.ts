@@ -16,6 +16,15 @@ const main = async (): Promise<void> => {
   loadEnvFile();
   const config = loadConfig();
   const container = createContainer(config);
+  if (config.auth.password === null) {
+    container.logger.warn('API has no login; keep it on 127.0.0.1 and do not expose it', {
+      event: 'auth.disabled',
+    });
+  } else if (config.auth.secretSource === 'generated') {
+    container.logger.warn('AUTH_SECRET is unset; every device is logged out at each restart', {
+      event: 'auth.secret_generated',
+    });
+  }
   await container.start();
   const app = await buildApp(container);
 

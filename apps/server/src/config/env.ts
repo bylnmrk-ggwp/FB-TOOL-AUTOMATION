@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { BROWSER_CHANNELS, DEFAULTS, LOG_LEVELS } from '@fb/shared';
 import { resolveFromRoot } from './paths.js';
@@ -38,6 +39,11 @@ const EnvSchema = z.object({
   SHEETS_SERVICE_ACCOUNT: z.string().default('./.secrets/sheets-service-account.json'),
   SHEETS_SHEET_ID: z.string().default('1oKKPnfTCn7LXqO9kboS3Jx2Aw8aWYeVh9PordjNxFeM'),
   SHEETS_TAB: z.string().default('Sheet1'),
+
+  // Operator login for remote access. Unset means the API is open, which is
+  // only safe while it stays on 127.0.0.1.
+  AUTH_PASSWORD: z.string().optional(),
+  AUTH_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -75,6 +81,13 @@ export interface AppConfig {
     sheetId: string;
     tab: string;
   };
+  auth: {
+    /** `null` means no login: every route is open. */
+    password: string | null;
+    /** Signs tokens. A generated one changes on every start. */
+    secret: string;
+    secretSource: 'env' | 'generated';
+  };
 }
 
 /**
@@ -92,6 +105,8 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
 
   const env = parsed.data;
   const executablePath = env.BROWSER_EXECUTABLE_PATH?.trim();
+  const password = env.AUTH_PASSWORD?.trim();
+  const secret = env.AUTH_SECRET?.trim();
 
   return {
     env: env.NODE_ENV,
@@ -127,6 +142,11 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
       keyFile: resolveFromRoot(env.SHEETS_SERVICE_ACCOUNT),
       sheetId: env.SHEETS_SHEET_ID,
       tab: env.SHEETS_TAB,
+    },
+    auth: {
+      password: password === undefined || password === '' ? null : password,
+      secret: secret === undefined || secret === '' ? randomBytes(32).toString('hex') : secret,
+      secretSource: secret === undefined || secret === '' ? 'generated' : 'env',
     },
   };
 };

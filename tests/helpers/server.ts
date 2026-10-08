@@ -51,6 +51,7 @@ export const testConfig = (directory: string): AppConfig => ({
     sheetId: 'test-sheet',
     tab: 'Sheet1',
   },
+  auth: { password: null, secret: 'test-secret', secretSource: 'env' },
 });
 
 /**
@@ -65,6 +66,8 @@ export interface TestServerOptions {
   /** Leave the queue stopped for tests that drive recovery by hand. */
   autoStartQueue?: boolean;
   concurrency?: number;
+  /** Turn the login on for this server. */
+  auth?: { password: string; secret?: string };
 }
 
 export const createTestServer = async (options: TestServerOptions = {}): Promise<TestServer> => {
@@ -74,6 +77,13 @@ export const createTestServer = async (options: TestServerOptions = {}): Promise
 
   const config = testConfig(directory);
   if (options.concurrency !== undefined) config.queue.globalConcurrency = options.concurrency;
+  if (options.auth !== undefined) {
+    config.auth = {
+      password: options.auth.password,
+      secret: options.auth.secret ?? 'test-secret',
+      secretSource: 'env',
+    };
+  }
 
   const container = createContainer(config, {
     browserController: browser,
