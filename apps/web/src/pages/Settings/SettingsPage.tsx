@@ -12,7 +12,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ErrorNotice, Loading } from '@/components/common/Feedback';
 import { PageHeader } from '@/components/common/PageHeader';
 import { CheckboxField, SelectField, TextField } from '@/components/forms/Field';
+import { useSession } from '../../features/auth/hooks';
 import { useSettings, useSystemPaths, useUpdateSettings } from '../../features/settings/hooks';
+import { clearToken } from '../../lib/auth';
 
 /** Seconds in the form, milliseconds in the API: nobody thinks in 15000. */
 const seconds = (ms: number): string => String(Math.round(ms / 100) / 10);
@@ -25,6 +27,7 @@ export const SettingsPage = (): ReactElement => {
   const settings = useSettings();
   const paths = useSystemPaths();
   const update = useUpdateSettings();
+  const session = useSession();
 
   const [draft, setDraft] = useState<Settings | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
@@ -288,6 +291,29 @@ export const SettingsPage = (): ReactElement => {
           </Button>
         </div>
       </form>
+
+      {session.data?.authRequired === true && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Remote access</CardTitle>
+            <CardDescription>
+              This device holds a sign-in token for thirty days. Signing out forgets it here only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                clearToken();
+                window.location.reload();
+              }}
+            >
+              Sign out
+            </Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };
