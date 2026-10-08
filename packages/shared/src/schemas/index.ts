@@ -8,3 +8,4 @@ export * from './dashboard.js';
 export * from './group.js';
 export * from './input.js';
 export * from './websocket.js';
+export * from './auth.js';

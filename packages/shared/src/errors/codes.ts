@@ -58,6 +58,11 @@ export const ERROR_CODES = {
 
   // Settings
   SETTINGS_INVALID: 'SETTINGS_INVALID',
+
+  // Login
+  AUTH_REQUIRED: 'AUTH_REQUIRED',
+  AUTH_INVALID: 'AUTH_INVALID',
+  AUTH_RATE_LIMITED: 'AUTH_RATE_LIMITED',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
