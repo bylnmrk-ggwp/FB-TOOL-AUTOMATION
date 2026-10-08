@@ -16,6 +16,7 @@ import {
 } from '@fb/shared';
 import { API_PREFIX } from '@fb/shared';
 import { apiRequest } from './client';
+import { authHeaders } from '../lib/auth';
 import { WEB_CONFIG } from '../lib/env';
 
 const LogPageSchema = paginatedSchema(LogEntrySchema);
@@ -60,6 +61,7 @@ export const uploadMedia = async (file: File): Promise<MediaRef> => {
 
   const response = await fetch(`${WEB_CONFIG.apiBaseUrl}${API_PREFIX}/media`, {
     method: 'POST',
+    headers: authHeaders(),
     body,
   });
 

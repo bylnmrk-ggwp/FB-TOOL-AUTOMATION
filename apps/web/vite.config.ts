@@ -18,8 +18,9 @@ export default defineConfig(({ mode }) => {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },
     define: {
-      // The bundle talks to a same-origin /api; the dev server proxies it.
-      'import.meta.env.VITE_API_URL': JSON.stringify(''),
+      // Empty keeps the bundle same-origin (dev proxy, or the API serving its
+      // own build). A static host sets VITE_PUBLIC_API_URL to the API origin.
+      'import.meta.env.VITE_PUBLIC_API_URL': JSON.stringify(read('VITE_PUBLIC_API_URL', '')),
     },
     server: {
       // Bound explicitly: without this Vite listens on IPv6 localhost only, and

@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import { API_PREFIX, ApiErrorSchema, AppError, ERROR_CODES, type ErrorCode } from '@fb/shared';
+import { authHeaders, reportUnauthorized } from '../lib/auth';
 import { WEB_CONFIG } from '../lib/env';
 
 export interface RequestOptions {
@@ -41,7 +42,10 @@ export const apiRequest = async <T extends z.ZodTypeAny>(
   const response = await fetch(buildUrl(path, query), {
     method,
     signal,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers: {
+      ...authHeaders(),
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -49,6 +53,15 @@ export const apiRequest = async <T extends z.ZodTypeAny>(
 
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(payload);
+    // AUTH_INVALID is a wrong password on the login form and stays there;
+    // AUTH_REQUIRED means the token is gone and the gate must take over.
+    if (
+      response.status === 401 &&
+      parsed.success &&
+      parsed.data.error.code === ERROR_CODES.AUTH_REQUIRED
+    ) {
+      reportUnauthorized();
+    }
     throw parsed.success
       ? new AppError(parsed.data.error.code as ErrorCode, parsed.data.error.message, {
           status: response.status,

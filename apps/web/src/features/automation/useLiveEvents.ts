@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ServerEventSchema, WEBSOCKET_PATH, type ServerEvent } from '@fb/shared';
+import { getToken } from '../../lib/auth';
 import { WEB_CONFIG } from '../../lib/env';
 import { useLiveStore } from './liveStore';
 
@@ -11,6 +12,9 @@ const socketUrl = (): string => {
   const base = WEB_CONFIG.apiBaseUrl === '' ? window.location.origin : WEB_CONFIG.apiBaseUrl;
   const url = new URL(WEBSOCKET_PATH, base);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  // A browser cannot set headers on a socket, so the token rides the query.
+  const token = getToken();
+  if (token !== null) url.searchParams.set('token', token);
   return url.toString();
 };
 

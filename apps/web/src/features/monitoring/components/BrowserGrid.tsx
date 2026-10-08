@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { BrowserSessionView } from '@fb/shared';
 import { AccountStatusDot } from '@/components/common/StatusDot';
+import { authHeaders } from '@/lib/auth';
 import { WEB_CONFIG } from '@/lib/env';
 import { relativeTime } from '../../../lib/format';
 
@@ -29,7 +30,10 @@ const BrowserTile = ({
 
     const shoot = async (): Promise<void> => {
       try {
-        const response = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+        const response = await fetch(`${url}?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: authHeaders(),
+        });
         if (!active || !response.ok) return;
         const blob = await response.blob();
         if (!active) return;
