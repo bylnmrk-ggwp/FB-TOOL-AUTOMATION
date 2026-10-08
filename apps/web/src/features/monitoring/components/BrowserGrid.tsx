@@ -30,10 +30,10 @@ const BrowserTile = ({
 
     const shoot = async (): Promise<void> => {
       try {
-        const response = await fetch(`${url}?t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: authHeaders(),
-        });
+        // `no-store` already keeps the frame fresh. A changing query string
+        // would make every frame a new URL, and a cross-origin panel would
+        // then preflight each one instead of reusing the cached preflight.
+        const response = await fetch(url, { cache: 'no-store', headers: authHeaders() });
         if (!active || !response.ok) return;
         const blob = await response.blob();
         if (!active) return;

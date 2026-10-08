@@ -4,3 +4,5 @@ data
 pnpm-lock.yaml
 *.sqlite
 *.sqlite-journal
+.worktrees
+.superpowers

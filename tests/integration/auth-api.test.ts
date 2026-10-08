@@ -55,7 +55,9 @@ describe('Auth API with the login on', () => {
     expect(accounts.statusCode).toBe(401);
     expect(accounts.json().error.code).toBe(ERROR_CODES.AUTH_REQUIRED);
 
-    expect((await server.app.inject({ method: 'GET', url: '/api/v1/health' })).statusCode).toBe(200);
+    expect((await server.app.inject({ method: 'GET', url: '/api/v1/health' })).statusCode).toBe(
+      200,
+    );
 
     const session = await server.app.inject({ method: 'GET', url: '/api/v1/auth/session' });
     expect(session.json()).toEqual({ authRequired: true, authenticated: false });
@@ -63,10 +65,28 @@ describe('Auth API with the login on', () => {
     // No build in the test directory, so the page is a 404, but it is the
     // JSON 404 of a route that was reached, not a 401 from the guard.
     expect((await server.app.inject({ method: 'GET', url: '/' })).statusCode).toBe(404);
-    expect((await server.app.inject({ method: 'GET', url: '/assets/app.js' })).statusCode).toBe(404);
+    expect((await server.app.inject({ method: 'GET', url: '/assets/app.js' })).statusCode).toBe(
+      404,
+    );
     expect(
       (await server.app.inject({ method: 'OPTIONS', url: '/api/v1/accounts' })).statusCode,
     ).not.toBe(401);
+  });
+
+  it('lets a browser cache the preflight, so a cross-origin call is one round trip', async () => {
+    const response = await server.app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/accounts',
+      headers: {
+        origin: 'http://localhost:5173',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-max-age']).toBe('86400');
+    expect(String(response.headers['access-control-allow-headers'])).toContain('authorization');
   });
 
   it('treats a malformed Authorization header as no token', async () => {

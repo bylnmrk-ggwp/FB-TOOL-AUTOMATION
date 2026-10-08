@@ -29,6 +29,10 @@ export const buildApp = async (container: Container): Promise<FastifyInstance> =
     origin: container.config.corsOrigins,
     credentials: true,
     exposedHeaders: ['x-request-id'],
+    // A request with an Authorization header is preflighted. Without this a
+    // panel served from another origin pays that extra round trip on every
+    // call; browsers cap the value themselves (two hours in Chrome).
+    maxAge: 86_400,
   });
 
   await app.register(multipart, {

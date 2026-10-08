@@ -32,6 +32,10 @@ export default tseslint.config(
       'data/**',
       'test-results/**',
       'playwright-report/**',
+      // Local worktrees and plan-execution scratch: other checkouts and
+      // throwaway scripts, never part of this tree's source.
+      '.worktrees/**',
+      '.superpowers/**',
     ],
   },
   js.configs.recommended,
