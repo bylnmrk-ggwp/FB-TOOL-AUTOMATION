@@ -2,12 +2,14 @@ import type { FastifyInstance } from 'fastify';
 import { API_PREFIX } from '@fb/shared';
 import type { Container } from '../../bootstrap/container.js';
 import { AccountController } from '../controllers/AccountController.js';
+import { AuthController } from '../controllers/AuthController.js';
 import { BrowserSessionController } from '../controllers/BrowserSessionController.js';
 import { GroupController, OperatorInputController } from '../controllers/GroupController.js';
 import { HealthController } from '../controllers/HealthController.js';
 import { JobController } from '../controllers/JobController.js';
 import { SystemController } from '../controllers/SystemController.js';
 import { accountRoutes } from './account.routes.js';
+import { authRoutes } from './auth.routes.js';
 import { browserRoutes } from './browser.routes.js';
 import { groupRoutes } from './group.routes.js';
 import { healthRoutes } from './health.routes.js';
@@ -17,6 +19,7 @@ import { systemRoutes } from './system.routes.js';
 /** Mounts every versioned route group under a single prefix. */
 export const registerRoutes = async (app: FastifyInstance, container: Container): Promise<void> => {
   const health = new HealthController(container.health);
+  const auth = new AuthController(container.config.auth);
   const accounts = new AccountController({
     accounts: container.accounts,
     jobs: container.jobs,
@@ -42,6 +45,7 @@ export const registerRoutes = async (app: FastifyInstance, container: Container)
   await app.register(
     async (api) => {
       await api.register(healthRoutes(health));
+      await api.register(authRoutes(auth));
       await api.register(accountRoutes(accounts));
       await api.register(browserRoutes(browsers));
       await api.register(jobRoutes(jobs));

@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import type { Container } from './bootstrap/container.js';
+import { registerAuthGuard } from './http/auth/guard.js';
 import { registerErrorHandler, registerRequestContext } from './http/middleware/index.js';
 import { registerRoutes } from './http/routes/index.js';
 import { registerWebSocket } from './websocket/server.js';
@@ -36,6 +37,7 @@ export const buildApp = async (container: Container): Promise<FastifyInstance> =
 
   registerRequestContext(app, container.logger);
   registerErrorHandler(app, container.logger, container.config.isProduction);
+  registerAuthGuard(app, container.config.auth);
 
   await registerWebSocket(app, container);
   await registerRoutes(app, container);
