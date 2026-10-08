@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ERROR_CODES, LoginResponseSchema } from '@fb/shared';
 import { createTestServer, type TestServer } from '../helpers/server';
@@ -176,6 +177,75 @@ describe('Auth API with the login on', () => {
 
       const { token } = LoginResponseSchema.parse((await login(PASSWORD)).json());
       expect(await openSocket(`${base}?token=${encodeURIComponent(token)}`)).toBe('open');
+    });
+  });
+
+  // The router normalises a request target before it picks a route. The guard
+  // has to judge the route that was picked, not the raw text of the target,
+  // or a target the router rewrites would reach a handler without a token.
+  describe('request targets the router rewrites', () => {
+    const statusOf = (port: number, target: string, extraHeaders = ''): Promise<number> =>
+      new Promise((resolve, reject) => {
+        let data = '';
+        const socket = connect(port, '127.0.0.1', () => {
+          socket.write(
+            `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n${extraHeaders}\r\n`,
+          );
+        });
+        // The status line is all that matters, and an upgrade that succeeds
+        // would otherwise hold the socket open for ever.
+        socket.on('data', (chunk: Buffer) => {
+          data += chunk.toString();
+          const status = /^HTTP\/1\.1 (\d+)/.exec(data)?.[1];
+          if (status === undefined) return;
+          socket.destroy();
+          resolve(Number(status));
+        });
+        socket.on('error', reject);
+      });
+
+    const port = async (): Promise<number> => {
+      await server.app.listen({ host: '127.0.0.1', port: 0 });
+      const address = server.app.server.address();
+      if (address === null || typeof address === 'string') throw new Error('No TCP address');
+      return address.port;
+    };
+
+    it('asks for a token whatever form the target takes', async () => {
+      const listening = await port();
+      for (const target of [
+        '/api/v1/accounts',
+        'http://elsewhere.example/api/v1/accounts',
+        '/%61pi/v1/accounts',
+        '/api/v1/%61ccounts',
+      ]) {
+        expect(await statusOf(listening, target), target).toBe(401);
+      }
+    });
+
+    it('refuses a socket upgrade whatever form the target takes', async () => {
+      const listening = await port();
+      const upgrade =
+        'Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n';
+      for (const target of ['/ws', 'http://elsewhere.example/ws', '/%77s']) {
+        const status = await statusOf(
+          listening,
+          target,
+          upgrade.replace(/^/, 'Connection: Upgrade\r\n'),
+        );
+        expect(status, target).toBe(401);
+      }
+    });
+
+    it('still leaves health and the session probe open in every form', async () => {
+      const listening = await port();
+      for (const target of [
+        'http://elsewhere.example/api/v1/health',
+        '/api/v1/%68ealth',
+        'http://elsewhere.example/api/v1/auth/session',
+      ]) {
+        expect(await statusOf(listening, target), target).toBe(200);
+      }
     });
   });
 });

@@ -20,12 +20,15 @@ const queryToken = (request: FastifyRequest): string | null => {
   return typeof token === 'string' && token.length > 0 ? token : null;
 };
 
-const pathOf = (url: string): string => url.split('?')[0] ?? url;
-
 /**
  * Every `/api/v1/*` route and the `/ws` upgrade need a valid token. Health,
  * the auth routes, CORS preflights and the static page stay open, so a phone
  * can load the panel and reach the login screen before it has a token.
+ *
+ * The decision is made on the route the router picked, never on the text of
+ * the request target. The router rewrites a target before it matches —
+ * `http://host/api/v1/accounts` and `/%61pi/v1/accounts` both reach the
+ * accounts handler — so a check on `request.url` would let those through.
  *
  * When the config has no password the hook is not installed at all.
  */
@@ -33,12 +36,14 @@ export const registerAuthGuard = (app: FastifyInstance, auth: AppConfig['auth'])
   if (auth.password === null) return;
 
   app.addHook('onRequest', (request, _reply, done) => {
-    if (request.method === 'OPTIONS') return done();
+    // The matched route as a pattern, e.g. `/api/v1/accounts/:id`. Undefined
+    // means no route matched and the 404 handler is about to answer.
+    const route = request.routeOptions.url;
+    if (route === undefined) return done();
 
-    const path = pathOf(request.url);
-    const isSocket = path === WEBSOCKET_PATH;
-    if (!isSocket && !path.startsWith(`${API_PREFIX}/`)) return done();
-    if (path === `${API_PREFIX}/health` || path.startsWith(`${API_PREFIX}/auth/`)) return done();
+    const isSocket = route === WEBSOCKET_PATH;
+    if (!isSocket && !route.startsWith(`${API_PREFIX}/`)) return done();
+    if (route === `${API_PREFIX}/health` || route.startsWith(`${API_PREFIX}/auth/`)) return done();
 
     const token = isSocket ? queryToken(request) : bearerToken(request);
     if (token !== null && verifyToken(auth.secret, token, Date.now())) return done();
