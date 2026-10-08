@@ -1,6 +1,7 @@
 import { useCallback, useEffect, type ReactElement, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ErrorNotice } from '@/components/common/Feedback';
+import { Button } from '@/components/ui/button';
 import { onUnauthorized } from '../../lib/auth';
 import { LoginPage } from '../../pages/Login';
 import { useSession } from './hooks';
@@ -31,8 +32,17 @@ export const AuthGate = ({ children }: { children: ReactNode }): ReactElement =>
   if (session.isError) {
     return (
       <main className="flex min-h-svh items-center justify-center bg-background p-4">
-        <div className="w-full max-w-sm">
+        <div className="grid w-full max-w-sm gap-3">
           <ErrorNotice error={session.error} title="PC unreachable" />
+          {/* One dropped packet on mobile data should not need a page reload. */}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={session.isFetching}
+            onClick={() => void session.refetch()}
+          >
+            {session.isFetching ? 'Trying…' : 'Try again'}
+          </Button>
         </div>
       </main>
     );
