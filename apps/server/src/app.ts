@@ -37,9 +37,14 @@ export const buildApp = async (container: Container): Promise<FastifyInstance> =
 
   registerRequestContext(app, container.logger);
   registerErrorHandler(app, container.logger, container.config.isProduction);
-  registerAuthGuard(app, container.config.auth);
 
+  // The guard goes after the WebSocket plugin on purpose: that plugin's own
+  // onRequest hook marks an upgrade request as a socket, and its onResponse
+  // hook destroys the socket once a hook has refused it. Registered first,
+  // the guard would short-circuit that marking and leave a refused upgrade's
+  // socket open, which keeps app.close() waiting.
   await registerWebSocket(app, container);
+  registerAuthGuard(app, container.config.auth);
   await registerRoutes(app, container);
   await serveWebApp(app, container.config.paths.webDist);
 

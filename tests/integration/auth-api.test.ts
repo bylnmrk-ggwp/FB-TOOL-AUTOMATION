@@ -150,4 +150,32 @@ describe('Auth API with the login on', () => {
       await other.dispose();
     }
   });
+
+  describe('WebSocket', () => {
+    const listen = async (): Promise<string> => {
+      await server.app.listen({ host: '127.0.0.1', port: 0 });
+      const address = server.app.server.address();
+      if (address === null || typeof address === 'string') throw new Error('No TCP address');
+      return `ws://127.0.0.1:${address.port}/ws`;
+    };
+
+    const openSocket = (url: string): Promise<'open' | 'refused'> =>
+      new Promise((resolve) => {
+        const socket = new WebSocket(url);
+        socket.onopen = () => {
+          socket.close();
+          resolve('open');
+        };
+        socket.onerror = () => resolve('refused');
+      });
+
+    it('refuses an upgrade without a token and accepts one with it', async () => {
+      const base = await listen();
+      expect(await openSocket(base)).toBe('refused');
+      expect(await openSocket(`${base}?token=v1.1.forged`)).toBe('refused');
+
+      const { token } = LoginResponseSchema.parse((await login(PASSWORD)).json());
+      expect(await openSocket(`${base}?token=${encodeURIComponent(token)}`)).toBe('open');
+    });
+  });
 });
