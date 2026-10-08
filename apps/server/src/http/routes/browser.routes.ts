@@ -9,4 +9,5 @@ export const browserRoutes =
     app.post('/accounts/:id/browser/stop', controller.stop);
     app.get('/accounts/:id/browser', controller.get);
     app.get('/accounts/:id/browser/screenshot', controller.screenshot);
+    app.get('/accounts/:id/browser/terminal', controller.terminal);
   };

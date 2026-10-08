@@ -198,6 +198,11 @@ export class BrowserService {
     return this.deps.controller.screenshot(accountId);
   }
 
+  /** The account's live page as a packed terminal frame, or null if none is open. */
+  terminalFrame(accountId: string): Promise<Uint8Array | null> {
+    return this.deps.controller.terminalFrame(accountId);
+  }
+
   /**
    * A browser that went away on its own still has to leave the system tidy:
    * the lock goes back, the account stops claiming to be online, and the UI is

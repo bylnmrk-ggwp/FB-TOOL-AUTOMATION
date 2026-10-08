@@ -57,6 +57,12 @@ export interface BrowserController {
   /** A JPEG of the account's live page, or null when no browser is running. */
   screenshot(accountId: string): Promise<Uint8Array | null>;
   /**
+   * The same page as a packed terminal frame (see `packTerminalFrame` in
+   * @fb/shared): a few kilobytes, for the live grid. Null when no browser is
+   * running or the page refused the shot.
+   */
+  terminalFrame(accountId: string): Promise<Uint8Array | null>;
+  /**
    * Fires when a session ends without being asked to — a crash, or somebody
    * closing the window. The application layer uses it to release the profile
    * lock and correct the account status.

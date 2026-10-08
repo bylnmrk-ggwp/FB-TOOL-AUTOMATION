@@ -65,4 +65,27 @@ export class BrowserSessionController {
     }
     await reply.header('cache-control', 'no-store').type('image/jpeg').send(Buffer.from(image));
   };
+
+  /**
+   * The same page as a packed terminal frame, which is what the live grid
+   * draws. A missing browser is the same quiet 404 as for a screenshot.
+   */
+  terminal = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const { id } = validateParams(IdParamSchema, request);
+    const frame = await this.browsers.terminalFrame(id);
+    if (frame === null) {
+      await reply.status(404).send({
+        error: {
+          code: ERROR_CODES.BROWSER_NOT_RUNNING,
+          message: `No browser is running for ${id}`,
+          details: { accountId: id },
+        },
+      });
+      return;
+    }
+    await reply
+      .header('cache-control', 'no-store')
+      .type('application/octet-stream')
+      .send(Buffer.from(frame));
+  };
 }

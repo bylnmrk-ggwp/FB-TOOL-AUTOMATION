@@ -24,6 +24,7 @@ import {
 import { BrowserLauncher } from './BrowserLauncher.js';
 import { Gate } from './Gate.js';
 import { SessionTransfer } from './SessionTransfer.js';
+import { captureTerminalFrame } from './terminalFrame.js';
 
 /** How many viewers may be starting at the same moment; more only pins the CPU. */
 const VIEWER_STARTS_AT_ONCE = 3;
@@ -243,6 +244,21 @@ export class BrowserManager implements BrowserController {
     try {
       const page = await this.contexts.activePage(running.context);
       return await page.screenshot({ type: 'jpeg', quality: 45, timeout: 5_000 });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The account's active page as a packed terminal frame, for the live grid.
+   * A page mid-navigation can refuse the shot; that is a null, not an error.
+   */
+  async terminalFrame(accountId: string): Promise<Uint8Array | null> {
+    const running = this.sessions.get(accountId);
+    if (running === undefined) return null;
+    try {
+      const page = await this.contexts.activePage(running.context);
+      return await captureTerminalFrame(page);
     } catch {
       return null;
     }

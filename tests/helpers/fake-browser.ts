@@ -5,6 +5,7 @@ import type {
   SessionClosedEvent,
   StartBrowserOptions,
 } from '@fb/domain';
+import { packTerminalFrame } from '@fb/shared';
 
 const CLOSED = 'closed';
 
@@ -74,6 +75,13 @@ export class FakeBrowserController implements BrowserController {
 
   async screenshot(accountId: string): Promise<Uint8Array | null> {
     return this.isRunning(accountId) ? new Uint8Array([0xff, 0xd8, 0xff]) : null;
+  }
+
+  /** Four pixels: red, green, blue, white. */
+  async terminalFrame(accountId: string): Promise<Uint8Array | null> {
+    if (!this.isRunning(accountId)) return null;
+    const rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+    return packTerminalFrame(new Uint8Array(rgba), 2, 2);
   }
 
   isRunning(accountId: string): boolean {

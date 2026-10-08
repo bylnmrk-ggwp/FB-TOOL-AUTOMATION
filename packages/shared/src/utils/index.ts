@@ -5,3 +5,4 @@ export * from './result.js';
 export * from './redact.js';
 export * from './roster.js';
 export * from './proxy.js';
+export * from './terminal-frame.js';
